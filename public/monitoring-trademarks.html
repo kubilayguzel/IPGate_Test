@@ -1,0 +1,1814 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>IPGATE - Marka İzleme Listesi</title>
+    <link rel="stylesheet" href="css/shared-styles.css"/>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <link rel="stylesheet" href="css/simple-loading.css"/>
+  <style>
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        color: #333;
+        display: flex;
+        min-height: 100vh;
+        margin: 0;
+    }
+    .page-wrapper {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        box-sizing: border-box;
+    }
+    .main-container {
+        width: 100%;
+        padding: 30px; /* Diğer kenar boşluklarını koru */
+        padding-top: 120px; /* Sadece üst boşluğu düzelt */
+        margin: 0;
+        box-sizing: border-box;
+        flex-shrink: 0;
+    }
+    .page-header {
+        background: rgba(255, 255, 255, 0.95);
+        padding: 30px;
+        border-radius: 20px;
+        margin-bottom: 30px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+    }
+    .page-title {
+        font-size: 2em;
+        color: #1e3c72;
+        margin-bottom: 10px;
+    }
+    .page-subtitle {
+        color: #666;
+        font-size: 1.1em;
+    }
+
+    .monitoring-controls {
+        background: rgba(255, 255, 255, 0.95);
+        padding: 15px 30px;
+        border-radius: 20px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 15px;
+        position: relative;
+        z-index: 2;
+    }
+    .monitoring-controls .filter-group {
+        display: none;
+    }
+    .monitoring-controls .btn-selected-action {
+        background-color: #007bff;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.9em;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+    .monitoring-controls .btn-selected-action:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0, 123, 255, 0.2);
+    }
+    .monitoring-controls .btn-selected-action:disabled {
+        background-color: #cccccc;
+        cursor: not-allowed;
+        box-shadow: none;
+        transform: none;
+    }
+
+    /* Filtre Bölümü Stilleri */
+    .filter-section {
+        background: rgba(255,255,255,0.95);
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        animation: fadeIn 0.3s ease-in;
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .filter-controls {
+        display: flex;
+        gap: 15px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .filter-group {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+    }
+
+    .filter-group.search {
+        flex: 1;
+        min-width: 200px;
+    }
+
+    .filter-label {
+        font-size: 0.9em;
+        color: #666;
+        font-weight: 500;
+    }
+
+    .filter-input, .filter-select {
+        padding: 8px 12px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 14px;
+        transition: all 0.2s ease;
+    }
+
+    .filter-input:focus, .filter-select:focus {
+        outline: none;
+        border-color: #007bff;
+        box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+    }
+
+    .filter-input.search {
+        width: 100%;
+    }
+
+    .filter-select {
+        min-width: 120px;
+    }
+
+    .clear-filters-btn {
+        padding: 8px 16px;
+        background: #6c757d;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: all 0.2s ease;
+        align-self: flex-end;
+    }
+
+    .clear-filters-btn:hover {
+        background: #5a6268;
+        transform: translateY(-1px);
+    }
+
+    .accruals-container {
+        background: rgba(255,255,255,0.95);
+        border-radius: 20px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        overflow: hidden;
+    }
+    .accruals-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+    .accruals-table th,
+    .accruals-table td {
+        padding: 15px;
+        text-align: left;
+        border-bottom: 1px solid #f0f0f0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .accruals-table th {
+        background: #f8f9fa;
+        font-weight: 600;
+    }
+
+    /* KOLON GENİŞLİKLERİ */
+   
+    /* 1. Checkbox (Sabit) */
+    .accruals-table th:nth-child(1),
+    .accruals-table td:nth-child(1) {
+        width: 50px;
+        text-align: center;
+        padding-left: 5px;
+        padding-right: 5px;
+    }
+
+    /* 2. Görsel (Sabit) */
+    .accruals-table th:nth-child(2),
+    .accruals-table td:nth-child(2) {
+        width: 110px;
+        text-align: center;
+    }
+
+    /* 3. Marka Adı (Daraltıldı) */
+    .accruals-table th:nth-child(3),
+    .accruals-table td:nth-child(3) {
+        width: 220px;
+        max-width: 220px; /* Taşan metni kesmek için sınır */
+    }
+
+    /* 4. Aranacak İbareler (Daraltıldı) */
+    .accruals-table th:nth-child(4),
+    .accruals-table td:nth-child(4) {
+        width: 300px;
+        max-width: 300px;
+    }
+
+    /* 5. Sahip (Genişletildi - Kalan alanı kaplar) */
+    .accruals-table th:nth-child(5),
+    .accruals-table td:nth-child(5) {
+        width: auto; /* Esnek genişlik */
+    }
+
+    /* 6. Başvuru No (Sabit) */
+    .accruals-table th:nth-child(6),
+    .accruals-table td:nth-child(6) {
+        width: 140px;
+    }
+
+    /* 7. Başvuru Tarihi (Sabit) */
+    .accruals-table th:nth-child(7),
+    .accruals-table td:nth-child(7) {
+        width: 130px;
+    }
+
+    /* 8. Nice Sınıfı (Sabit) */
+    .accruals-table th:nth-child(8),
+    .accruals-table td:nth-child(8) {
+        width: 200px;
+    }
+
+    /* 9. Durum (Sabit) */
+    .accruals-table th:nth-child(9),
+    .accruals-table td:nth-child(9) {
+        width: 120px;
+        text-align: center;
+    }
+
+    .status-badge {
+        display: inline-block;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-size: 0.8em;
+        font-weight: 600;
+        color: white;
+        text-transform: uppercase;
+        line-height: 1;
+    }
+    .status-badge.application { background-color: #007bff; }
+    .status-badge.registered { background-color: #28a745; }
+    .status-badge.rejected { background-color: #dc3545; }
+    .status-badge.pending { background-color: #ffc107; color: #333; }
+    .status-badge.objection { background-color: #6f42c1; }
+    .status-badge.litigation { background-color: #fd7e14; }
+
+    .loading, .no-records {
+        text-align: center;
+        padding: 30px;
+        color: #666;
+    }
+    .error-message {
+        text-align: center;
+        padding: 30px;
+        color: #dc3545;
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        border-radius: 5px;
+        margin: 20px 0;
+    }
+
+    /* Nice Sınıf Badge Stilleri */
+
+/* Marka Görseli Stilleri */
+.trademark-image-thumbnail {
+    position: relative;
+}
+
+.trademark-image-thumbnail:hover {
+    border-color: #1e3c72;
+}
+
+.trademark-image-thumbnail:hover::after {
+    content: '';
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 300px;
+    height: 300px;
+    background-image: attr(src url);
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    border: 3px solid #1e3c72;
+    border-radius: 10px;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+    z-index: 9999;
+    pointer-events: none;
+    background-color: white;
+}
+
+/* Eksik alan uyarı stilleri */
+.missing-field {
+    color: #dc3545;
+    font-style: italic;
+    font-size: 12px;
+}
+
+.missing-field::before {
+    content: "⚠️ ";
+}
+
+/* Sahip hücresi için */
+.owner-cell {
+    max-width: 100%; /* Değişiklik: Hücre genişliği kadar kullanmasına izin ver */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block; /* Gerekirse ekleyin, div zaten block'tur ama garanti olsun */
+}
+
+/* Durum badge'leri */
+.status-badge {
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.status-badge.application {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeaa7;
+}
+
+.status-badge.registered {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.status-badge.rejected {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.status-badge.pending {
+    background: #d1ecf1;
+    color: #0c5460;
+    border: 1px solid #bee5eb;
+}
+
+.status-badge.objection {
+    background: #ffeeba;
+    color: #533f03;
+    border: 1px solid #ffeaa7;
+}
+
+.status-badge.litigation {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* Tablo responsive düzenleme */
+@media (max-width: 768px) {
+    .accruals-table {
+        font-size: 12px;
+    }
+
+    .trademark-image-thumbnail {
+        width: 40px;
+        height: 40px;
+    }
+
+    .nice-class-badge {
+        font-size: 10px;
+        padding: 2px 6px;
+    }
+}
+/* Görsel hücresi için ekstra alan */
+.accruals-table td:nth-child(2) {
+    min-width: 100px;
+    text-align: center;
+    padding: 15px 8px;
+    position: relative;
+}
+
+/* Hover overlay için backdrop */
+.image-hover-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.3);
+    z-index: 9998;
+    pointer-events: none;
+}
+    
+/* Yeni Nice Sınıfı Seçim Kutuları için Stiller */
+.nice-class-boxes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background-color: #f8f9fa;
+    max-height: 250px;
+    overflow-y: auto;
+}
+
+.nice-class-box {
+    display: inline-block;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    background-color: #fff;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s ease;
+}
+
+.nice-class-box:hover {
+    background-color: #e9ecef;
+    border-color: #007bff;
+}
+
+.nice-class-box.selected {
+    background-color: #007bff;
+    color: #fff;
+    border-color: #007bff;
+    font-weight: bold;
+}
+.list-group-item.permanent-item .remove-item {
+    display: none;
+}
+
+/* Seçili Satır Stili */
+tr.selected-row {
+    background-color: #e8f0fe !important; /* Açık mavi tonu */
+    transition: background-color 0.3s ease;
+}
+/* Seçili satırın üzerine gelindiğinde */
+tr.selected-row:hover {
+    background-color: #d2e3fc !important;
+}
+  </style>
+</head>
+<body>
+<div id="notification-container" style="position: fixed; top: 20px; right: 20px; z-index: 9999;"></div>
+  <div id="layout-placeholder"></div>
+  <div class="page-wrapper">
+    <main class="main-container">
+      <section class="page-header">
+        <h1 class="page-title">📊 Marka İzleme Listesi</h1>
+        <p class="page-subtitle">İzleme listenizdeki markalar burada listelenir.</p>
+      </section>
+
+      <div class="monitoring-controls">
+        <button type="button" class="btn-selected-action" id="removeSelectedBtn" disabled>
+          Seçileni Kaldır (<span id="selectedCount">0</span>)
+        </button>
+        <button type="button" class="btn-selected-action" id="editCriteriaBtn" disabled>
+          Kriterleri Düzenle
+        </button>
+      </div>
+
+      <div id="filterSection" class="filter-section" style="display: none;">
+        <div class="filter-controls">
+          <div class="filter-group search">
+            <label class="filter-label">Genel Arama</label>
+            <input type="text" id="searchFilter" class="filter-input search" placeholder="Genel arama yapın...">
+          </div>
+          
+          <div class="filter-group">
+            <label class="filter-label">Marka Adı</label>
+            <input type="text" id="markNameFilter" class="filter-input" placeholder="Marka adı..." style="width: 140px;">
+          </div>
+
+          <div class="filter-group">
+            <label class="filter-label">Aranacak İbareler</label>
+            <input type="text" id="searchTermsFilter" class="filter-input" placeholder="İbare..." style="width: 140px;">
+          </div>
+
+          <div class="filter-group">
+            <label class="filter-label">Durum</label>
+            <select id="statusFilter" class="filter-select">
+              <option value="all">Tüm Durumlar</option>
+              <option value="application">Başvuru</option>
+              <option value="registered">Tescilli</option>
+              <option value="rejected">Reddedildi</option>
+              <option value="pending">Beklemede</option>
+              <option value="objection">İtiraz</option>
+              <option value="litigation">Dava</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Nice Sınıfı</label>
+            <input type="text" id="niceClassFilter" class="filter-input" placeholder="35, 42..." style="width: 120px;">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Sahip</label>
+            <input type="text" id="ownerFilter" class="filter-input" placeholder="Şirket adı..." style="width: 150px;">
+          </div>
+          <button type="button" id="clearFilters" class="clear-filters-btn">Temizle</button>
+        </div>
+      </div>
+
+      <div class="accruals-container">
+        <div id="monitoringTableContainer">
+          <div class="loading">Yükleniyor...</div>
+        </div>
+      </div>
+
+      <div id="paginationContainer"></div>
+    </main>
+  </div>
+
+  <div class="modal fade" id="editCriteriaModal" tabindex="-1" aria-labelledby="editCriteriaModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="editCriteriaModalLabel">İzleme Kriterlerini Düzenle</h5>
+          <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="card mb-3">
+            <div class="card-body">
+              <h5 class="card-title" id="modalTrademarkName"></h5>
+              <p class="card-text">
+                <strong>Marka Örneği:</strong> <br> <img id="modalTrademarkImage" src="" alt="Marka Görseli" style="max-width: 100px; max-height: 100px; object-fit: contain;">
+              </p>
+              <p class="card-text">
+                <strong>Başvuru No:</strong> <span id="modalApplicationNo"></span><br>
+                <strong>Sahip:</strong> <span id="modalOwner"></span><br>
+                <strong>Nice Sınıfı:</strong> <span id="modalNiceClass"></span>
+              </p>
+            </div>
+          </div>
+
+
+<div class="form-group">
+  <label for="searchMarkNameInput">Aranacak Marka Adı:</label>
+  <input type="text" class="form-control" id="searchMarkNameInput" placeholder="Boş bırakırsanız marka adı kullanılır...">
+  <small class="form-text text-muted">Bu alan doluysa, aramada marka adı yerine buradaki ifade kullanılır.</small>
+</div>
+          <div class="form-group">
+            <label for="brandTextSearchInput">Aranacak İbareler:</label>
+            <div class="input-group">
+              <input type="text" class="form-control" id="brandTextSearchInput" placeholder="Marka adını girin...">
+              <div class="input-group-append">
+                <button class="btn btn-outline-secondary" type="button" id="addBrandTextBtn">Ekle</button>
+              </div>
+            </div>
+          </div>
+          <ul class="list-group mb-3" id="brandTextSearchList">
+            <li class="list-group-item text-muted">Aranacak marka adı listesi.</li>
+          </ul>
+
+          <div class="form-group">
+            <label>Aranacak Nice Sınıfı:</label>
+            <div id="niceClassSelectionContainer" class="nice-class-boxes">
+                </div>
+          </div>
+          <ul class="list-group" id="niceClassSearchList">
+            <li class="list-group-item text-muted">Aranacak Nice Sınıfı listesi.</li>
+          </ul>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-dismiss="modal">Kapat</button>
+          <button type="button" class="btn btn-primary" id="saveCriteriaBtn">Kaydet</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script type="module">
+    import Pagination from './js/pagination.js'; // <- DIŞARIDAN İÇERİ AKTARILDI
+    import { loadSharedLayout } from './js/layout-loader.js';
+    import { monitoringService, personService, ipRecordsService,taskService } from './firebase-config.js';
+    import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+    import { showNotification } from './utils.js';
+
+    // Global değişkenler
+    const auth = getAuth();
+    let selectedMonitoringItems = new Set();
+    let allPersons = [];
+    let pagination = null;
+    let allMonitoringData = [];
+    let filteredData = [];
+    let currentSort = { field: 'applicationDate', direction: 'desc' };
+    // --- Dinamik Join için IP Record önbelleği ---
+    const ipRecordCache = new Map(); // (Eski cache durabilir veya silinebilir, aşağıdakini kullanacağız)
+    let allIpRecordsMap = new Map(); // [YENİ] Tüm kayıtları tutacak
+
+    // [YENİ] IP Kayıtlarını toplu yükleyen fonksiyon
+    async function loadAllIpRecords() {
+        try {
+            const res = await ipRecordsService.getRecords();
+            if (res.success && Array.isArray(res.data)) {
+                res.data.forEach(rec => allIpRecordsMap.set(rec.id, rec));
+            }
+        } catch (e) {
+            console.error("IP Kayıtları yüklenirken hata:", e);
+        }
+    }
+
+    const MERGE_FIELDS = [
+        'title', // [EKLENDİ] Ana kayıttaki marka adı (title) bilgisini garantiye alıyoruz
+        'markName', 'brandImageUrl', 'applicationNumber', 'applicationNo', 'applicationDate',
+        'status', 'niceClasses', 'owners', 'applicants', 'goodsAndServicesByClass',
+        'ownerName', 'owner'
+    ];
+
+    function pick(obj, fields) {
+        const out = {};
+        if (!obj) return out;
+        for (const f of fields) if (Object.prototype.hasOwnProperty.call(obj, f)) out[f] = obj[f];
+        return out;
+    }
+
+    async function fetchIpRecordByIdCached(recordId) {
+        if (!recordId) return null;
+        if (ipRecordCache.has(recordId)) return ipRecordCache.get(recordId);
+        try {
+            const { success, data } = await ipRecordsService.getRecordById(recordId);
+            const rec = success ? data : null;
+            ipRecordCache.set(recordId, rec);
+            return rec;
+        } catch (e) {
+            console.error('ipRecord getirilemedi:', recordId, e);
+            ipRecordCache.set(recordId, null);
+            return null;
+        }
+    }
+
+    // [GÜNCELLENDİ] Sadece gönderilen listeyi (20 kayıt) paralel olarak zenginleştirir
+    async function enrichItemsWithIpRecords(items) {
+        const promises = items.map(async (it) => {
+            const ipId = it.ipRecordId || it.sourceRecordId || it.id;
+            
+            // Eğer kayıt ID'si yoksa veya zaten zenginleştirilmişse olduğu gibi döndür
+            if (!ipId || it.applicationDate) return it;
+
+            // Güncel veriyi çek (Cache mekanizması kullanır)
+            const ipRec = await fetchIpRecordByIdCached(ipId);
+            
+            if (ipRec) {
+                // Ham veriyi güncel IP kaydı ile birleştir
+                return { ...it, ...pick(ipRec, MERGE_FIELDS), ipRecordId: ipId };
+            } else {
+                return { ...it, ipRecordId: ipId };
+            }
+        });
+
+        return await Promise.all(promises);
+    }
+
+    let currentFilters = {
+        search: '',
+        status: 'all',
+        niceClass: '',
+        owner: '',
+        markName: '',      // [YENİ]
+        searchTerms: ''    // [YENİ]
+    };
+    let currentSelectedItem;
+    let selectedNiceClasses = new Set();
+
+    // Pagination'ı başlat
+    function initializePagination() {
+        pagination = new Pagination({
+            containerId: 'paginationContainer',
+            itemsPerPage: 20,
+            maxVisiblePages: 5,
+            showFirstLast: true,
+            showPrevNext: true,
+            showPageInfo: true,
+            showItemsPerPageSelector: true,
+            itemsPerPageOptions: [10, 20, 50, 100],
+            onPageChange: (page, itemsPerPage) => {
+                renderCurrentPage();
+                selectedMonitoringItems.clear();
+                updateSelectedButtonState();
+
+                document.querySelector('.accruals-container').scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            }
+        });
+    }
+
+
+    // Filtre olay dinleyicilerini kur
+    function setupFilters() {
+        const inputs = [
+            'searchFilter', 
+            'markNameFilter', 
+            'searchTermsFilter', 
+            'statusFilter', 
+            'niceClassFilter', 
+            'ownerFilter'
+        ];
+
+        // Gecikmeli filtreleme fonksiyonu (Performans için)
+        const debounce = (func, wait) => {
+            let timeout;
+            return function(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        };
+
+        const runFilter = debounce(() => {
+            applyFilters();
+        }, 300);
+
+        // Her input için dinleyici ekle
+        inputs.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                // Select kutusu ise 'change', text ise 'input'
+                const eventType = el.tagName === 'SELECT' ? 'change' : 'input';
+                el.addEventListener(eventType, runFilter);
+            }
+        });
+
+        // Temizle butonu
+        const clearButton = document.getElementById('clearFilters');
+        if (clearButton) {
+            clearButton.addEventListener('click', () => {
+                inputs.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = (id === 'statusFilter') ? 'all' : '';
+                });
+                applyFilters();
+            });
+        }
+    }
+
+
+    // [YENİ] Sıralama İkonu Yardımcısı
+    const getSortIcon = (field) => {
+        if (currentSort.field !== field) return '<i class="fas fa-sort" style="color:#ccc; font-size:0.8em; margin-left:5px;"></i>';
+        return currentSort.direction === 'asc' 
+            ? '<i class="fas fa-sort-up" style="color:#333; margin-left:5px;"></i>' 
+            : '<i class="fas fa-sort-down" style="color:#333; margin-left:5px;"></i>';
+    };
+
+    // [YENİ] Veri Sıralama Fonksiyonu
+    const sortData = (data) => {
+        if (!currentSort.field) return data;
+
+        return data.sort((a, b) => {
+            let valA, valB;
+            
+            switch (currentSort.field) {
+                case 'markName':
+                    valA = (a.title || a.markName || '').toLowerCase();
+                    valB = (b.title || b.markName || '').toLowerCase();
+                    break;
+                case 'searchTerms':
+                    const getTerms = (item) => {
+                        const terms = [item.searchMarkName, ...(item.brandTextSearch || [])].filter(Boolean);
+                        // Eğer özel terim yoksa marka adını kullan (render mantığıyla aynı)
+                        return terms.length ? terms.join(' ').toLowerCase() : (item.title || item.markName || '').toLowerCase();
+                    };
+                    valA = getTerms(a);
+                    valB = getTerms(b);
+                    break;
+                case 'owner':
+                    valA = getOwnerNames(a).toLowerCase();
+                    valB = getOwnerNames(b).toLowerCase();
+                    break;
+                case 'applicationNumber':
+                    valA = (a.applicationNumber || a.applicationNo || '').toLowerCase();
+                    valB = (b.applicationNumber || b.applicationNo || '').toLowerCase();
+                    break;
+                case 'applicationDate':
+                    valA = new Date(a.applicationDate || 0).getTime();
+                    valB = new Date(b.applicationDate || 0).getTime();
+                    break;
+                case 'niceClasses':
+                    // İlk sınıf numarasına göre sırala
+                    const getFirstClass = (item) => {
+                         const classes = new Set();
+                         if (item.goodsAndServicesByClass && Array.isArray(item.goodsAndServicesByClass)) {
+                            item.goodsAndServicesByClass.forEach(classItem => {
+                                if (classItem.classNo) classes.add(String(classItem.classNo));
+                            });
+                         }
+                         if (item.niceClassSearch && Array.isArray(item.niceClassSearch)) {
+                            item.niceClassSearch.forEach(c => classes.add(String(c)));
+                         } else if (item.niceClasses) {
+                            const extras = Array.isArray(item.niceClasses) ? item.niceClasses : [item.niceClasses];
+                            extras.forEach(c => classes.add(String(c)));
+                         }
+                         
+                         const sorted = Array.from(classes)
+                            .map(c => parseInt(c))
+                            .filter(n => !isNaN(n))
+                            .sort((x,y) => x-y);
+                            
+                         return sorted.length ? sorted[0] : 999;
+                    };
+                    valA = getFirstClass(a);
+                    valB = getFirstClass(b);
+                    break;
+                case 'status':
+                    // Görünen metne göre sırala (örn: 'Başvuru', 'Tescilli')
+                    valA = getStatusInTurkish(a.status).text.toLowerCase();
+                    valB = getStatusInTurkish(b.status).text.toLowerCase();
+                    break;
+                default:
+                    return 0;
+            }
+
+            if (valA < valB) return currentSort.direction === 'asc' ? -1 : 1;
+            if (valA > valB) return currentSort.direction === 'asc' ? 1 : -1;
+            return 0;
+        });
+    };
+
+    // Filtreleri uygula (Doğrudan input değerlerini okur)
+    function applyFilters() {
+        // 1. Input değerlerini o an oku (Senkronizasyon sorunu olmaz)
+        const searchVal = document.getElementById('searchFilter')?.value.toLowerCase().trim() || '';
+        const markNameVal = document.getElementById('markNameFilter')?.value.toLowerCase().trim() || '';
+        const searchTermsVal = document.getElementById('searchTermsFilter')?.value.toLowerCase().trim() || '';
+        const statusVal = document.getElementById('statusFilter')?.value || 'all';
+        const niceClassVal = document.getElementById('niceClassFilter')?.value.trim() || '';
+        const ownerVal = document.getElementById('ownerFilter')?.value.toLowerCase().trim() || '';
+
+        filteredData = allMonitoringData.filter(item => {
+            // A. GENEL ARAMA
+            if (searchVal) {
+                const markName = (item.title || item.markName || item.trademarkName || '').toLowerCase();
+                const owner = getOwnerNames(item).toLowerCase();
+                const applicationNo = (item.applicationNumber || item.applicationNo || '').toLowerCase();
+                const sTerms = [
+                    ...(item.brandTextSearch || []),
+                    item.searchMarkName
+                ].filter(Boolean).join(' ').toLowerCase();
+
+                if (!markName.includes(searchVal) && 
+                    !owner.includes(searchVal) && 
+                    !applicationNo.includes(searchVal) &&
+                    !sTerms.includes(searchVal)) {
+                    return false;
+                }
+            }
+
+            // B. MARKA ADI FİLTRESİ (Kümülatif)
+            if (markNameVal) {
+                const fMarkName = (item.title || item.markName || item.trademarkName || '').toLowerCase();
+                if (!fMarkName.includes(markNameVal)) return false;
+            }
+
+            // C. ARANACAK İBARELER FİLTRESİ (Kümülatif)
+            if (searchTermsVal) {
+                const allTerms = [
+                    ...(item.brandTextSearch || []),
+                    item.searchMarkName
+                ].filter(Boolean).join(' ').toLowerCase();
+                
+                if (!allTerms.includes(searchTermsVal)) return false;
+            }
+
+            // D. DURUM (Status) (Kümülatif)
+            if (statusVal !== 'all') {
+                const itemStatus = getStatusInTurkish(item.status).value || 'unknown';
+                if (itemStatus !== statusVal) return false;
+            }
+
+            // E. NICE SINIFI (Kümülatif - Tam Eşleşme)
+            if (niceClassVal) {
+                const searchClasses = niceClassVal.split(/[,\s]+/).filter(c => c !== '');
+                
+                const allClassSources = [
+                    ...(Array.isArray(item.niceClasses) ? item.niceClasses : []),
+                    ...(Array.isArray(item.niceClassSearch) ? item.niceClassSearch : []),
+                    item.niceClass
+                ].filter(c => c !== null && c !== undefined).map(String);
+
+                // Aranan sınıflardan HERHANGİ BİRİ var mı?
+                const hasMatch = searchClasses.some(sClass => allClassSources.includes(sClass));
+                if (!hasMatch) return false;
+            }
+
+            // F. SAHİP (Owner) (Kümülatif)
+            if (ownerVal) {
+                const ownerName = getOwnerNames(item).toLowerCase();
+                if (!ownerName.includes(ownerVal)) return false;
+            }
+
+            // Tüm kontrolleri geçtiyse listele
+            return true;
+        });
+        sortData(filteredData);
+        if (pagination) pagination.update(filteredData.length, 1);
+        renderCurrentPage();
+    }
+
+
+    // Mevcut sayfadaki veriyi render et
+    async function renderCurrentPage() {
+        const container = document.getElementById('monitoringTableContainer');
+        if (!container) return;
+
+        selectedMonitoringItems.clear();
+        updateSelectedButtonState();
+
+        // Sayfada gösterilecek ham veriyi al
+        const currentPageData = pagination ? pagination.getCurrentPageData(filteredData) : filteredData;
+        
+        container.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Veriler hazırlanıyor...</div>';
+
+        // [KRİTİK GÜNCELLEME] Sadece bu sayfadaki 20 kaydı zenginleştir!
+        const currentPageDataEnriched = await enrichItemsWithIpRecords(currentPageData);
+
+        if (currentPageDataEnriched.length === 0) {
+            const hasFilters = currentFilters.search || currentFilters.status !== 'all' ||
+                              currentFilters.niceClass || currentFilters.owner || 
+                              currentFilters.markName || currentFilters.searchTerms;
+            container.innerHTML = `<div class="no-records">${hasFilters ? 'Filtreleme kriterlerinize uygun kayıt bulunamadı.' : 'İzleme listeniz boş.'}</div>`;
+            return;
+        }
+
+        // [GÜNCELLENDİ] Tablo Başlıkları: sortable class'ı ve data-sort özellikleri eklendi
+        let html = `<table class="accruals-table"><thead><tr>
+                        <th><input type="checkbox" id="headerSelectAllCheckbox" /></th>
+                        <th>Görsel</th>
+                        <th class="sortable" data-sort="markName" style="cursor:pointer">Marka Adı ${getSortIcon('markName')}</th>
+                        <th class="sortable" data-sort="searchTerms" style="cursor:pointer">Aranacak İbareler ${getSortIcon('searchTerms')}</th>
+                        <th class="sortable" data-sort="owner" style="cursor:pointer">Sahip ${getSortIcon('owner')}</th>
+                        <th class="sortable" data-sort="applicationNumber" style="cursor:pointer">Başvuru No ${getSortIcon('applicationNumber')}</th>
+                        <th class="sortable" data-sort="applicationDate" style="cursor:pointer">Başvuru Tarihi ${getSortIcon('applicationDate')}</th>
+                        <th class="sortable" data-sort="niceClasses" style="cursor:pointer">Nice Sınıfı ${getSortIcon('niceClasses')}</th>
+                        <th class="sortable" data-sort="status" style="cursor:pointer">Durum ${getSortIcon('status')}</th>
+                    </tr></thead><tbody>`;
+
+            currentPageDataEnriched.forEach(r => {
+            const isSelected = selectedMonitoringItems.has(r.id) ? 'checked' : '';
+            
+            // --- GÖRSEL (GÜNCELLENMİŞ KOD) ---
+            const trademarkImageHtml = (() => {
+                // ÖNCELİKLE 'image' alanını kontrol et (Sizin veritabanı yapınıza uygun)
+                // Yedek olarak 'brandImageUrl' alanına bak (Eski kayıtlar için)
+                let imageUrl = r.image || r.brandImageUrl;
+
+                if (imageUrl && imageUrl.trim() !== '') {
+                    // Eğer tam bir URL değilse (http veya data ile başlamıyorsa), Firebase Storage URL'ine çevir
+                    if (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
+                        imageUrl = `https://firebasestorage.googleapis.com/v0/b/ip-manager-production-aab4b.appspot.com/o/${encodeURIComponent(imageUrl)}?alt=media`;
+                    }
+                    
+                    return `<img src="${imageUrl}" alt="Marka Görseli" class="trademark-image-thumbnail"
+                            loading="lazy" 
+                            style="width: 80px; height: 80px; object-fit: contain; border-radius: 6px; border: 2px solid #ddd;"
+                            onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';">
+                    <span style="display:none; color:#999; font-size:12px;">🖼️ Görsel yok</span>`;
+                }
+                // Görsel yoksa ikon göster
+                return '<span style="color:#999; font-size:12px;">🖼️ Görsel yok</span>';
+            })();
+
+            // --- HOVER İÇİN METİN HAZIRLIĞI ---
+            const markNameText = r.title || r.markName || '-';
+            const safeMarkName = markNameText.replace(/"/g, '&quot;');
+            
+            const ownerNames = getOwnerNames(r);
+            const safeOwnerNames = ownerNames.replace(/"/g, '&quot;');
+
+            // --- ARANACAK İBARELER ---
+            const searchTermsPlain = (() => {
+                let terms = [];
+                if (r.searchMarkName && r.searchMarkName.trim()) {
+                    terms.push(r.searchMarkName);
+                }
+                if (Array.isArray(r.brandTextSearch)) {
+                    r.brandTextSearch.forEach(t => { 
+                        if(t !== r.searchMarkName) terms.push(t); 
+                    });
+                }
+                return terms.length > 0 ? terms.join(', ') : markNameText;
+            })();
+            
+            const safeSearchTerms = searchTermsPlain.replace(/"/g, '&quot;');
+
+            const searchTermsHtml = (() => {
+                 let htmlParts = [];
+                 if (r.searchMarkName && r.searchMarkName.trim()) {
+                     htmlParts.push(`<span style="color:#007bff; font-weight:bold;">${r.searchMarkName}</span>`);
+                 }
+                 if (Array.isArray(r.brandTextSearch)) {
+                     r.brandTextSearch.forEach(t => {
+                         if (t !== r.searchMarkName) htmlParts.push(t);
+                     });
+                 }
+                 if (htmlParts.length === 0) {
+                     return `<span style="color:#999; font-style:italic;">${markNameText}</span>`;
+                 }
+                 return htmlParts.join(' <span style="color:#ccc; margin:0 4px;">|</span> ');
+            })();
+
+            const statusInfo = getStatusInTurkish(r.status);
+            
+            // --- NICE SINIFLARI ---
+            const niceClassesHtml = (() => {
+                const classes = new Set();
+                if (r.goodsAndServicesByClass && Array.isArray(r.goodsAndServicesByClass)) {
+                    r.goodsAndServicesByClass.forEach(classItem => {
+                        if (classItem.classNo) classes.add(String(classItem.classNo));
+                    });
+                }
+                if (r.niceClassSearch && Array.isArray(r.niceClassSearch)) {
+                    r.niceClassSearch.forEach(classNo => classes.add(String(classNo)));
+                } else if (r.niceClasses) {
+                    const extras = Array.isArray(r.niceClasses) ? r.niceClasses : [r.niceClasses];
+                    extras.forEach(c => classes.add(String(c)));
+                }
+
+                if (classes.size > 0) {
+                    return Array.from(classes)
+                        .map(cls => parseInt(cls))
+                        .filter(cls => !isNaN(cls))
+                        .sort((a, b) => a - b)
+                        .map(cls => `<span class="nice-class-badge">${cls}</span>`)
+                        .join(' ');
+                }
+                return '-';
+            })();
+
+            // --- TABLO SATIRINI OLUŞTUR ---
+            html += `<tr data-id="${r.id}">
+                        <td><input type="checkbox" class="row-checkbox" data-id="${r.id}" ${isSelected}></td>
+                        <td>${trademarkImageHtml}</td>
+                        <td style="font-weight: 500;" title="${safeMarkName}">${markNameText}</td>
+                        <td style="font-size: 0.9em;" title="${safeSearchTerms}">${searchTermsHtml}</td>
+                        <td><div class="owner-cell" title="${safeOwnerNames}">${ownerNames}</div></td>
+                        <td>${r.applicationNumber || r.applicationNo || '-'}</td>
+                        <td>${formatTurkishDate(r.applicationDate)}</td>
+                        <td>${niceClassesHtml}</td>
+                        <td><span class="status-badge ${statusInfo.class}">${statusInfo.text}</span></td>
+                    </tr>`;
+        });
+
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+
+        // [GÜNCELLENDİ] Sıralama Event Listener'ları
+        container.querySelectorAll('.sortable').forEach(th => {
+            th.addEventListener('click', () => {
+                const field = th.dataset.sort;
+                // Aynı kolona tıklandıysa yönü değiştir, farklıysa artan (asc) yap
+                if (currentSort.field === field) {
+                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.field = field;
+                    currentSort.direction = 'asc';
+                }
+                // Filtreleri tekrar uygula (bu da sıralamayı tetikler)
+                applyFilters();
+            });
+        });
+
+        // Checkbox Event Listener (GÜNCELLENDİ)
+        const headerCheckbox = document.getElementById('headerSelectAllCheckbox');
+        
+        // 1. Satır Checkboxları için Dinleyici
+        container.addEventListener('change', (e) => {
+            if (e.target.classList.contains('row-checkbox')) {
+                const checkbox = e.target;
+                const row = checkbox.closest('tr'); // Checkbox'ın olduğu satırı bul
+                
+                if (checkbox.checked) {
+                    selectedMonitoringItems.add(checkbox.dataset.id);
+                    if (row) row.classList.add('selected-row'); // Sınıfı ekle
+                } else {
+                    selectedMonitoringItems.delete(checkbox.dataset.id);
+                    if (row) row.classList.remove('selected-row'); // Sınıfı kaldır
+                }
+                
+                updateSelectedButtonState();
+            }
+        });
+
+        // 2. "Tümünü Seç" Checkbox'ı için Dinleyici
+        if (headerCheckbox) {
+            headerCheckbox.addEventListener('change', (e) => {
+                const checkboxes = container.querySelectorAll('.row-checkbox');
+                checkboxes.forEach(checkbox => {
+                    checkbox.checked = e.target.checked;
+                    const row = checkbox.closest('tr');
+                    
+                    if (e.target.checked) {
+                        selectedMonitoringItems.add(checkbox.dataset.id);
+                        if (row) row.classList.add('selected-row');
+                    } else {
+                        selectedMonitoringItems.delete(checkbox.dataset.id);
+                        if (row) row.classList.remove('selected-row');
+                    }
+                });
+                updateSelectedButtonState();
+            });
+        }
+
+        // Görsel Hover Efekti
+        container.querySelectorAll('.trademark-image-thumbnail').forEach(img => {
+            let hoverElement = null;
+            img.addEventListener('mouseenter', (e) => {
+                if (hoverElement) hoverElement.remove();
+                hoverElement = document.createElement('img');
+                let imageUrl = e.target.src;
+                hoverElement.src = imageUrl;
+                hoverElement.style.cssText = `
+                    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+                    width: 300px; height: 300px; object-fit: contain;
+                    border: 3px solid #1e3c72; border-radius: 10px;
+                    box-shadow: 0 15px 40px rgba(0,0,0,0.4); z-index: 9999;
+                    pointer-events: none; background: white; padding: 10px;
+                `;
+                document.body.appendChild(hoverElement);
+            });
+            img.addEventListener('mouseleave', () => {
+                if (hoverElement) { hoverElement.remove(); hoverElement = null; }
+            });
+        });
+    }
+
+    // Yardımcı fonksiyonlar
+    const getStatusInTurkish = (status) => {
+        switch (status) {
+            case 'application': return { text: 'Başvuru', class: 'application', value: 'application' };
+            case 'registered': return { text: 'Tescilli', class: 'registered', value: 'registered' };
+            case 'rejected': return { text: 'Reddedildi', class: 'rejected', value: 'rejected' };
+            case 'pending': return { text: 'Beklemede', class: 'pending', value: 'pending' };
+            case 'objection': return { text: 'İtiraz', class: 'objection', value: 'objection' };
+            case 'litigation': return { text: 'Dava', class: 'litigation', value: 'litigation' };
+            default: return { text: 'İzleniyor', class: '', value: 'unknown' };
+        }
+    };
+
+    const formatTurkishDate = (dateString) => {
+        if (!dateString) return '-';
+        try {
+            const date = new Date(dateString);
+            if (isNaN(date.getTime())) return dateString;
+            return date.toLocaleDateString('tr-TR');
+        } catch (e) {
+            return dateString;
+        }
+    };
+
+    const getOwnerNames = (item) => {
+    try {
+        // 1. Yeni standart alan (ownerName) varsa direkt döndür
+        if (item.ownerName && typeof item.ownerName === 'string' && item.ownerName.trim() !== '') {
+            return item.ownerName;
+        }
+
+        // 2. Applicants array (sadece id içerir)
+        if (item.applicants && Array.isArray(item.applicants) && item.applicants.length > 0) {
+            return item.applicants
+                .map(applicant => {
+                    if (typeof applicant === 'object' && applicant.id) {
+                        const match = allPersons.find(p => p.id === applicant.id);
+                        return match ? match.name : applicant.name || '';
+                    }
+                    if (typeof applicant === 'object' && applicant.name) return applicant.name;
+                    return String(applicant);
+                })
+                .filter(name => name && name.trim() !== '')
+                .join(', ');
+        }
+
+        // 3. Eski owners yapısı
+        if (item.owners && Array.isArray(item.owners)) {
+            return item.owners.map(owner => {
+                if (typeof owner === 'object' && owner.id) {
+                    const match = allPersons.find(p => p.id === owner.id);
+                    return match ? match.name : owner.name || '';
+                }
+                return String(owner.name || owner);
+            }).join(', ');
+        } else if (typeof item.owners === 'string') {
+            return item.owners;
+        }
+
+        // 4. Owner string alanı
+        if (item.owner && typeof item.owner === 'string') {
+            return item.owner;
+        }
+    } catch (error) {
+        console.error('❌ getOwnerNames hatası:', error);
+    }
+    return '-';
+};
+
+    const renderMonitoringTable = (data, userUid) => {
+        // Ham veriyi direkt hafızaya atıyoruz, işlem yapmıyoruz.
+        allMonitoringData = data || [];
+        
+        const filterSection = document.getElementById('filterSection');
+        if (filterSection && allMonitoringData.length > 0) {
+            filterSection.style.display = 'block';
+        }
+        
+        // Filtreleri ham veri üzerinde uygula (Bu işlem renderCurrentPage'i tetikler)
+        applyFilters();
+    };
+
+async function createThirdPartyRecordFromMonitoring(monitoringItem) {
+    console.log('urce: Monitoring Item:', monitoringItem);
+
+    // 1. Nice Sınıflarını Dönüştür (Array -> Object yapısı)
+    // create-task.js'deki goodsAndServicesByClass yapısı
+    const goodsByClass = (monitoringItem.niceClasses || []).map(cls => ({
+        classNo: String(cls),
+        items: [] // İzleme verisinde detay metni olmadığından boş array
+    }));
+
+    // 2. Başvuru Sahiplerini Dönüştür (Applicants)
+    // Monitoring verisinde holders, owners veya applicants olarak gelebilir
+    const rawHolders = monitoringItem.holders || monitoringItem.owners || monitoringItem.applicants || [];
+    let applicants = [];
+    
+    if (Array.isArray(rawHolders)) {
+        applicants = rawHolders.map(h => ({
+            name: h.name || h.holderName || (typeof h === 'string' ? h : ''),
+            email: null, // 3. taraf olduğu için bilinmiyor
+            id: null     // Sistemde kayıtlı değil
+        }));
+    } else if (typeof rawHolders === 'string') {
+        applicants.push({ name: rawHolders, email: null, id: null });
+    }
+
+    // Yedek kontrol: ownerName string alanı varsa ve liste boşsa
+    if (applicants.length === 0 && monitoringItem.ownerName) {
+        applicants.push({ name: monitoringItem.ownerName, email: null, id: null });
+    }
+
+    // 3. IP Record Veri Objesini Hazırla (create-task.js yapısı)
+    const ipRecordData = {
+        // --- Temel Bilgiler ---
+        title: monitoringItem.markName || monitoringItem.title || 'Bilinmeyen Marka',
+        type: 'trademark',          
+        portfoyStatus: 'active',    
+        status: 'published',        // Bülten yayını aşamasında
+        
+        // --- KRİTİK: 3. Taraf Dosyası Olarak İşaretle ---
+        recordOwnerType: 'third_party', 
+        
+        // --- Menşe ve Detaylar ---
+        origin: 'TÜRKPATENT',       
+        country: 'TR',
+        
+        // --- Numaralar ve Tarihler ---
+        applicationNumber: monitoringItem.applicationNo || monitoringItem.applicationNumber,
+        // Tarih formatı kontrolü (YYYY-MM-DD olmalı)
+        applicationDate: monitoringItem.applicationDate ? new Date(monitoringItem.applicationDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        registrationNumber: null,
+        registrationDate: null,
+        renewalDate: null,
+        
+        // --- Görsel ---
+        // create-task.js'deki gibi brandImageUrl alanına atanır
+        brandImageUrl: monitoringItem.imagePath || monitoringItem.brandImageUrl || null,
+        brandText: monitoringItem.markName || null,
+        
+        // --- Listeler ---
+        applicants: applicants,
+        goodsAndServicesByClass: goodsByClass,
+        
+        // --- Bülten Detayları (İtiraz dilekçeleri için kritik) ---
+        details: {
+            brandInfo: {
+                opposedMarkBulletinNo: monitoringItem.bulletinNo || null,
+                opposedMarkBulletinDate: monitoringItem.bulletinDate || null 
+            }
+        },
+        
+        // --- Sistem Alanları ---
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
+
+    console.log('🚀 3. Taraf IP Kaydı Hazırlandı:', ipRecordData);
+
+    // 4. Kaydı Veritabanına Gönder
+    const result = await ipRecordsService.createRecord(ipRecordData);
+    
+    if (result.success) {
+        console.log('✅ IP Kaydı oluşturuldu. ID:', result.id);
+        return result.id;
+    } else {
+        throw new Error('IP kaydı oluşturulamadı: ' + result.error);
+    }
+}
+
+    const updateSelectedButtonState = () => {
+        const selectedCountSpan = document.getElementById('selectedCount');
+        const removeSelectedBtn = document.getElementById('removeSelectedBtn');
+        const editCriteriaBtn = document.getElementById('editCriteriaBtn');
+
+        if (selectedCountSpan) selectedCountSpan.textContent = selectedMonitoringItems.size;
+        if (removeSelectedBtn) removeSelectedBtn.disabled = selectedMonitoringItems.size === 0;
+        if (editCriteriaBtn) editCriteriaBtn.disabled = selectedMonitoringItems.size !== 1;
+
+        const headerCheckbox = document.getElementById('headerSelectAllCheckbox');
+        if (headerCheckbox) {
+            const allVisibleRows = document.querySelectorAll('#monitoringTableContainer .row-checkbox');
+            headerCheckbox.checked = allVisibleRows.length > 0 && Array.from(allVisibleRows).every(cb => cb.checked);
+        }
+    };
+
+    // Modal Fonksiyonları
+    function setupEditCriteriaModal() {
+      const editCriteriaBtn = document.getElementById('editCriteriaBtn');
+      const editCriteriaModal = document.getElementById('editCriteriaModal');
+      const saveCriteriaBtn = document.getElementById('saveCriteriaBtn');
+      const brandTextSearchInput = document.getElementById('brandTextSearchInput');
+      const addBrandTextBtn = document.getElementById('addBrandTextBtn');
+      const brandTextSearchList = document.getElementById('brandTextSearchList');
+      const niceClassSelectionContainer = document.getElementById('niceClassSelectionContainer');
+      const niceClassSearchList = document.getElementById('niceClassSearchList');
+      const modalTrademarkImage = document.getElementById('modalTrademarkImage');
+      const searchMarkNameInput = document.getElementById('searchMarkNameInput');
+
+      let modalOriginalPrimaryName = '';
+      const normText = (s) => (s || '').toString().trim().toLowerCase();
+
+      const refreshPermanentBrandTerm = () => {
+          if (!brandTextSearchList) return;
+          const override = (searchMarkNameInput?.value || '').trim();
+          const permanent = (override || modalOriginalPrimaryName || '').trim();
+          if (!permanent) return;
+
+          // Eski kalıcı öğeyi kaldır
+          brandTextSearchList.querySelectorAll('li.permanent-item').forEach(li => li.remove());
+
+          // Override varsa, orijinal marka adını listeden temizle (kalıcı olmayanlardan)
+          if (override && modalOriginalPrimaryName) {
+              const originalNorm = normText(modalOriginalPrimaryName);
+              brandTextSearchList.querySelectorAll('li').forEach(li => {
+                  if (li.classList.contains('permanent-item')) return;
+                  const txt = li.querySelector('.list-item-text')?.textContent || '';
+                  if (normText(txt) === originalNorm) li.remove();
+              });
+          }
+
+          // Boş uyarısını kaldır
+          const emptyItem = brandTextSearchList.querySelector('.list-group-item.text-muted');
+          if (emptyItem) emptyItem.remove();
+
+          // Zaten varsa kalıcı yap, yoksa ekle
+          let existingLi = null;
+          brandTextSearchList.querySelectorAll('li').forEach(li => {
+              const txt = li.querySelector('.list-item-text')?.textContent || '';
+              if (normText(txt) === normText(permanent)) existingLi = li;
+          });
+          if (existingLi) {
+              existingLi.classList.add('permanent-item');
+          } else {
+              addListItem(brandTextSearchList, permanent, true);
+          }
+      };
+
+      if (searchMarkNameInput) {
+          searchMarkNameInput.addEventListener('input', () => {
+              refreshPermanentBrandTerm();
+          });
+      }
+
+      
+      // Nice Sınıfı kutularını dinamik olarak oluştur
+      for (let i = 1; i <= 45; i++) {
+        const box = document.createElement('div');
+        box.className = 'nice-class-box';
+        box.textContent = i;
+        box.dataset.classNo = i;
+        niceClassSelectionContainer.appendChild(box);
+      }
+      
+      // Modalı açma (GÜNCELLENMİŞ)
+      editCriteriaBtn.addEventListener('click', async () => { // async eklendi
+          if (selectedMonitoringItems.size === 1) {
+              const selectedId = Array.from(selectedMonitoringItems)[0];
+              
+              // 1. Ham veriyi bul
+              const rawItem = allMonitoringData.find(item => item.id === selectedId);
+
+              if (rawItem) {
+                  // Yükleniyor durumunu göster
+                  const originalBtnText = editCriteriaBtn.innerHTML;
+                  editCriteriaBtn.disabled = true;
+                  editCriteriaBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Yükleniyor...';
+
+                  try {
+                      // 2. IP Kaydı verilerini çekerek zenginleştir (Resim, sahip vb. için)
+                      const enrichedItems = await enrichItemsWithIpRecords([rawItem]);
+                      currentSelectedItem = enrichedItems[0]; // Artık dolu veri
+
+                      // 3. Modal alanlarını doldur
+                      document.getElementById('modalTrademarkName').textContent = currentSelectedItem.title || currentSelectedItem.markName || '-';
+                      document.getElementById('modalApplicationNo').textContent = currentSelectedItem.applicationNumber || currentSelectedItem.applicationNo || '-';
+                      document.getElementById('modalOwner').textContent = getOwnerNames(currentSelectedItem);
+                      
+                      // Nice Sınıfları (Hem IP kaydından hem arama kriterinden birleştir)
+                      const niceClassesInTable = (() => {
+                          const classes = new Set();
+                          // Portföyden gelen sınıflar
+                          if (currentSelectedItem.goodsAndServicesByClass && Array.isArray(currentSelectedItem.goodsAndServicesByClass)) {
+                              currentSelectedItem.goodsAndServicesByClass.forEach(classItem => {
+                                  if (classItem.classNo !== null && classItem.classNo !== undefined) {
+                                      classes.add(String(classItem.classNo));
+                                  }
+                              });
+                          }
+                          // Eğer yukarıdan gelmediyse veya ek olarak niceClasses alanından
+                          if (currentSelectedItem.niceClasses) {
+                              const extras = Array.isArray(currentSelectedItem.niceClasses) ? currentSelectedItem.niceClasses : [currentSelectedItem.niceClasses];
+                              extras.forEach(c => classes.add(String(c)));
+                          }
+                          return Array.from(classes).map(c => parseInt(c)).filter(n => !isNaN(n)).sort((a,b) => a-b).join(', ');
+                      })();
+                      document.getElementById('modalNiceClass').textContent = niceClassesInTable || '-';
+
+                      // Görseli Ayarla
+                      const imgEl = document.getElementById('modalTrademarkImage');
+                      if (currentSelectedItem.brandImageUrl && currentSelectedItem.brandImageUrl.trim() !== '') {
+                          let imageUrl = currentSelectedItem.brandImageUrl;
+                          // Eğer tam URL değilse Firebase URL'i yap
+                          if (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
+                              imageUrl = `https://firebasestorage.googleapis.com/v0/b/ip-manager-production-aab4b.appspot.com/o/${encodeURIComponent(imageUrl)}?alt=media`;
+                          }
+                          imgEl.src = imageUrl;
+                          imgEl.style.display = 'block';
+                      } else {
+                          imgEl.style.display = 'none';
+                      }
+
+                      // 4. Mevcut arama kriterlerini yükle (Orijinal kodun devamı)
+                      modalOriginalPrimaryName = (currentSelectedItem.title || currentSelectedItem.markName || currentSelectedItem.brandText || '').trim();
+                      const overrideSearchName = (currentSelectedItem.searchMarkName || '').trim();
+                      if (searchMarkNameInput) searchMarkNameInput.value = overrideSearchName;
+
+                      const permanentBrandText = [(overrideSearchName || modalOriginalPrimaryName)].filter(Boolean);
+                      const permanentNiceClasses = (() => {
+                          const classes = [];
+                          if (currentSelectedItem.goodsAndServicesByClass && Array.isArray(currentSelectedItem.goodsAndServicesByClass)) {
+                              currentSelectedItem.goodsAndServicesByClass.forEach(classItem => {
+                                  if (classItem.classNo !== null && classItem.classNo !== undefined) {
+                                      classes.push(String(classItem.classNo));
+                                  }
+                              });
+                          }
+                          return classes;
+                      })();
+
+                      const existingBrandTextSearch = currentSelectedItem.brandTextSearch || [];
+                      const existingNiceClassSearch = currentSelectedItem.niceClassSearch || [];
+
+                      const filteredBrandTextSearch = overrideSearchName
+                          ? existingBrandTextSearch.filter(t => normText(t) !== normText(modalOriginalPrimaryName))
+                          : existingBrandTextSearch;
+
+                      populateList(brandTextSearchList, filteredBrandTextSearch, permanentBrandText);
+                      populateNiceClassBoxes(existingNiceClassSearch, permanentNiceClasses);
+                      refreshPermanentBrandTerm();
+
+                      // Modal'ı göster
+                      $('#editCriteriaModal').modal('show');
+
+                  } catch (e) {
+                      console.error("Modal verisi yüklenirken hata:", e);
+                      alert("Veri yüklenemedi, lütfen tekrar deneyin.");
+                  } finally {
+                      editCriteriaBtn.disabled = false;
+                      editCriteriaBtn.innerHTML = originalBtnText;
+                  }
+              }
+          }
+      });
+
+      // Nice Sınıfı kutularına tıklama olayı
+      niceClassSelectionContainer.addEventListener('click', (e) => {
+        if (e.target.classList.contains('nice-class-box')) {
+          const classNo = e.target.dataset.classNo;
+          const isPermanent = e.target.classList.contains('permanent-item'); // Kalıcı olup olmadığını kontrol et
+          
+          if (isPermanent) {
+              showNotification('Bu sınıf orijinal marka sınıfı olduğu için kaldırılamaz.', 'warning');
+              return;
+          }
+          
+          e.target.classList.toggle('selected');
+          
+          if (e.target.classList.contains('selected')) {
+            addListItem(niceClassSearchList, classNo);
+          } else {
+            removeListItem(niceClassSearchList, classNo);
+          }
+        }
+      });
+
+      // Marka Adı ekle
+      const addBrandText = () => {
+          const value = brandTextSearchInput.value.trim();
+          if (value) {
+              addListItem(brandTextSearchList, value);
+              brandTextSearchInput.value = '';
+          }
+      };
+      addBrandTextBtn.addEventListener('click', addBrandText);
+      brandTextSearchInput.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+              e.preventDefault();
+              addBrandText();
+          }
+      });
+
+      // Kayıtları silme (tüm listeler için genel)
+      document.querySelectorAll('.list-group').forEach(list => {
+          list.addEventListener('click', (e) => {
+              const listItem = e.target.closest('li');
+              if (listItem.classList.contains('permanent-item')) {
+                  showNotification('Bu öğe orijinal marka bilgisi olduğu için kaldırılamaz.', 'warning');
+                  return;
+              }
+              if (e.target.classList.contains('remove-item')) {
+                  const textContent = listItem.querySelector('.list-item-text').textContent;
+                  listItem.remove();
+                  if (list.id === 'niceClassSearchList') {
+                      const box = document.querySelector(`.nice-class-box[data-class-no="${textContent}"]`);
+                      if (box) box.classList.remove('selected');
+                  }
+                  if (list.children.length === 0) {
+                     const emptyItem = document.createElement('li');
+                     emptyItem.className = "list-group-item text-muted";
+                     emptyItem.textContent = list.id === 'brandTextSearchList' ? 'Aranacak marka adı listesi.' : 'Aranacak Nice Sınıfı listesi.';
+                     list.appendChild(emptyItem);
+                  }
+              }
+          });
+      });
+
+      // Kaydetme İşlemi
+      saveCriteriaBtn.addEventListener('click', async () => {
+          if (!currentSelectedItem) return;
+
+          const brandTextArray = Array.from(brandTextSearchList.querySelectorAll('.list-item-text')).map(el => el.textContent);
+          const niceClassArray = Array.from(niceClassSearchList.querySelectorAll('.list-item-text')).map(el => parseInt(el.textContent)).filter(n => !isNaN(n));
+          const searchMarkNameValue = (searchMarkNameInput?.value || '').trim();
+
+          try {
+              const res = await monitoringService.updateMonitoringItem(currentSelectedItem.id, {
+                  searchMarkName: searchMarkNameValue,
+                  brandTextSearch: brandTextArray,
+                  niceClassSearch: niceClassArray
+              });
+              if (res.success) {
+                  showNotification('İzleme kriterleri başarıyla güncellendi.', 'success');
+                  $('#editCriteriaModal').modal('hide');
+                  // Veriyi yerel olarak da güncelle
+                  const index = allMonitoringData.findIndex(item => item.id === currentSelectedItem.id);
+                  if (index !== -1) {
+                      allMonitoringData[index].searchMarkName = searchMarkNameValue;
+                      allMonitoringData[index].brandTextSearch = brandTextArray;
+                      allMonitoringData[index].niceClassSearch = niceClassArray;
+                  }
+              } else {
+                  showNotification('Kriterler güncellenirken hata oluştu: ' + res.error, 'error');
+              }
+          } catch (error) {
+              console.error('Kriter kaydetme hatası:', error);
+              showNotification('Kriterler güncellenirken beklenmeyen bir hata oluştu.', 'error');
+          }
+      });
+    }
+
+    function populateNiceClassBoxes(selectedClasses, permanentClasses = []) {
+        // Önce tüm kutulardan seçimi kaldır
+        document.querySelectorAll('.nice-class-box').forEach(box => {
+            if (box) {  // Null kontrolü ekle
+                box.classList.remove('selected');
+                box.classList.remove('permanent-item');
+            }
+        });
+
+        // Number tipindeki verileri string'e çevir ve geçerli olanları filtrele
+        const selectedClassesString = (selectedClasses || [])
+            .map(cls => String(cls))
+            .filter(cls => cls !== 'null' && cls !== 'undefined' && cls.trim() !== '');
+        
+        const permanentClassesString = (permanentClasses || [])
+            .map(cls => String(cls))
+            .filter(cls => cls !== 'null' && cls !== 'undefined' && cls.trim() !== '');
+
+        const allNiceClasses = new Set([...selectedClassesString, ...permanentClassesString]);
+        
+        // Liste güncelleme
+        const niceClassSearchList = document.getElementById('niceClassSearchList');
+        if (niceClassSearchList) {
+            populateList(niceClassSearchList, [], permanentClassesString);
+        }
+
+        // Her sınıf için kutu seçimi
+        allNiceClasses.forEach(cls => {
+            // Sadece geçerli sınıf numaraları için ara (1-45 arası ve 99)
+            const classNum = parseInt(cls);
+            if (isNaN(classNum) || (classNum < 1 || classNum > 45) && classNum !== 99) {
+                console.warn(`Geçersiz sınıf numarası: ${cls}`);
+                return;
+            }
+
+            const box = document.querySelector(`.nice-class-box[data-class-no="${cls}"]`);
+            if (box) {
+                box.classList.add('selected');
+                
+                // Kalıcı sınıfları işaretle
+                if (permanentClassesString.includes(cls)) {
+                    box.classList.add('permanent-item');
+                }
+                
+                // Liste öğesi ekle
+                if (niceClassSearchList) {
+                    const listItem = addListItem(niceClassSearchList, cls);
+                    if (listItem && permanentClassesString.includes(cls)) {
+                        listItem.classList.add('permanent-item');
+                    }
+                }
+            } else {
+                console.warn(`Nice class number ${cls} could not be found in the UI.`);
+            }
+        });
+    }
+    function addListItem(listElement, text, isPermanent = false) {
+        // Liste boşsa uyarı elemanını kaldır
+        const emptyItem = listElement.querySelector('.list-group-item.text-muted');
+        if (emptyItem) {
+            emptyItem.remove();
+        }
+        
+        // Zaten listede var mı kontrolü
+        const existingItems = Array.from(listElement.querySelectorAll('.list-item-text')).map(el => el.textContent);
+        if (existingItems.includes(text)) {
+            return;
+        }
+
+        const li = document.createElement('li');
+        li.className = 'list-group-item d-flex justify-content-between align-items-center';
+        if (isPermanent) {
+            li.classList.add('permanent-item');
+        }
+        li.innerHTML = `<span class="list-item-text">${text}</span><button type="button" class="btn btn-sm btn-danger remove-item">&times;</button>`;
+        listElement.appendChild(li);
+        return li;
+    }
+    
+    function removeListItem(listElement, text) {
+        const items = listElement.querySelectorAll('li');
+        for (let item of items) {
+            if (item.querySelector('.list-item-text').textContent === text) {
+                if (item.classList.contains('permanent-item')) {
+                     showNotification('Bu öğe orijinal marka bilgisi olduğu için kaldırılamaz.', 'warning');
+                     return;
+                }
+                item.remove();
+                break;
+            }
+        }
+        if (listElement.children.length === 0) {
+             const emptyItem = document.createElement('li');
+             emptyItem.className = "list-group-item text-muted";
+             emptyItem.textContent = listElement.id === 'brandTextSearchList' ? 'Aranacak marka adı listesi.' : 'Aranacak Nice Sınıfı listesi.';
+             listElement.appendChild(emptyItem);
+        }
+    }
+
+    function populateList(listElement, items, permanentItems = []) {
+        listElement.innerHTML = '';
+        const allItems = new Set([...items.map(String), ...permanentItems.map(String)]);
+        if (allItems.size > 0) {
+            allItems.forEach(item => {
+                const isPermanent = permanentItems.includes(item);
+                addListItem(listElement, item, isPermanent);
+            });
+        } else {
+            const emptyItem = document.createElement('li');
+            emptyItem.className = "list-group-item text-muted";
+            emptyItem.textContent = listElement.id === 'brandTextSearchList' ? 'Aranacak marka adı listesi.' : 'Aranacak Nice Sınıfı listesi.';
+            listElement.appendChild(emptyItem);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        try {
+            initializePagination();
+            setupFilters();
+            setupEditCriteriaModal();
+            await loadSharedLayout({ activeMenuLink: 'monitoring-trademarks.html' });
+
+            // [GÜNCELLENDİ] Kişileri VE IP Kayıtlarını paralel yükle
+            const pRes = await personService.getPersons();
+            if (pRes.success) allPersons = pRes.data || [];
+
+            const container = document.getElementById('monitoringTableContainer');
+            const removeSelectedBtn = document.getElementById('removeSelectedBtn');
+
+            onAuthStateChanged(auth, async (user) => {
+                if (!user) {
+                    container.innerHTML = '<div class="no-records">Giriş yapmalısınız.</div>';
+                    return;
+                }
+
+                container.innerHTML = '<div class="loading">İzleme listeniz yükleniyor...</div>';
+
+                try {
+                    const { success, data, error } = await monitoringService.getMonitoringItems(user.uid);
+                    if (success) {
+                        selectedMonitoringItems.clear();
+                        renderMonitoringTable(data, user.uid);
+                        updateSelectedButtonState();
+                    } else {
+                        container.innerHTML = `<div class="error-message">İzleme listeniz yüklenirken bir hata oluştu: ${error}</div>`;
+                    }
+                } catch (error) {
+                    container.innerHTML = '<div class="error-message">İzleme listeniz yüklenirken beklenmeyen bir hata oluştu.</div>';
+                }
+            });
+
+            container.addEventListener('change', (e) => {
+                if (e.target.classList.contains('row-checkbox')) {
+                    const id = e.target.dataset.id;
+                    if (e.target.checked) selectedMonitoringItems.add(id);
+                    else selectedMonitoringItems.delete(id);
+                    updateSelectedButtonState();
+                }
+            });
+
+            removeSelectedBtn.addEventListener('click', async () => {
+                if (selectedMonitoringItems.size === 0) return;
+                if (!confirm(`Seçilen ${selectedMonitoringItems.size} kaydı kaldırmak istediğinizden emin misiniz?`)) return;
+
+                const user = auth.currentUser;
+                if (!user) { showNotification('Giriş yapmalısınız.', 'error'); return; }
+
+                let successfulRemovals = 0, failedRemovals = 0;
+                container.innerHTML = '<div class="loading">Seçili kayıtlar kaldırılıyor...</div>';
+
+                for (const id of Array.from(selectedMonitoringItems)) {
+                    try {
+                        const res = await monitoringService.removeMonitoringItem(id);
+                        if (res.success) successfulRemovals++;
+                        else failedRemovals++;
+                    } catch (error) {
+                        failedRemovals++;
+                    }
+                }
+
+                try {
+                    const { success, data } = await monitoringService.getMonitoringItems();
+                    if (success) renderMonitoringTable(data);
+                    else container.innerHTML = '<div class="error-message">Liste güncellenirken hata oluştu.</div>';
+                } catch (error) {
+                    container.innerHTML = '<div class="error-message">Liste güncellenirken beklenmeyen bir hata oluştu.</div>';
+                }
+
+                if (successfulRemovals > 0) showNotification(`${successfulRemovals} kayıt başarıyla kaldırıldı.`, 'success');
+                if (failedRemovals > 0) showNotification(`${failedRemovals} kayıt kaldırılamadı.`, 'error');
+            });
+
+        } catch (error) {
+            console.error('Sayfa başlatma hatası:', error);
+            const container = document.getElementById('monitoringTableContainer');
+            if (container) container.innerHTML = '<div class="error-message">Sayfa yüklenirken bir hata oluştu.</div>';
+        }
+    });
+</script>
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
