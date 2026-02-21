@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPGATE - Dashboard</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <link rel="stylesheet" href="./css/shared-styles.css">
+    <style>
+        /* Bu sayfaya özel stiller */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            color: #333; 
+            display: flex; 
+            overflow: hidden; 
+        }
+        
+        /* === ANA SAYFA YAPISI === */
+        .page-wrapper { flex-grow: 1; display: flex; flex-direction: column; height: 100vh; overflow-y: auto; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
+        .main-container { width: 100%; max-width: 1400px; margin: 30px auto; padding: 0 30px; padding-top: 120px; }
+        
+        /* === DASHBOARD SAYFASINA ÖZEL STİLLER === */
+        .welcome-section { background: rgba(255, 255, 255, 0.95); padding: 30px; border-radius: 20px; margin-bottom: 30px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); }
+        .welcome-title { font-size: 2em; color: #1e3c72; margin-bottom: 10px; }
+        .welcome-subtitle { color: #666; font-size: 1.1em; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 25px; margin-bottom: 40px; }
+        .stat-card { background: rgba(255, 255, 255, 0.95); padding: 25px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); transition: transform 0.3s ease; border-left: 5px solid; }
+        .stat-card:hover { transform: translateY(-5px); }
+        .stat-card.patents { border-left-color: #ff6b6b; }
+        .stat-card.trademarks { border-left-color: #4ecdc4; }
+        .stat-card.copyrights { border-left-color: #45b7d1; }
+        .stat-card.designs { border-left-color: #96ceb4; }
+        .stat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .stat-icon { width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5em; color: white; }
+        .stat-icon.patents { background: #ff6b6b; }
+        .stat-icon.trademarks { background: #4ecdc4; }
+        .stat-icon.copyrights { background: #45b7d1; }
+        .stat-icon.designs { background: #96ceb4; }
+        .stat-value { font-size: 2.5em; font-weight: bold; color: #1e3c72; }
+        .stat-label { color: #666; font-size: 1.1em; margin-bottom: 10px; }
+        .stat-change { font-size: 0.9em; padding: 4px 8px; border-radius: 6px; font-weight: 500; }
+        .stat-change.positive { background: #d4edda; color: #155724; }
+        .dashboard-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 30px; margin-bottom: 40px; }
+        .chart-section { background: rgba(255, 255, 255, 0.95); padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); }
+        .chart-title { font-size: 1.3em; color: #1e3c72; margin-bottom: 20px; }
+        .chart-container { height: 300px; position: relative; }
+        .recent-activities { background: rgba(255, 255, 255, 0.95); padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); }
+        .activity-item { display: flex; align-items: center; padding: 15px 0; border-bottom: 1px solid #eee; }
+        .activity-item:last-child { border-bottom: none; }
+        .activity-icon { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px; font-size: 1.2em; color: white; }
+        .activity-content { flex: 1; }
+        .activity-title { font-weight: 600; color: #333; }
+        .activity-time { font-size: 0.9em; color: #666; }
+        .quick-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
+        .action-btn { background: linear-gradient(45deg, #1e3c72, #2a5298); color: white; padding: 20px; border: none; border-radius: 15px; cursor: pointer; font-size: 1em; font-weight: 600; transition: all 0.3s ease; text-align: center; text-decoration: none; }
+        .action-btn:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(30, 60, 114, 0.3); }
+        .loading-animation { display: inline-block; width: 20px; height: 20px; border: 3px solid #f3f3f3; border-top: 3px solid #1e3c72; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @media (max-width: 992px) { .dashboard-grid { grid-template-columns: 1fr; } }
+
+        /* Yeni Finans Durumu Bölümü Stilleri */
+        .financial-status-section {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            margin-bottom: 40px;
+        }
+        .financial-status-title {
+            font-size: 1.8em;
+            color: #1e3c72;
+            margin-bottom: 25px;
+            text-align: center;
+        }
+        .financial-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+        .financial-card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            border-left: 5px solid;
+        }
+        .financial-card.income { border-left-color: #28a745; } 
+        .financial-card.unpaid { border-left-color: #dc3545; } 
+
+        .financial-card h3 {
+            font-size: 1.3em;
+            color: #1e3c72;
+            margin-bottom: 15px;
+        }
+        .financial-summary {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .financial-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+        }
+        .financial-label {
+            font-size: 0.9em;
+            color: #666;
+        }
+        .chart-small-container {
+            height: 200px;
+            margin-top: 15px;
+        }
+        .client-list {
+            list-style: none;
+            padding: 0;
+            margin-top: 15px;
+            max-height: 150px;
+            overflow-y: auto;
+            border-top: 1px dashed #e1e8ed;
+            padding-top: 10px;
+        }
+        .client-list li {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px dotted #eee;
+            font-size: 0.9em;
+            color: #555;
+        }
+        .client-list li:last-child {
+            border-bottom: none;
+        }
+        .client-name {
+            font-weight: 600;
+        }
+        .client-amount {
+            color: #1e3c72;
+            font-weight: bold;
+        }
+
+        @media (max-width: 992px) {
+            .financial-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="notification-container" class="notification-container"></div> <div id="layout-placeholder"></div>
+    <div class="page-wrapper">
+        <main class="main-container">
+            <section class="welcome-section">
+                <h1 class="welcome-title">Hoş Geldiniz! 👋</h1>
+                <p class="welcome-subtitle">Fikri mülkiyet haklarınızın güncel durumunu görüntüleyin ve yönetin.</p>
+            </section>
+            <section class="stats-grid">
+                 <div class="stat-card patents"><div class="stat-header"><div class="stat-icon patents">📋</div><div class="stat-change positive" id="patentChange">+0</div></div><div class="stat-value" id="patentCount">0</div><div class="stat-label">Patent</div></div>
+                 <div class="stat-card trademarks"><div class="stat-header"><div class="stat-icon trademarks">🏷️</div><div class="stat-change positive" id="trademarkChange">+0</div></div><div class="stat-value" id="trademarkCount">0</div><div class="stat-label">Marka</div></div>
+                 <div class="stat-card copyrights"><div class="stat-header"><div class="stat-icon copyrights">©</div><div class="stat-change positive" id="copyrightChange">+0</div></div><div class="stat-value" id="copyrightCount">0</div><div class="stat-label">Telif Hakkı</div></div>
+                 <div class="stat-card designs"><div class="stat-header"><div class="stat-icon designs">🎨</div><div class="stat-change positive" id="designChange">+0</div></div><div class="stat-value" id="designCount">0</div><div class="stat-label">Tasarım</div></div>
+            </section>
+
+            <section class="financial-status-section">
+                <h2 class="financial-status-title">Finans Durumu (Son 8 Hafta)</h2>
+                <div class="financial-grid">
+                    <div class="financial-card income">
+                        <h3>Tahsilat Raporu</h3>
+                        <div class="financial-summary">
+                            <div class="financial-value" id="totalIncome">0.00 TL</div>
+                            <div class="financial-label">Toplam Gelir</div>
+                        </div>
+                        <div class="chart-small-container"><canvas id="incomeTrendChart"></canvas></div>
+                        <h4>En Çok Ödeme Yapanlar</h4>
+                        <ul class="client-list" id="topIncomeClients">
+                            <li>Veri Yok</li>
+                        </ul>
+                    </div>
+                    <div class="financial-card unpaid">
+                        <h3>Ödenmeyen Alacaklar Raporu</h3>
+                        <div class="financial-summary">
+                            <div class="financial-value" id="totalUnpaid">0.00 TL</div>
+                            <div class="financial-label">Toplam Alacak</div>
+                        </div>
+                        <div class="chart-small-container"><canvas id="unpaidTrendChart"></canvas></div>
+                        <h4>En Çok Borcu Olanlar</h4>
+                        <ul class="client-list" id="topUnpaidClients">
+                            <li>Veri Yok</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+            <section class="dashboard-grid">
+                <div class="chart-section"><h2 class="chart-title">Aylık Başvuru Trendi</h2><div class="chart-container"><canvas id="trendChart"></canvas></div></div>
+                <div class="recent-activities"><h2 class="chart-title">Son Aktiviteler</h2><div id="activitiesList"></div></div>
+            </section>
+            <section class="quick-actions">
+                <a href="data-entry.html?type=patent" class="action-btn">📋 Yeni Patent Başvurusu</a>
+                <a href="data-entry.html?type=trademark" class="action-btn">🏷️ Yeni Marka Başvurusu</a>
+                <a href="portfolio.html" class="action-btn">📊 Portföyü Görüntüle</a>
+                <a href="persons.html" class="action-btn">👥 Kişileri Yönet</a>
+            </section>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="module">
+        import { authService, ipRecordsService, accrualService, auth } from './firebase-config.js';
+        import { showNotification } from './utils.js';
+        import { loadSharedLayout } from './js/layout-loader.js';
+        import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        class DashboardController {
+            constructor() {
+                this.currentUser = null;
+                this.applicationTrendChart = null;
+                this.incomeTrendChart = null;
+                this.unpaidTrendChart = null;
+            }
+
+            async init() {
+                this.currentUser = authService.getCurrentUser();
+                if (!this.currentUser) return; 
+                await this.loadDashboardData();
+            }
+
+            async loadDashboardData() {
+                const [ipRecordsResult, accrualsResult] = await Promise.all([
+                    ipRecordsService.getRecords(),
+                    accrualService.getAccruals()
+                ]);
+
+                if (ipRecordsResult.success) {
+                    this.updateStats(ipRecordsResult.data);
+                    this.updateActivities(ipRecordsResult.data);
+                    this.renderApplicationTrendChart(ipRecordsResult.data);
+                } else {
+                    console.error('IP Kayıtları yüklenemedi:', ipRecordsResult.error);
+                    document.getElementById('activitiesList').innerHTML = '<p>IP Kayıtları verileri yüklenemedi.</p>';
+                    showNotification('IP kayıtları yüklenirken bir hata oluştu.', 'error');
+                }
+
+                if (accrualsResult.success) {
+                    this.processFinancialData(accrualsResult.data);
+                } else {
+                    console.error('Tahakkuk verileri yüklenemedi:', accrualsResult.error);
+                    document.getElementById('totalIncome').textContent = 'N/A';
+                    document.getElementById('totalUnpaid').textContent = 'N/A';
+                    document.getElementById('topIncomeClients').innerHTML = '<li>Veri Yok</li>';
+                    document.getElementById('topUnpaidClients').innerHTML = '<li>Veri Yok</li>';
+                    showNotification('Finansal veriler yüklenirken bir hata oluştu.', 'error');
+                }
+            }
+            
+            updateStats(records = []) {
+                const counts = { patent: 0, trademark: 0, copyright: 0, design: 0 };
+                records.forEach(r => { if(counts[r.type] !== undefined) counts[r.type]++; });
+                document.getElementById('patentCount').textContent = counts.patent;
+                document.getElementById('trademarkCount').textContent = counts.trademark;
+                document.getElementById('copyrightCount').textContent = counts.copyright;
+                document.getElementById('designCount').textContent = counts.design;
+            }
+
+            updateActivities(records = []) {
+                const list = document.getElementById('activitiesList');
+                list.innerHTML = '';
+                const recent = records.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
+                if(recent.length === 0) {
+                    list.innerHTML = '<p>Henüz aktivite yok.</p>';
+                    return;
+                }
+                const icons = {patent:'📋',trademark:'🏷️',copyright:'©',design:'🎨'}; 
+                recent.forEach(record => {
+                    const item = document.createElement('div');
+                    item.className = 'activity-item';
+                    item.innerHTML = `<div class="activity-icon ${record.type}">${icons[record.type] || '📄'}</div>
+                                <div class="activity-content">
+                                <div class="activity-title">${record.title || 'Başlıksız Kayıt'}</div>
+                                <div class="activity-time">${new Date(record.createdAt).toLocaleDateString('tr-TR')}</div>
+                                </div>`;
+                    list.appendChild(item);
+                });
+            }
+
+            renderApplicationTrendChart(records = []) {
+                const ctx = document.getElementById('trendChart').getContext('2d');
+                const monthlyData = {};
+                
+                records.forEach(record => {
+                    let rawDate = record.applicationDate;
+                    
+                    // Veri boş veya tire ise direkt atla
+                    if (rawDate && rawDate !== '-' && rawDate !== '') {
+                        let dateObj = null;
+
+                        try {
+                            // 1. Firebase Timestamp Objeleriyse
+                            if (typeof rawDate.toDate === 'function') {
+                                dateObj = rawDate.toDate();
+                            } 
+                            // 2. Zaten Javascript Date objesiyse
+                            else if (rawDate instanceof Date) {
+                                dateObj = rawDate;
+                            } 
+                            // 3. Metin Formatındaysa
+                            else if (typeof rawDate === 'string') {
+                                if (rawDate.includes('.')) {
+                                    // Türkiye formatı: "25.10.2023" -> Yıl, Ay(0-11), Gün
+                                    const parts = rawDate.split('.');
+                                    if (parts.length === 3) {
+                                        dateObj = new Date(parts[2], parts[1] - 1, parts[0]);
+                                    }
+                                } else {
+                                    // Standart ISO veya İngilizce format
+                                    dateObj = new Date(rawDate);
+                                }
+                            } 
+                            // 4. Unix Timestamp (Sayı) ise
+                            else if (typeof rawDate === 'number') {
+                                dateObj = new Date(rawDate);
+                            }
+
+                            // Tarih başarıyla oluşturulduysa ve "Invalid Date" değilse işleme al
+                            if (dateObj && !isNaN(dateObj.getTime())) {
+                                const month = dateObj.toISOString().slice(0, 7); // YYYY-MM
+                                if(!monthlyData[month]) monthlyData[month] = 0;
+                                monthlyData[month]++;
+                            }
+                        } catch (e) {
+                            console.warn("Grafik için geçersiz tarih atlandı:", rawDate);
+                        }
+                    }
+                });
+
+                const sortedMonths = Object.keys(monthlyData).sort();
+                if(this.applicationTrendChart) this.applicationTrendChart.destroy();
+                this.applicationTrendChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: sortedMonths,
+                        datasets: [{
+                            label: 'Aylık Başvuru Sayısı',
+                            data: sortedMonths.map(month => monthlyData[month]),
+                            borderColor: '#1e3c72',
+                            backgroundColor: 'rgba(30, 60, 114, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false }
+                });
+            }
+
+
+            processFinancialData(accruals = []) {
+                const today = new Date();
+                const eightWeeksAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 56);
+
+                let totalIncomeAmount = 0;
+                let totalUnpaidAmount = 0;
+
+                const weeklyIncome = {};
+                const weeklyUnpaid = {};
+
+                const incomeByClient = {};
+                const unpaidByClient = {};
+
+                accruals.forEach(accrual => {
+                    // Cari taraf ismini belirle (Service Invoice Party yoksa TP Invoice Party kullan)
+                    const clientName = accrual.serviceInvoiceParty?.name || accrual.tpInvoiceParty?.name || 'Bilinmeyen Taraf';
+                    
+                    let actualPaid = 0;
+                    let totalTarget = 0;
+                    let actualUnpaid = 0;
+
+                    // 1. HEDEF VE ÖDENEN TUTARLARI HESAPLA (AccrualDataManager Mantığı)
+                    if (accrual.isForeignTransaction || accrual.foreignStatus) {
+                        // A. Yurtdışı İşlemleri
+                        totalTarget = (accrual.officialFee?.amount || 0) + (accrual.serviceFee?.amount || 0);
+                        if (totalTarget === 0) totalTarget = accrual.totalAmount || 0; // Eski kayıtlar için destek
+                        
+                        actualPaid = (accrual.foreignPaidOfficialAmount || 0) + (accrual.foreignPaidServiceAmount || 0);
+                        
+                        // Eski verilerde manuel status paid yapılmış ama miktar girilmemişse:
+                        if (accrual.foreignStatus === 'paid' && actualPaid === 0) actualPaid = totalTarget;
+
+                    } else {
+                        // B. Yurtiçi İşlemleri
+                        const vatMultiplier = 1 + ((accrual.vatRate || 0) / 100);
+                        const offTarget = accrual.applyVatToOfficialFee ? (accrual.officialFee?.amount || 0) * vatMultiplier : (accrual.officialFee?.amount || 0);
+                        const srvTarget = (accrual.serviceFee?.amount || 0) * vatMultiplier;
+                        
+                        totalTarget = offTarget + srvTarget;
+                        if (totalTarget === 0) totalTarget = accrual.totalAmount || 0; // Eski kayıtlar için destek
+                        
+                        actualPaid = (accrual.paidOfficialAmount || 0) + (accrual.paidServiceAmount || 0);
+                        
+                        // Eski verilerde manuel status paid yapılmış ama miktar girilmemişse:
+                        if (accrual.status === 'paid' && actualPaid === 0) actualPaid = totalTarget;
+                    }
+
+                    // Kalan Borcu Hesapla
+                    actualUnpaid = Math.max(0, totalTarget - actualPaid);
+
+                    // 2. TAHSİLATLARI (GELİRLERİ) İŞLE
+                    if (actualPaid > 0) {
+                        // Ödeme tarihi varsa onu, yoksa güncellenme tarihini baz al
+                        const paymentDate = accrual.paymentDate || accrual.foreignPaymentDate 
+                            ? new Date(accrual.paymentDate || accrual.foreignPaymentDate) 
+                            : new Date(accrual.updatedAt || accrual.createdAt);
+
+                        if (paymentDate >= eightWeeksAgo) {
+                            totalIncomeAmount += actualPaid;
+                            const weekKey = this.getWeekNumber(paymentDate);
+                            weeklyIncome[weekKey] = (weeklyIncome[weekKey] || 0) + actualPaid;
+                            incomeByClient[clientName] = (incomeByClient[clientName] || 0) + actualPaid;
+                        }
+                    }
+
+                    // 3. ÖDENMEYEN ALACAKLARI (BORÇLARI) İŞLE
+                    if (actualUnpaid > 0) {
+                        const createdAt = accrual.createdAt ? new Date(accrual.createdAt) : new Date();
+                        
+                        if (createdAt >= eightWeeksAgo) {
+                            totalUnpaidAmount += actualUnpaid;
+                            const weekKey = this.getWeekNumber(createdAt);
+                            weeklyUnpaid[weekKey] = (weeklyUnpaid[weekKey] || 0) + actualUnpaid;
+                            unpaidByClient[clientName] = (unpaidByClient[clientName] || 0) + actualUnpaid;
+                        }
+                    }
+                });
+
+                // Ekrana Yazdır
+                document.getElementById('totalIncome').textContent = new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(totalIncomeAmount);
+                document.getElementById('totalUnpaid').textContent = new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(totalUnpaidAmount);
+
+                // Grafikleri ve Listeleri Çiz
+                this.renderFinancialTrendCharts(weeklyIncome, weeklyUnpaid, eightWeeksAgo);
+                this.renderTopClients(incomeByClient, 'topIncomeClients');
+                this.renderTopClients(unpaidByClient, 'topUnpaidClients');
+            }
+
+            getWeekNumber(d) {
+                d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+                d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+                const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+                const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+                return `${d.getUTCFullYear()}-${String(weekNo).padStart(2, '0')}`;
+            }
+
+            renderFinancialTrendCharts(weeklyIncome, weeklyUnpaid, startDate) {
+                const incomeCtx = document.getElementById('incomeTrendChart').getContext('2d');
+                const unpaidCtx = document.getElementById('unpaidTrendChart').getContext('2d');
+
+                const labels = [];
+                let currentWeek = new Date(startDate);
+                for (let i = 0; i < 8; i++) {
+                    labels.push(this.getWeekNumber(currentWeek));
+                    currentWeek.setDate(currentWeek.getDate() + 7);
+                }
+                labels.sort();
+
+                const incomeData = labels.map(label => weeklyIncome[label] || 0);
+                const unpaidData = labels.map(label => weeklyUnpaid[label] || 0);
+
+                if (this.incomeTrendChart) this.incomeTrendChart.destroy();
+                if (this.unpaidTrendChart) this.unpaidTrendChart.destroy();
+
+                this.incomeTrendChart = new Chart(incomeCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Haftalık Tahsilat',
+                            data: incomeData,
+                            backgroundColor: '#4ecdc4',
+                            borderColor: '#218838',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: { y: { beginAtZero: true } },
+                        plugins: { legend: { display: false } }
+                    }
+                });
+
+                this.unpaidTrendChart = new Chart(unpaidCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Haftalık Ödenmeyen Alacak',
+                            data: unpaidData,
+                            backgroundColor: '#ff6b6b',
+                            borderColor: '#c82333',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: { y: { beginAtZero: true } },
+                        plugins: { legend: { display: false } }
+                    }
+                });
+            }
+
+            renderTopClients(clientData, elementId) {
+                const listElement = document.getElementById(elementId);
+                listElement.innerHTML = '';
+
+                const sortedClients = Object.entries(clientData)
+                    .sort(([, amountA], [, amountB]) => amountB - amountA)
+                    .slice(0, 5);
+
+                if (sortedClients.length === 0) {
+                    listElement.innerHTML = '<li>Veri Yok</li>';
+                    return;
+                }
+
+                sortedClients.forEach(([clientName, amount]) => {
+                    const listItem = document.createElement('li');
+                    listItem.innerHTML = `<span class="client-name">${clientName}</span><span class="client-amount">${new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(amount)}</span>`;
+                    listElement.appendChild(listItem);
+                });
+            }
+        }
+
+        // TEK VE TEMİZ DOMContentLoaded BLOĞU
+        document.addEventListener('DOMContentLoaded', async function() {
+            try {
+                await loadSharedLayout({ activeMenuLink: 'dashboard.html' });
+            } catch (error) {
+                console.error("Layout yüklenirken hata:", error);
+            }
+
+            let started = false;
+            const boot = async () => {
+                if (started) return;
+                started = true;
+                const dashboard = new DashboardController();
+                window.dashboard = dashboard;
+                await dashboard.init();
+            };
+
+            // Kullanıcı zaten girişliyse anında başlat
+            if (auth.currentUser) {
+                boot();
+            }
+
+            // Auth durumunu dinle; yoksa login'e yönlendir
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    boot();
+                } else {
+                    window.location.replace('index.html');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
