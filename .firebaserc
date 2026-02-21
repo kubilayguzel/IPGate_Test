@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "test": "ip-manager-production-aab4b",
+    "production": "ipgate-31bd2",
+    "default": "ip-manager-production-aab4b"
+  }
+}
