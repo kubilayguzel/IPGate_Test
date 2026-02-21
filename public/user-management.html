@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPGATE - Kullanıcı Yönetimi</title>
+    <link rel="stylesheet" href="css/shared-styles.css">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <style>
+        /* Bu sayfaya özel stiller */
+        /* Genel body, page-wrapper, main-container stilleri shared-styles.css'ten gelecektir. */
+        /* Sadece bu sayfaya özgü ve çakışmayan stilleri burada tutun */
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; display: flex; }
+        .page-wrapper { flex-grow: 1; display: flex; flex-direction: column; height: 100vh; overflow-y: auto; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
+        .main-container { width: 100%; padding: 30px; padding-top: 120px; }
+        
+        /* User Management specific styles */
+        .page-header { background: rgba(255, 255, 255, 0.95); padding: 30px; border-radius: 20px; margin-bottom: 30px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); }
+        .page-title { font-size: 2em; color: #1e3c72; margin-bottom: 10px; }
+        .page-subtitle { color: #666; font-size: 1.1em; }
+
+        .users-container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .users-header {
+            padding: 20px 30px;
+            border-bottom: 1px solid #e1e8ed;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .search-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-grow: 1; /* Arama çubuğunun genişlemesini sağlar */
+            max-width: 400px; /* Maksimum genişlik atayabiliriz */
+        }
+
+        .search-input {
+            flex-grow: 1;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+        }
+
+        .btn-add-user {
+            background: linear-gradient(45deg, #1e3c72, #2a5298);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .btn-add-user:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(30, 60, 114, 0.2);
+        }
+
+        .users-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .users-table th,
+        .users-table td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .users-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+        .users-table tr:hover {
+            background-color: #f6f8fa;
+        }
+
+        .role-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: 500;
+            color: white;
+            text-align: center;
+            display: inline-block;
+        }
+        .role-admin { background-color: #007bff; }
+        .role-superadmin { background-color: #28a745; }
+        .role-user { background-color: #6c757d; }
+
+        .action-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-left: 5px;
+            transition: all 0.3s ease;
+        }
+        .action-btn.edit-btn { background-color: #ffc107; color: #212529; }
+        .action-btn.edit-btn:hover { background-color: #e0a800; }
+        .action-btn.delete-btn { background-color: #dc3545; }
+        .action-btn.delete-btn:hover { background-color: #c82333; }
+        .action-btn:hover {
+            opacity: 0.9;
+        }
+        .loading { text-align: center; padding: 50px; }
+        .no-users { text-align: center; padding: 50px; color: #666; }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1002;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.6);
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: auto;
+            padding: 30px;
+            border: 1px solid #888;
+            width: 90%;
+            max-width: 1000px;
+            border-radius: 20px;
+            animation-name: animatetop;
+            animation-duration: 0.4s;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        @keyframes animatetop {
+            from {top: -300px; opacity: 0}
+            to {top: 0; opacity: 1}
+        }
+
+        .close-modal-btn {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .modal-title {
+            font-size: 1.5em;
+            color: #1e3c72;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+            display: flex;
+            flex-direction: column;
+        }
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+        .form-input, .form-select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e1e8ed;
+            border-radius: 10px;
+            font-size: 1em;
+            transition: all 0.3s ease;
+            background: white;
+        }
+        .form-input:focus, .form-select:focus {
+            outline: none; border-color: #1e3c72;
+            box-shadow: 0 0 0 3px rgba(30, 60, 114, 0.1);
+        }
+
+        .modal-footer {
+            margin-top: 25px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        .modal-footer .btn {
+            padding: 10px 20px;
+            font-size: 1em;
+            border-radius: 8px;
+        }
+        .btn-primary { background: #1e3c72; color: white; border: none; }
+        .btn-primary:hover { background: #2a5298; }
+        .btn-secondary { background: #6c757d; color: white; border: none; }
+        .btn-secondary:hover { background: #5a6268; }
+
+        .linked-indicator {
+            display: inline-block;
+            background: #28a745;
+            color: white;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            text-align: center;
+            line-height: 18px;
+            font-size: 12px;
+            margin-left: 5px;
+            font-weight: bold;
+        }
+        
+        #clientPersonGroup {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            margin-top: 10px;
+        }
+        
+        #clientPersonGroup .text-muted {
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        /* Kişi Seçimi Stilleri */
+        .position-relative {
+            position: relative;
+        }
+        
+        .search-results-list {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 250px;
+            overflow-y: auto;
+            border: 1px solid #ced4da;
+            border-top: none;
+            border-bottom-left-radius: 0.25rem;
+            border-bottom-right-radius: 0.25rem;
+            background: #fff;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            z-index: 9999;
+        }
+        
+        .search-result-item {
+            padding: 10px 15px;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+            transition: background-color 0.2s;
+        }
+        
+        .search-result-item:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .search-result-item:last-child {
+            border-bottom: none;
+        }
+        
+        .btn-add-item {
+            background: linear-gradient(45deg, #28a745, #34ce57);
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-add-item:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(40, 167, 69, 0.3);
+        }
+        
+        /* Seçilen Öğeler Konteyner */
+        .selected-items-container {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background: #f8f9fa;
+            margin-top: 10px;
+        }
+        
+        .selected-items-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            border-bottom: 1px solid #dee2e6;
+            background: #e9ecef;
+            border-radius: 7px 7px 0 0;
+        }
+        
+        .selected-items-title {
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        .selected-items-count {
+            background: #007bff;
+            color: white;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        
+        .selected-items-list {
+            min-height: 100px;
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .selected-item {
+            background-color: #e2f0ff;
+            border: 1px solid #a7d9ff;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.95rem;
+            color: #343a40;
+        }
+        
+        .selected-item:last-child {
+            margin-bottom: 0;
+        }
+        
+        .remove-selected-item-btn {
+            background: none;
+            border: none;
+            color: #dc3545;
+            font-size: 1.4rem;
+            cursor: pointer;
+            padding: 0 5px;
+            transition: color 0.2s ease;
+            line-height: 1;
+        }
+        
+        .remove-selected-item-btn:hover {
+            color: #c82333;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .empty-state i {
+            margin-bottom: 10px;
+        }
+        
+        .empty-state p {
+            margin: 0;
+            font-style: italic;
+        }
+        .selected-item {
+    background-color: #e2f0ff;
+    border: 1px solid #a7d9ff;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    font-size: 0.95rem;
+    color: #343a40;
+    gap: 10px;
+}
+
+.person-info {
+    flex: 1;
+}
+
+.permission-checkboxes {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: 0 10px;
+}
+
+.permission-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.permission-label input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+.permission-label span {
+    color: #495057;
+    font-weight: 500;
+}
+.permission-radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0 10px;
+}
+
+.permission-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.permission-label input[type="radio"] {
+    margin: 0;
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+}
+
+.permission-label span {
+    color: #495057;
+    font-weight: 500;
+    font-size: 1rem;
+}
+    </style>
+</head>
+<body>
+    <div id="layout-placeholder"></div>
+    <div class="page-wrapper">
+        <main class="main-container">
+            <section class="page-header">
+                <h1 class="page-title">Kullanıcı Yönetimi</h1>
+                <p class="page-subtitle">Uygulama kullanıcılarını yönetin, yetkilendirin ve yeni kullanıcılar ekleyin.</p>
+            </section>
+    
+            <div class="users-container">
+                <div class="users-header">
+                    <div class="search-group">
+                        <input type="text" id="userSearchInput" class="search-input" placeholder="İsim veya E-posta Ara...">
+                        <button class="btn-add-user" id="addNewUserBtn">
+                            <span>&#x2795;</span> Yeni Kullanıcı Ekle
+                        </button>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th>Ad Soyad</th>
+                                <th>E-posta</th>
+                                <th>Rol</th>
+                                <th>Oluşturulma Tarihi</th>
+                                <th>Son Giriş</th>
+                                <th>İşlemler</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usersTableBody">
+                        </tbody>
+                    </table>
+                </div>
+                <div id="loadingIndicator" class="loading">Yükleniyor...</div>
+                <div id="noUsersMessage" class="no-users">Henüz kayıtlı kullanıcı bulunmamaktadır.</div>
+            </div>
+        </main>
+    </div>
+
+<div id="userModal" class="modal">
+    <div class="modal-content">
+        <span class="close-modal-btn" id="closeUserModal">&times;</span>
+        <h3 class="modal-title" id="userModalTitle">Yeni Kullanıcı Ekle</h3>
+        <form id="userForm">
+            <input type="hidden" id="userId" name="userId">
+            <div class="form-group">
+                <label for="formUserName" class="form-label">Ad Soyad:</label>
+                <input type="text" id="formUserName" name="formUserName" class="form-input" autocomplete="name">
+            </div>
+            <div class="form-group">
+                <label for="formUserEmail" class="form-label">E-posta:</label>
+                <input type="email" id="formUserEmail" name="formUserEmail" class="form-input" required autocomplete="email">
+            </div>
+            <div class="form-group" id="passwordGroup">
+                <label for="formUserPassword" class="form-label">Şifre:</label>
+                <input type="password" id="formUserPassword" name="formUserPassword" class="form-input" autocomplete="new-password">
+            </div>
+            <div class="form-group">
+                <label for="formUserRole" class="form-label">Rol:</label>
+                <select id="formUserRole" name="formUserRole" class="form-select" required>
+                    <option value="">Seçiniz...</option>
+                    <option value="belirsiz">Belirsiz</option>
+                    <option value="client">Client</option>
+                    <option value="user">Kullanıcı</option>
+                    <option value="admin">Admin</option>
+                    <option value="superadmin">Super Admin</option>
+                </select>
+            </div>
+            
+            <!-- Client Rolü İçin Kişi İlişkilendirme -->
+            <div class="form-group" id="clientPersonGroup" style="display: none;">
+                <label class="form-label">İlişkilendirilecek Kişiler:</label>
+                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                    <div class="position-relative" style="flex: 1;">
+                        <input type="text" id="personSearchInput" class="form-input" placeholder="Kişi adı veya e-posta ara...">
+                        <div id="personSearchResults" class="search-results-list" style="display: none;"></div>
+                    </div>
+                </div>
+                
+                <!-- Seçilen kişiler listesi -->
+                <div class="selected-items-container">
+                    <div class="selected-items-header">
+                        <span class="selected-items-title">Seçilen Kişiler</span>
+                        <span class="selected-items-count" id="selectedPersonsCount">0</span>
+                    </div>
+                    <div id="selectedPersonsList" class="selected-items-list">
+                        <div class="empty-state">
+                            <i class="fas fa-users fa-2x text-muted mb-2"></i>
+                            <p class="text-muted">Henüz kişi eklenmedi.</p>
+                        </div>
+                    </div>
+                </div>
+                <small class="text-muted">Client rolündeki kullanıcılar birden fazla kişiyle ilişkilendirilebilir.</small>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="cancelUserBtn">İptal</button>
+                <button type="submit" class="btn btn-primary" id="saveUserBtn">Kaydet</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script type="module">
+    import { authService, personService, auth, db, app } from './firebase-config.js';
+    import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js';
+    import { collection, getDocs } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+    import { showNotification } from './utils.js';
+    import { loadSharedLayout } from './js/layout-loader.js';
+
+    const functions = getFunctions(app, 'europe-west1');
+    const upsertUser = httpsCallable(functions, 'adminUpsertUser');
+    const deleteUserFn = httpsCallable(functions, 'adminDeleteUser');
+    const strip = (s) => String(s ?? '').trim().replace(/^["'\s]+|["'\s]+$/g, '');
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        // Ortak layout'u yükle ve bu sayfanın aktif linkini belirt
+        await loadSharedLayout({ activeMenuLink: 'user-management.html' });
+
+        class UserManagementModule {
+            // Çoklu kişi seçimi için yeni özellikler
+            constructor() {
+                this.currentUser = null;
+                this.allUsers = [];
+                this.allPersons = [];
+                this.selectedPersons = [];
+            }
+
+            searchPersons(query) {
+                const searchResults = document.getElementById('personSearchResults');
+                if (!searchResults) return;
+
+                if (query.length < 2) {
+                    searchResults.innerHTML = '';
+                    searchResults.style.display = 'none';
+                    return;
+                }
+
+                const filteredPersons = this.allPersons.filter(person =>
+                    person.name.toLowerCase().includes(query.toLowerCase()) ||
+                    (person.email && person.email.toLowerCase().includes(query.toLowerCase()))
+                ).filter(person => 
+                    !this.selectedPersons.some(selected => selected.id === person.id)
+                );
+
+                if (filteredPersons.length === 0) {
+                    searchResults.innerHTML = '<div class="search-result-item text-muted">Sonuç bulunamadı</div>';
+                } else {
+                    searchResults.innerHTML = filteredPersons.map(person => `
+                        <div class="search-result-item" data-id="${person.id}">
+                            <strong>${person.name}</strong>
+                            ${person.email ? `<br><small class="text-muted">${person.email}</small>` : ''}
+                        </div>
+                    `).join('');
+                }
+
+                searchResults.style.display = 'block';
+            }
+
+            addSelectedPerson(person) {
+                if (!this.selectedPersons.some(p => p.id === person.id)) {
+                    this.selectedPersons.push({
+                        id: person.id,
+                        name: person.name,
+                        email: person.email || '',
+                        permissions: {
+                            type: 'view' // Varsayılan: görüntüleme
+                        }
+                    });
+                    this.renderSelectedPersons();
+                }
+            }
+
+            removeSelectedPerson(personId) {
+                this.selectedPersons = this.selectedPersons.filter(p => p.id !== personId);
+                this.renderSelectedPersons();
+            }
+
+            renderSelectedPersons() {
+                const selectedList = document.getElementById('selectedPersonsList');
+                const countBadge = document.getElementById('selectedPersonsCount');
+                
+                if (!selectedList || !countBadge) return;
+
+                countBadge.textContent = this.selectedPersons.length;
+
+                if (this.selectedPersons.length === 0) {
+                    selectedList.innerHTML = `
+                        <div class="empty-state">
+                            <i class="fas fa-users fa-2x text-muted mb-2"></i>
+                            <p class="text-muted">Henüz kişi eklenmedi.</p>
+                        </div>`;
+                } else {
+                    selectedList.innerHTML = this.selectedPersons.map(person => `
+                        <div class="selected-item">
+                            <div class="person-info">
+                                <strong>${person.name}</strong>
+                                ${person.email ? `<br><small class="text-muted">${person.email}</small>` : ''}
+                            </div>
+                            
+                            <div class="permission-radio-group">
+                                <label class="permission-label">
+                                    <input type="radio" name="permission_${person.id}" value="view" 
+                                        data-person-id="${person.id}" class="permission-radio"
+                                        ${person.permissions?.type === 'approval' ? '' : 'checked'}>
+                                    <span>Görüntüleme</span>
+                                </label>
+                                <label class="permission-label">
+                                    <input type="radio" name="permission_${person.id}" value="approval"
+                                        data-person-id="${person.id}" class="permission-radio"
+                                        ${person.permissions?.type === 'approval' ? 'checked' : ''}>
+                                    <span>Onay</span>
+                                </label>
+                            </div>
+                            
+                            <button type="button" class="remove-selected-item-btn" data-id="${person.id}">
+                                &times;
+                            </button>
+                        </div>
+                    `).join('');
+                }
+            }
+
+            clearSelectedPersons() {
+                this.selectedPersons = [];
+                this.renderSelectedPersons();
+            }
+            init() {
+                authService.auth.onAuthStateChanged(async (user) => {
+                    if (user || authService.getCurrentUser()) {
+                        this.currentUser = authService.getCurrentUser();
+                        // Super Admin kontrolü
+                        if (this.currentUser.role !== 'superadmin') {
+                            showNotification('Bu sayfaya erişim yetkiniz yoktur.', 'error');
+                            window.location.href = 'dashboard.html'; // Yetkisiz girişte yönlendir
+                            return;
+                        }
+                        await this.loadUsers();
+                        this.setupEventListeners();
+                    } else {
+                        window.location.href = 'index.html';
+                    }
+                });
+            }
+
+            setupEventListeners() {
+                document.getElementById('addNewUserBtn').addEventListener('click', () => this.showAddUserModal());
+                document.getElementById('closeUserModal').addEventListener('click', () => this.closeUserModal());
+                document.getElementById('cancelUserBtn').addEventListener('click', () => this.closeUserModal());
+                document.getElementById('userForm').addEventListener('submit', (e) => this.handleUserFormSubmit(e));
+                document.getElementById('userSearchInput').addEventListener('input', (e) => this.filterUsers(e.target.value));
+
+            // Rol değişimi dinleyicisi
+                document.getElementById('formUserRole').addEventListener('change', (e) => {
+                    this.toggleClientPersonGroup(e.target.value);
+                });
+
+                // Kişi arama dinleyicisi
+                document.getElementById('personSearchInput').addEventListener('input', (e) => {
+                    this.searchPersons(e.target.value.trim());
+                });
+
+                // Arama sonuçları tıklama dinleyicisi
+                document.getElementById('personSearchResults').addEventListener('click', (e) => {
+                    const item = e.target.closest('.search-result-item');
+                    if (!item || !item.dataset.id) return;
+
+                    const person = this.allPersons.find(p => p.id === item.dataset.id);
+                    if (person) {
+                        this.addSelectedPerson(person);
+                        document.getElementById('personSearchInput').value = '';
+                        document.getElementById('personSearchResults').style.display = 'none';
+                    }
+                });
+
+                // Seçilen kişileri çıkarma dinleyicisi
+                document.getElementById('selectedPersonsList').addEventListener('click', (e) => {
+                    if (e.target.classList.contains('remove-selected-item-btn')) {
+                        this.removeSelectedPerson(e.target.dataset.id);
+                    }
+                });
+
+                // Yetki radio button'ları dinleyicisi
+                document.getElementById('selectedPersonsList').addEventListener('change', (e) => {
+                    if (e.target.classList.contains('permission-radio')) {
+                        this.updatePersonPermissions(e.target.dataset.personId, e.target.value);
+                    }
+                });
+
+                // Tablo içi düzenle / sil butonları (event delegation)
+                document.getElementById('usersTableBody').addEventListener('click', (e) => {
+                    if (e.target.classList.contains('edit-btn')) {
+                        this.showEditUserModal(e.target.dataset.id);
+                    } else if (e.target.classList.contains('delete-btn')) {
+                        this.deleteUser(e.target.dataset.id);
+                    }
+                });
+            }
+
+            updatePersonPermissions(personId, permissionType) {
+                const person = this.selectedPersons.find(p => p.id === personId);
+                if (person) {
+                    person.permissions.type = permissionType; // 'view' veya 'approval'
+                }
+            }
+
+            async loadUsers() {
+                document.getElementById('loadingIndicator').style.display = 'block';
+                try {
+                    const usersCol = collection(db, 'users');
+                    const userSnapshot = await getDocs(usersCol);
+                    this.allUsers = userSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    this.renderUsers();
+                } catch (error) {
+                    showNotification('Kullanıcılar yüklenirken hata: ' + error.message, 'error');
+                } finally {
+                    document.getElementById('loadingIndicator').style.display = 'none';
+                }
+            }
+            
+            filterUsers(text) {
+                this.renderUsers(text || '');
+            }
+            
+            formatTimestamp(timestamp) {
+                if (!timestamp) return '-';
+                
+                try {
+                    if (timestamp?.toDate && typeof timestamp.toDate === 'function') {
+                        return timestamp.toDate().toLocaleDateString('tr-TR');
+                    }
+                    
+                    const date = new Date(timestamp);
+                    if (!isNaN(date.getTime())) {
+                        return date.toLocaleDateString('tr-TR');
+                    }
+                    
+                    return '-';
+                } catch (e) {
+                    console.warn('Tarih parse hatası:', e);
+                    return '-';
+                }
+            }
+
+            renderUsers(filterText = '') {
+    const tableBody = document.getElementById('usersTableBody');
+                const noUsersMessage = document.getElementById('noUsersMessage');
+                tableBody.innerHTML = '';
+
+                const lowerFilterText = filterText.toLowerCase();
+
+                const filteredUsers = this.allUsers.filter(user =>
+                    (user.email || '').toLowerCase().includes(lowerFilterText) ||
+                    (user.displayName && user.displayName.toLowerCase().includes(lowerFilterText))
+                );
+
+                if (filteredUsers.length === 0) {
+                    noUsersMessage.style.display = 'block';
+                    return;
+                }
+                noUsersMessage.style.display = 'none';
+
+                filteredUsers.forEach(user => {
+                    const row = document.createElement('tr');
+
+                // Rol metni
+                const roleTexts = {
+                  'belirsiz': 'Belirsiz',
+                  'client': 'Client',
+                  'user': 'Kullanıcı',
+                  'admin': 'Yönetici',
+                  'superadmin': 'Süper Admin'
+                };
+                const roleText = roleTexts[user.role] || user.role || 'Kullanıcı';
+                // Kişi ilişkilendirme durumu (çoklu kişi desteği)
+                const linkedPersonsCount = user.linkedPersonIds && Array.isArray(user.linkedPersonIds) ? user.linkedPersonIds.length : 0;
+                const linkIndicator = linkedPersonsCount > 0 ? 
+                    `<span class="linked-indicator" title="Bu kullanıcı ${linkedPersonsCount} kişiyle ilişkilendirilmiş">${linkedPersonsCount}</span>` : '';
+
+                row.innerHTML = `
+                  <td>${user.displayName || '-'} ${linkIndicator}</td>
+                  <td>${user.email || '-'}</td>
+                  <td>${roleText}</td>
+                  <td>${this.formatTimestamp(user.createdAt)}</td>
+                  <td>${this.formatTimestamp(user.lastLoginAt)}</td>
+                  <td>
+                    <button class="action-btn edit-btn" data-id="${user.id}">Düzenle</button>
+                    <button class="action-btn delete-btn" data-id="${user.id}" ${user.id === this.currentUser.uid ? 'disabled' : ''}>Sil</button>
+                  </td>
+                `;
+
+                    tableBody.appendChild(row);
+                });
+           }
+
+            async loadPersonsData() {
+                try {
+                    const result = await personService.getPersons();
+                    if (result.success && Array.isArray(result.data)) {
+                        this.allPersons = result.data;
+                    }
+                } catch (error) {
+                    console.error('Kişiler yüklenirken hata:', error);
+                }
+            }
+            
+            toggleClientPersonGroup(role) {
+                const clientGroup = document.getElementById('clientPersonGroup');
+                if (role === 'client') {
+                    clientGroup.style.display = 'block';
+                } else {
+                    clientGroup.style.display = 'none';
+                    // Çoklu seçim sisteminde seçilen kişileri temizle
+                    this.clearSelectedPersons();
+                }
+            }
+
+            async showAddUserModal() {
+                await this.loadPersonsData(); // Yeni metod adı
+                this.selectedPersons = [];
+                
+                document.getElementById('userModalTitle').textContent = 'Yeni Kullanıcı Ekle';
+                document.getElementById('userForm').reset();
+                document.getElementById('userId').value = '';
+                document.getElementById('passwordGroup').style.display = 'flex';
+                document.getElementById('formUserEmail').removeAttribute('readonly');
+                
+                // Client grup gizle
+                document.getElementById('clientPersonGroup').style.display = 'none';
+                this.renderSelectedPersons();
+                
+                document.getElementById('userModal').classList.add('show');
+            }
+
+           async showEditUserModal(userId) {
+                const user = this.allUsers.find(u => u.id === userId);
+                if (!user) {
+                    showNotification('Kullanıcı bulunamadı.', 'error');
+                    return;
+                }
+
+                await this.loadPersonsData(); // Yeni metod adı
+
+                // Mevcut ilişkili kişileri yükle
+                if (user.role === 'client' && user.linkedPersonIds && Array.isArray(user.linkedPersonIds)) {
+                    const linkedPersons = await personService.getLinkedPersons(userId);
+                    if (linkedPersons.success) {
+                        this.selectedPersons = linkedPersons.data.map(p => {
+                        // p.permissions iki biçimde gelebilir:
+                        // 1) { type: 'view' | 'approval' }  (yeni)
+                        // 2) { approval: boolean, view: boolean } (eski/kaydedilmiş)
+                        const perms = p.permissions || {};
+                        const type =
+                            perms.type
+                                ? perms.type
+                                : (perms.approval ? 'approval' : 'view');
+
+                        return {
+                            id: p.id,
+                            name: p.name,
+                            email: p.email || '',
+                            permissions: { type }
+                        };
+                    });
+
+                    }
+                } else {
+                    this.selectedPersons = [];
+                }
+
+                document.getElementById('userModalTitle').textContent = 'Kullanıcıyı Düzenle';
+                document.getElementById('userId').value = user.id;
+                document.getElementById('formUserName').value = user.displayName || '';
+                document.getElementById('formUserEmail').value = user.email || '';
+                document.getElementById('formUserRole').value = user.role || 'user';
+                
+                document.getElementById('passwordGroup').style.display = 'none';
+                document.getElementById('formUserEmail').setAttribute('readonly', true);
+                
+                // Client rolü kontrolü
+                this.toggleClientPersonGroup(user.role);
+                this.renderSelectedPersons();
+                
+                document.getElementById('userModal').classList.add('show');
+            }
+
+            closeUserModal() {
+                document.getElementById('userModal').classList.remove('show');
+            }
+
+            async handleUserFormSubmit(event) {
+                event.preventDefault();
+
+                console.log("🔥 Form submit başladı");
+
+                // Doğru ID'lerle elementleri al
+                const userId         = document.getElementById('userId')?.value || '';
+                const userNameEl     = document.getElementById('formUserName');
+                const userEmailEl    = document.getElementById('formUserEmail');
+                const userPasswordEl = document.getElementById('formUserPassword');
+                const userRoleEl     = document.getElementById('formUserRole');
+
+                console.log("🧐 Elements check:", {
+                    userId,
+                    userNameEl:      userNameEl ? "✅ Found" : "❌ Missing",
+                    userEmailEl:     userEmailEl ? "✅ Found" : "❌ Missing",
+                    userPasswordEl:  userPasswordEl ? "✅ Found" : "❌ Missing",
+                    userRoleEl:      userRoleEl ? "✅ Found" : "❌ Missing"
+                });
+
+                // Değerleri al
+                const userName     = userNameEl?.value?.trim() || '';
+                const userEmail    = userEmailEl?.value?.trim() || '';
+                const userPassword = userPasswordEl?.value || '';
+                const userRole     = userRoleEl?.value || '';
+
+                console.log("📝 Form values:", {
+                    userName:    `"${userName}"`,
+                    userEmail:   `"${userEmail}"`,
+                    userRole:    `"${userRole}"`,
+                    userPassword: userPassword ? "***" : "empty",
+                    isEdit: !!userId
+                });
+
+                // Validasyonlar
+                if (!userName) {
+                    console.error("❌ Ad-soyad boş!");
+                    showNotification('Lütfen ad-soyad girin.', 'error');
+                    userNameEl?.focus();
+                    return;
+                }
+                if (!userEmail) {
+                    console.error("❌ E-posta boş!");
+                    showNotification('Lütfen geçerli bir e-posta girin.', 'error');
+                    userEmailEl?.focus();
+                    return;
+                }
+                if (!userRole) {
+                    console.error("❌ Rol seçilmemiş!");
+                    showNotification('Lütfen bir rol seçin.', 'error');
+                    userRoleEl?.focus();
+                    return;
+                }
+                // Yeni kullanıcıda şifre opsiyonel; verilirse 6+ olmalı
+                if (!userId && userPassword && userPassword.length > 0 && userPassword.length < 6) {
+                    console.error("❌ Şifre geçersiz!");
+                    showNotification('Yeni kullanıcı için şifre en az 6 karakter olmalı (ya da boş bırakın).', 'error');
+                    userPasswordEl?.focus();
+                    return;
+                }
+
+                console.log("✅ Tüm validasyonlar geçti, işlem başlıyor...");
+                try {
+                    // Payload
+                    const payload = {
+                        uid: userId || '',
+                        email: strip(userEmail).toLowerCase(),
+                        displayName: strip(userName),
+                        role: strip(userRole)
+                    };
+
+                    // (Opsiyonel) Yeni e-posta alanı kullandıysan:
+                    const newEmailEl = document.getElementById('newEmail');
+                    if (newEmailEl && newEmailEl.value) {
+                        payload.newEmail = strip(newEmailEl.value).toLowerCase();
+                    }
+
+                    // (Opsiyonel) Devre dışı bırakma checkbox'ı kullandıysan:
+                    const disabledEl = document.getElementById('userDisabledCheckbox');
+                    if (disabledEl) payload.disabled = !!disabledEl.checked;
+
+                    // Şifre verildiyse gönder; verilmediyse dokunmayız
+                    if (userPassword && userPassword.length >= 6) {
+                        payload.password = userPassword;
+                    }
+                    if (!payload.displayName && userNameEl?.value) {
+                        payload.displayName = strip(userNameEl.value);
+                    }
+
+                    // Kullanıcı oluştur/güncelle
+                    const { data } = await upsertUser(payload);
+
+                    // Kullanıcı işlemi başarılıysa, kişi ilişkilendirmesi yap
+                    if (data.uid) {
+                        if (payload.role === 'client' && this.selectedPersons.length > 0) {
+                            // tip ('view' | 'approval') → boolean şeması
+                            const toBooleanPerms = (type) => {
+                                // 'view' = sadece görüntüleme; 'approval' = hem görüntüleme hem onay
+                                if (type === 'approval') return { approval: true, view: true };
+                                return { approval: false, view: true };
+                            };
+
+                            // 'type' -> exclusive boolean mapping
+                            const mapPerms = (type) => {
+                            if (type === 'approval') return { approval: true, view: false };
+                            return { approval: false, view: true };
+                            };
+
+                            const personsWithPermissions = this.selectedPersons.map(p => ({
+                            personId: p.id,
+                            permissions: mapPerms(p?.permissions?.type || 'view')
+                            }));
+
+                            await personService.linkUserToPersons(data.uid, personsWithPermissions);
+                        } else {
+                            // Client değilse mevcut ilişkilendirmeleri temizle
+                            await personService.unlinkUserFromAllPersons(data.uid);
+                        }
+                    }
+
+                    showNotification(
+                        (data.existed ? 'Kullanıcı güncellendi' : 'Yeni kullanıcı oluşturuldu') + ` (UID: ${data.uid})`,
+                        'success'
+                    );
+
+                    console.log("🎉 İşlem tamamlandı, modal kapatılıyor ve liste yenileniyor...");
+                    this.closeUserModal();
+                    await this.loadUsers();
+
+                } catch (error) {
+                    console.error('❌ Kullanıcı işlemi hatası:', error);
+                    const errorMessage = error?.message || error?.code || 'Bilinmeyen hata';
+                    showNotification(errorMessage, 'error');
+                }
+            }
+
+            async deleteUser(userId) {
+                if (userId === this.currentUser.uid) {
+                    showNotification('Kendi hesabınızı silemezsiniz.', 'error');
+                    return;
+                }
+
+                const u = this.allUsers.find(x => x.id === userId);
+                const name = u?.displayName || u?.email || userId;
+
+                if (!confirm(`"${name}" kullanıcısını silmek istediğinize emin misiniz? Bu işlem geri alınamaz.`)) {
+                    return;
+                }
+
+                try {
+                    // Auth + Firestore silme: adminDeleteUser callable
+                    const { data } = await deleteUserFn({ uid: userId });
+                    showNotification('Kullanıcı silindi.', 'success');
+                    await this.loadUsers();
+                } catch (error) {
+                    console.error('Silme hatası:', error);
+                    const msg = error?.message || error?.code || 'Bilinmeyen hata';
+                    showNotification('Kullanıcı silinemedi: ' + msg, 'error');
+                }
+            }
+        }
+
+        const userManagementModule = new UserManagementModule();
+        userManagementModule.init();
+    });
+</script>
+<div id="notification-container" class="notification-container"></div>
+</body>
+</html>
