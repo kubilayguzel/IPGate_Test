@@ -2673,69 +2673,36 @@ export const firebaseServices = {
 // ------------------------------------------------------
 
 let authUserReadyPromise = null;
+// ------------------------------------------------------
+// GEÇİCİ AUTH HELPER'LARI (Supabase Geçişi İçin Güncellendi)
+// ------------------------------------------------------
 
 export function waitForAuthUser(options = {}) {
-    const { requireAuth = false, redirectTo = 'index.html', graceMs = 800 } = options;
+    const { requireAuth = false, redirectTo = 'index.html' } = options;
 
     return new Promise((resolve) => {
-        const unsubscribe = onAuthStateChanged(auth, (user) => {
-            unsubscribe(); // ilk sonucu al ve bırak
-
-            // Auth varsa direkt çöz
-            if (user) {
-                resolve(user);
-                return;
-            }
-
-            // Auth gerekmiyorsa null dön
-            if (!requireAuth) {
-                resolve(null);
-                return;
-            }
-
-            // --- GRACE PERIOD: null geldiyse hemen redirect etme ---
-            // localStorage'da kullanıcı var gibi görünüyorsa veya çok sekmeli gecikme oluyorsa,
-            // kısa süre bekleyip tekrar kontrol et.
-            const localUser = localStorage.getItem('currentUser');
-
-            setTimeout(() => {
-                const stableUser = auth.currentUser;
-
-                if (stableUser) {
-                    resolve(stableUser);
-                    return;
-                }
-
-                // Hala yoksa o zaman gerçekten oturum yok kabul et
-                console.warn("Oturum bulunamadı (stabil), yönlendiriliyor...");
-                if (localUser) localStorage.removeItem('currentUser');
-                window.location.href = redirectTo;
-                resolve(null);
-            }, graceMs);
-        });
+        // Artık Firebase'e değil, Supabase'in index.html'de kaydettiği veriye bakıyoruz
+        const localUser = localStorage.getItem('currentUser');
+        
+        if (localUser) {
+            resolve(JSON.parse(localUser)); // Oturum varsa sayfada kal
+        } else {
+            console.warn("Oturum bulunamadı, yönlendiriliyor...");
+            if (requireAuth) window.location.href = redirectTo;
+            resolve(null);
+        }
     });
 }
 
-export function redirectOnLogout(redirectTo = 'index.html', graceMs = 800) {
-    let initialCheckDone = false;
-
-    onAuthStateChanged(auth, (user) => {
-        if (!initialCheckDone) {
-            initialCheckDone = true;
-            return;
-        }
-
-        if (user) return;
-
-        // GRACE: bir anlık null için hemen redirect etme
-        setTimeout(() => {
-            if (auth.currentUser) return;
-
-            console.warn("Oturum sonlandırıldı (stabil), ana sayfaya yönlendiriliyor...");
-            localStorage.removeItem('currentUser');
+export function redirectOnLogout(redirectTo = 'index.html') {
+    // Firebase'in eski inatçı çıkış yönlendirmesini iptal ettik.
+    // Supabase çıkış yapıp localStorage'ı silerse, o zaman anasayfaya atacak.
+    setInterval(() => {
+        const localUser = localStorage.getItem('currentUser');
+        if (!localUser) {
             window.location.href = redirectTo;
-        }, graceMs);
-    });
+        }
+    }, 1500); // 1.5 saniyede bir sessizce kontrol et
 }
 
 // Hatırlatıcı Servisi (Eksik olan kısım)
