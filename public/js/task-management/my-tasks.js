@@ -57,16 +57,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             this.initializePagination();
 
-            authService.auth.onAuthStateChanged(async (user) => {
-                if (user) {
-                    this.currentUser = user;
-                    await this.loadAllData();
+            // YENİ SUPABASE/LOCALSTORAGE UYUMLU AUTH KONTROLÜ
+            const localUser = localStorage.getItem('currentUser');
+            if (localUser) {
+                this.currentUser = JSON.parse(localUser);
+                this.loadAllData().then(() => {
                     this.setupEventListeners();
                     this.populateStatusFilterDropdown();
-                } else {
-                    window.location.href = 'index.html';
-                }
-            });
+                });
+            } else {
+                console.warn("Kullanıcı oturumu bulunamadı, logine dönülüyor...");
+                window.location.href = 'index.html';
+            }
             // YENİ SEKMELERDE YAPILAN DÜZENLEMELERİ CANLI YAKALA
             window.addEventListener('storage', async (e) => {
                 if (e.key === 'crossTabUpdatedTaskId' && e.newValue) {
