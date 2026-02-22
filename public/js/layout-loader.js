@@ -104,14 +104,12 @@ export async function loadSharedLayout(options = {}) {
         }
     }
 
-    // 2. [ARKAPLAN] Gerekli Kütüphaneleri Dinamik Olarak Yükle
-    // Sayfa iskeleti göründü, şimdi Firebase'i ve taze veriyi çekebiliriz.
+// 2. [ARKAPLAN] Gerekli Kütüphaneleri Dinamik Olarak Yükle
     try {
-        // Firebase Config ve Servislerini burada import ediyoruz (Lazy Load)
-        const { authService, db } = await import('../firebase-config.js');
-        const { collection, query, where, onSnapshot } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js");
+        // YENİ: Firebase yerine Supabase'i çağırıyoruz
+        const { authService, supabase } = await import('./supabase-config.js');
 
-        // Layout HTML'ini tazelemek için istek at (değişiklik varsa cache güncelle)
+        // Layout HTML'ini tazelemek için istek at
         fetchAndCacheLayout(placeholder, cachedHTML);
 
         // Datepicker bağımlılıklarını yükle
@@ -119,28 +117,22 @@ export async function loadSharedLayout(options = {}) {
 
         // 3. Auth Kontrolü ve Menü Güncelleme
         const user = await getCachedAuth(authService);
-        if (!user) return; // Kullanıcı yoksa işlem yapma
+        if (!user) return; 
 
-        // Kullanıcı bilgilerini güncelle
         updateUserInfo(user);
 
-        // Menüyü kullanıcının rolüne göre TEKRAR oluştur ve Cache'le
         const sidebarNav = document.querySelector('.sidebar-nav');
         if (sidebarNav) {
             renderMenu(sidebarNav, user.role || 'user');
-            
-            // Yeni oluşan menüyü cache'e kaydet
             localStorage.setItem(MENU_CACHE_KEY, sidebarNav.innerHTML);
-            
             setupFastMenuInteractions();
             
-            // Badge (Bildirim Sayıları) dinlemeyi başlat (Firebase bağımlı)
-            setupMenuBadges(db, collection, query, where, onSnapshot, user.uid);
+            // YENİ: Firebase fonksiyonları yerine Supabase'e uygun halini çağırıyoruz
+            setupMenuBadges(supabase, user.uid);
             
             highlightActiveMenu(window.location.pathname.split('/').pop());
         }
 
-        // Logout butonu
         const logoutBtn = document.getElementById('logoutBtn');
         if (logoutBtn) {
             logoutBtn.onclick = (e) => {
@@ -151,7 +143,6 @@ export async function loadSharedLayout(options = {}) {
 
     } catch (error) {
         console.error('Layout yükleme hatası:', error);
-        // Hata olsa bile cache'ten gelen layout ekranda kalır, sayfa boş görünmez.
     }
 }
 
@@ -295,40 +286,33 @@ function highlightActiveMenu(currentPage) {
     }
 }
 
-// public/js/layout-loader.js içindeki setupMenuBadges fonksiyonu
-
-function setupMenuBadges(db, collection, query, where, onSnapshot, userId) {
+async function setupMenuBadges(supabase, userId) {
+    if (!supabase) return;
     try {
-        // 1. Tetiklenen Görevler (Mevcut mantık)
-        const tasksQuery = query(collection(db, "tasks"), where("status", "==", "awaiting_client_approval"));
-        onSnapshot(tasksQuery, (snapshot) => updateBadgeUI('triggered-tasks', snapshot.size), (e) => console.error(e));
+        // 1. Tetiklenen Görevler Sayısı
+        const { count: triggeredCount } = await supabase
+            .from('tasks')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'awaiting_client_approval');
+        updateBadgeUI('triggered-tasks', triggeredCount || 0);
 
-        // 2. Müvekkil Bildirimleri (Mevcut mantık)
-        const notificationsQuery = query(collection(db, "mail_notifications"), where("status", "in", ["awaiting_client_approval", "missing_info", "evaluation_pending"]));
-        onSnapshot(notificationsQuery, (snapshot) => updateBadgeUI('client-notifications', snapshot.size), (e) => console.error(e));
+        // 2. Müvekkil Bildirimleri Sayısı
+        const { count: mailCount } = await supabase
+            .from('mail_notifications')
+            .select('*', { count: 'exact', head: true })
+            .in('status', ['awaiting_client_approval', 'missing_info', 'evaluation_pending']);
+        updateBadgeUI('client-notifications', mailCount || 0);
 
-        // 3. 🔥 GÜNCELLENEN: İşlerim (My Tasks) Badge'i
-        // "Aktif İşler" sekmesiyle %100 uyumlu filtre
+        // 3. İşlerim Sayısı (Sadece aktif olanlar)
         if (userId) {
-            const myTasksQuery = query(
-                collection(db, "tasks"),
-                where("assignedTo_uid", "==", userId)
-            );
-
-        onSnapshot(myTasksQuery, (snapshot) => {
-                // SADECE 'Açık', 'Devam Ediyor' ve 'Beklemede' olanları say (Aktif İşler Sekmesiyle %100 Uyumlu)
-                const activeStatuses = ['open', 'in-progress', 'pending'];
-                
-                const activeTasksCount = snapshot.docs.filter(doc => {
-                    const status = doc.data().status;
-                    return activeStatuses.includes(status);
-                }).length;
-
-                updateBadgeUI('my-tasks', activeTasksCount);
-                console.log(`📊 Sidebar Sayaç: ${activeTasksCount} aktif iş (Aktif İşler sekmesiyle eşit)`);
-            }, (err) => console.error("My Tasks Badge Error:", err));
+            const { count: myTasksCount } = await supabase
+                .from('tasks')
+                .select('*', { count: 'exact', head: true })
+                .eq('assigned_to_user_id', userId)
+                .in('status', ['open', 'in-progress', 'pending']);
+            
+            updateBadgeUI('my-tasks', myTasksCount || 0);
         }
-
     } catch (e) {
         console.error("Badge setup error:", e);
     }
