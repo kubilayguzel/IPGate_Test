@@ -1,7 +1,4 @@
-import { ipRecordsService, personService, taskService, transactionTypeService, db, storage } from '../../firebase-config.js';
-// DÜZELTME: 'limit' fonksiyonu import listesine eklendi
-import { doc, getDoc, collection, getDocs, query, where, limit, orderBy } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
+import { ipRecordsService, personService, taskService, transactionTypeService, commonService, supabase } from '../../supabase-config.js';
 
 export class TaskDataManager {
     constructor() {
@@ -24,7 +21,7 @@ export class TaskDataManager {
                 allPersons: this._normalizeData(persons),
                 allUsers: this._normalizeData(users),
                 allTransactionTypes: this._normalizeData(transactionTypes),
-                allCountries: this._normalizeData(countries)
+                allCountries: countries // Doğrudan normalize edilmiş geliyor
             };
         } catch (error) {
             console.error("Veri yükleme hatası:", error);
@@ -43,13 +40,8 @@ export class TaskDataManager {
 
     async getCountries() {
         try {
-            const docRef = doc(db, 'common', 'countries');
-            const docSnap = await getDoc(docRef);
-            if (docSnap.exists()) {
-                const data = docSnap.data();
-                return data.list || [];
-            }
-            return [];
+            const res = await commonService.getCountries();
+            return res.success ? res.data : [];
         } catch (error) {
             console.error("Ülke listesi hatası:", error);
             return [];
@@ -59,28 +51,17 @@ export class TaskDataManager {
     async getCities() {
         try {
             console.log('🔍 getCities() çağrıldı');
+            const { data, error } = await supabase.from('common_data').select('data').eq('id', 'cities_TR').single();
             
-            // Veritabanında cities_TR dokümanını oku
-            const docRef = doc(db, 'common', 'cities_TR');
-            const docSnap = await getDoc(docRef);
-            
-            if (docSnap.exists()) {
-                const data = docSnap.data();
-                const rawList = data.list || [];
-                
+            if (data && data.data && data.data.list) {
+                const rawList = data.data.list;
                 console.log(`✅ cities_TR dokümanından ${rawList.length} şehir çekildi`);
                 
-                // String array'i obje array'ine çevir
                 if (rawList.length > 0 && typeof rawList[0] === 'string') {
-                    const cityObjects = rawList.map(cityName => ({ name: cityName }));
-                    console.log('✅ Şehirler obje formatına çevrildi:', cityObjects.slice(0, 3));
-                    return cityObjects;
+                    return rawList.map(cityName => ({ name: cityName }));
                 }
-                
                 return rawList;
             }
-            
-            console.warn('⚠️ cities_TR dokümanı bulunamadı');
             return [];
         } catch (error) {
             console.error("❌ getCities hatası:", error);
@@ -89,89 +70,49 @@ export class TaskDataManager {
     }
 
     // --- ARAMA İŞLEMLERİ ---
-    
     async searchBulletinRecords(term) {
         if (!term || term.length < 2) return [];
         
-        const bulletinRef = collection(db, 'trademarkBulletinRecords');
-        const searchLower = term.toLowerCase();
-        const searchUpper = term.toUpperCase();
-
-        // Buradaki 'limit' kullanımı için yukarıya import ekledik
-        const queries = [
-            query(bulletinRef, where('markName', '>=', searchLower), where('markName', '<=', searchLower + '\uf8ff'), limit(50)),
-            query(bulletinRef, where('markName', '>=', searchUpper), where('markName', '<=', searchUpper + '\uf8ff'), limit(50)),
-            query(bulletinRef, where('applicationNo', '>=', searchLower), where('applicationNo', '<=', searchLower + '\uf8ff'), limit(50)),
-            query(bulletinRef, where('applicationNo', '>=', searchUpper), where('applicationNo', '<=', searchUpper + '\uf8ff'), limit(50))
-        ];
-
         try {
-            const snapshots = await Promise.all(queries.map(q => getDocs(q)));
-            const resultsMap = new Map();
-            snapshots.forEach(snap => {
-                snap.forEach(d => resultsMap.set(d.id, { id: d.id, ...d.data() }));
-            });
-            return Array.from(resultsMap.values());
+            // Supabase ilike ile büyük/küçük harf duyarsız arama
+            const { data, error } = await supabase
+                .from('bulletin_records')
+                .select('*')
+                .or(`brand_name.ilike.%${term}%,application_number.ilike.%${term}%`)
+                .limit(50);
+
+            if (error) throw error;
+            return data;
         } catch (err) {
             console.error('Bulletin arama hatası:', err);
             return [];
         }
     }
 
-    /**
-     * Dava dosyalarını arar (GÜNCELLENMİŞ VERSİYON 2)
-     */
     async searchSuits(searchText, allowedTypeIds = []) {
         if (!searchText || searchText.length < 2) return [];
 
         try {
-            const suitsRef = collection(db, 'suits');
-            let q = query(suitsRef);
+            let query = supabase.from('suits').select('*');
 
-            // Filtreleme
-            if (allowedTypeIds && allowedTypeIds.length > 0 && allowedTypeIds.length <= 10) {
-                q = query(q, where('transactionTypeId', 'in', allowedTypeIds));
-            }
+            // JSON içinden de arama yapabilmek için kapsamlı bir OR sorgusu
+            query = query.or(`file_no.ilike.%${searchText}%,court_name.ilike.%${searchText}%,plaintiff.ilike.%${searchText}%,defendant.ilike.%${searchText}%`);
 
-            const snapshot = await getDocs(q);
-            const results = [];
-            const lowerSearch = searchText.toLocaleLowerCase('tr-TR');
+            const { data, error } = await query.limit(50);
+            if (error) throw error;
 
-            snapshot.forEach(doc => {
-                const data = doc.data();
-                const details = data.suitDetails || {};
-                
-                // Aranacak metinler
-                const fileNo = (details.caseNo || data.caseNo || data.fileNumber || '').toLocaleLowerCase('tr-TR');
-                const court = (details.court || data.court || '').toLocaleLowerCase('tr-TR');
-                
-                // Müvekkil İsmini Güvenli Alma
-                // data.client bir obje olabilir ({name: "..."}) veya direkt string olabilir.
-                const clientNameRaw = data.client?.name || data.client || ''; 
-                const clientName = String(clientNameRaw).toLocaleLowerCase('tr-TR');
-                
-                const opposingParty = (details.opposingParty || data.opposingParty || '').toLocaleLowerCase('tr-TR');
-
-                // Arama Mantığı
-                if (fileNo.includes(lowerSearch) || 
-                    court.includes(lowerSearch) || 
-                    clientName.includes(lowerSearch) || 
-                    opposingParty.includes(lowerSearch)) {
-                    
-                    results.push({
-                        id: doc.id,
-                        ...data,
-                        // UI için standart alanlar
-                        displayFileNumber: details.caseNo || data.caseNo || data.fileNumber || '-', 
-                        displayCourt: details.court || data.court || 'Mahkeme Yok',
-                        displayClient: clientNameRaw, // <--- YENİ: Müvekkil ismini UI'a taşıyoruz
-                        opposingParty: details.opposingParty || data.opposingParty || '-',
-                        _source: 'suit' 
-                    });
-                }
+            return data.map(doc => {
+                const details = doc.details || {};
+                return {
+                    id: doc.id,
+                    ...doc,
+                    displayFileNumber: doc.file_no || details.caseNo || doc.fileNumber || '-', 
+                    displayCourt: doc.court_name || details.court || doc.court || 'Mahkeme Yok',
+                    displayClient: doc.plaintiff || details.client?.name || doc.client || '-', 
+                    opposingParty: doc.defendant || details.opposingParty || doc.opposingParty || '-',
+                    _source: 'suit' 
+                };
             });
-
-            return results;
         } catch (error) {
             console.error('Dava arama hatası:', error);
             return [];
@@ -183,15 +124,13 @@ export class TaskDataManager {
         if (this.bulletinDataCache[bulletinId]) return this.bulletinDataCache[bulletinId];
 
         try {
-            const docRef = doc(db, 'trademarkBulletins', bulletinId);
-            const snap = await getDoc(docRef);
-            if (!snap.exists()) return null;
+            const { data, error } = await supabase.from('trademark_bulletins').select('*').eq('id', bulletinId).single();
+            if (error || !data) return null;
 
-            const data = snap.data();
             const cacheObj = {
-                id: bulletinId,
-                bulletinNo: data.bulletinNo,
-                bulletinDate: data.bulletinDate,
+                id: data.id,
+                bulletinNo: data.bulletin_no,
+                bulletinDate: data.bulletin_date,
                 type: data.type
             };
             this.bulletinDataCache[bulletinId] = cacheObj;
@@ -205,21 +144,28 @@ export class TaskDataManager {
     async getAssignmentRule(taskTypeId) {
         if (!taskTypeId) return null;
         try {
-            const snap = await getDoc(doc(db, 'taskAssignments', taskTypeId));
-            return snap.exists() ? snap.data() : null;
+            // Eski 'taskAssignments' yapısı yerine şimdilik common_data kullanılıyor
+            const { data, error } = await supabase.from('common_data').select('data').eq('id', `task_rule_${taskTypeId}`).single();
+            return data ? data.data : null;
         } catch (e) {
             console.error('Assignment rule error:', e);
             return null;
         }
     }
 
-    // --- DOSYA VE RESİM İŞLEMLERİ ---
+    // --- DOSYA VE RESİM İŞLEMLERİ (Supabase Storage) ---
     async uploadFileToStorage(file, path) {
-        if (!file || !path) return null;
+        if (!file) return null;
         try {
-            const storageRef = ref(storage, path);
-            const result = await uploadBytes(storageRef, file);
-            return await getDownloadURL(result.ref);
+            // URL dostu temiz dosya adı oluştur
+            const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            const fullPath = `${Date.now()}_${cleanFileName}`;
+
+            const { error } = await supabase.storage.from('task_documents').upload(fullPath, file);
+            if (error) throw error;
+            
+            const { data } = supabase.storage.from('task_documents').getPublicUrl(fullPath);
+            return data.publicUrl;
         } catch (error) {
             console.error("Dosya yükleme hatası:", error);
             return null;
@@ -229,11 +175,8 @@ export class TaskDataManager {
     async resolveImageUrl(path) {
         if (!path) return '';
         if (typeof path === 'string' && path.startsWith('http')) return path;
-        try {
-            return await getDownloadURL(ref(storage, path));
-        } catch {
-            return '';
-        }
+        const { data } = supabase.storage.from('task_documents').getPublicUrl(path);
+        return data ? data.publicUrl : '';
     }
 
     _normalizeData(result) {
@@ -243,42 +186,30 @@ export class TaskDataManager {
                (Array.isArray(result) ? result : []);
     }
 
-// --- TRANSAKSİYONLARI ÇEKME (GÜNCELLENDİ) ---
-    /**
-     * @param {string} recordId - Kayıt ID'si
-     * @param {string} collectionName - 'ipRecords' veya 'suits' (Varsayılan: ipRecords)
-     */
+    // --- TRANSAKSİYONLARI ÇEKME ---
     async getRecordTransactions(recordId, collectionName = 'ipRecords') {
         if (!recordId) return { success: false, message: 'Kayıt ID yok.' };
 
-        console.log(`[TaskDataManager] ${collectionName}/${recordId} için transactions çekiliyor...`);
+        console.log(`[TaskDataManager] ${recordId} için transactions çekiliyor...`);
 
         try {
-            // Dinamik koleksiyon adı
-            const transactionsRef = collection(db, collectionName, recordId, 'transactions');
-            
-            const snapshot = await getDocs(transactionsRef);
-            
-            let data = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
+            // SQL'de transactions tablosu her ikisi için de (dava ve marka) tek bir yerdedir.
+            const { data, error } = await supabase
+                .from('transactions')
+                .select('*')
+                .eq('ip_record_id', recordId)
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+
+            const mappedData = data.map(t => ({
+                id: t.id,
+                ...t.details,
+                type: String(t.transaction_type_id || (t.details && t.details.type) || ''),
+                creationDate: t.created_at
             }));
 
-            // Yeniden eskiye sırala
-            data.sort((a, b) => {
-                const dateA = a.creationDate ? new Date(a.creationDate).getTime() : 0;
-                const dateB = b.creationDate ? new Date(b.creationDate).getTime() : 0;
-                return dateB - dateA; 
-            });
-
-            // Veri Tipi Garantisi
-            data = data.map(t => ({
-                ...t,
-                type: String(t.type || t.transactionType || '') 
-            }));
-
-            console.log(`[TaskDataManager] ${data.length} adet işlem bulundu.`);
-            return { success: true, data: data };
+            return { success: true, data: mappedData };
 
         } catch (error) {
             console.error("[TaskDataManager] Transaksiyonlar çekilemedi:", error);
