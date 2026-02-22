@@ -1,34 +1,29 @@
-// public/js/nice-classification.js - Final Professional Version (Text Format Fixed)
+// public/js/nice-classification.js - Final Professional Version (Supabase Entegreli)
 import { showNotification } from '../utils.js';
-import { db } from '../firebase-config.js';
-import { collection, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-
+// 🔥 Firebase kütüphaneleri silindi, yerine Supabase getirildi:
+import { supabase } from '../supabase-config.js';
 
 // --- TASARIM ENJEKSİYONU (ZORUNLU GÜNCELLEME) ---
 function injectNiceStyles() {
     const styleId = 'nice-classification-styles';
-    // Eski stil varsa sil (Anlık güncelleme için)
     const oldStyle = document.getElementById(styleId);
     if (oldStyle) oldStyle.remove();
 
     const css = `
         :root {
-            /* Renk Paleti (Zinc & Emerald - Nötr Gri ve Yeşil) */
             --nice-bg: #ffffff;
             --nice-bg-alt: #f4f4f5;      
             --nice-border: #e4e4e7;      
             --nice-text-main: #27272a;   
             --nice-text-muted: #52525b;  
             --nice-text-light: #a1a1aa;  
-            
             --nice-brand: #059669;       
             --nice-brand-hover: #047857; 
             --nice-brand-light: #d1fae5; 
             --nice-brand-bg: #ecfdf5;    
-            
             --nice-danger: #dc2626;      
             --nice-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            --nice-modal-z: 99999; /* En üstte olmasını garanti eder */
+            --nice-modal-z: 99999; 
         }
 
         .nice-container { 
@@ -38,7 +33,6 @@ function injectNiceStyles() {
             line-height: 1.5;
         }
 
-        /* --- ANA LİSTE ELEMANLARI --- */
         .nice-class-group {
             background: var(--nice-bg);
             border: 1px solid var(--nice-border);
@@ -98,7 +92,6 @@ function injectNiceStyles() {
         .nice-checkbox { width: 15px; height: 15px; accent-color: var(--nice-brand); margin-top: 3px; cursor: pointer; }
         .nice-label { font-size: 13px; color: var(--nice-text-muted); line-height: 1.4; cursor: pointer; flex: 1; margin: 0; }
 
-        /* --- SEÇİLENLER PANELİ --- */
         .selected-group-card {
             background: #fff; border: 1px solid var(--nice-border); border-radius: 8px;
             margin-bottom: 10px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
@@ -125,7 +118,6 @@ function injectNiceStyles() {
         .btn-remove-item { color: var(--nice-text-light); border: none; background: none; padding: 2px; cursor: pointer; }
         .btn-remove-item:hover { color: var(--nice-danger); }
 
-        /* --- ÖZEL MODAL STİLLERİ (İZOLE EDİLMİŞ) --- */
         .nice-modal-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.6); backdrop-filter: blur(2px);
@@ -149,10 +141,7 @@ function injectNiceStyles() {
         .nice-modal-close { background: none; border: none; font-size: 24px; color: #a1a1aa; cursor: pointer; line-height: 1; }
         .nice-modal-close:hover { color: #18181b; }
 
-        .nice-modal-body {
-            flex: 1; overflow: hidden; display: flex; background: var(--nice-bg-alt);
-        }
-        
+        .nice-modal-body { flex: 1; overflow: hidden; display: flex; background: var(--nice-bg-alt); }
         .nice-modal-col-left { flex: 2; padding: 20px; display: flex; flex-direction: column; border-right: 1px solid var(--nice-border); }
         .nice-modal-col-right { flex: 1; padding: 20px; display: flex; flex-direction: column; background: #fff; }
 
@@ -166,7 +155,6 @@ function injectNiceStyles() {
             background: #fff; display: flex; justify-content: flex-end; gap: 12px;
         }
 
-        /* Modal içi Inputlar ve Butonlar */
         .nice-input {
             width: 100%; padding: 8px 12px; border: 1px solid var(--nice-border);
             border-radius: 6px; font-size: 14px; outline: none; transition: all 0.2s;
@@ -200,9 +188,6 @@ function injectNiceStyles() {
     style.id = styleId; style.textContent = css; document.head.appendChild(style);
 }
 
-/**
- * 35-5 (Perakende Hizmetleri) Modal Yöneticisi - İZOLE EDİLMİŞ VERSİYON
- */
 class Class35_5Manager {
     constructor(parentManager) {
         this.parent = parentManager; 
@@ -219,7 +204,6 @@ class Class35_5Manager {
     }
 
     renderModal() {
-        // Tamamen özel sınıflar (nice-modal-*) kullanarak sayfa CSS'inden bağımsızlaştırıyoruz
         const modalHTML = `
         <div id="${this.modalId}" class="nice-modal-overlay">
             <div class="nice-modal-container">
@@ -234,11 +218,9 @@ class Class35_5Manager {
                 <div class="nice-modal-body">
                     <div class="nice-modal-col-left">
                         <input type="text" class="nice-input" id="c35-search" placeholder="🔍 Mal sınıfı ara (örn: ilaç, giysi)...">
-                        
                         <div class="nice-modal-list-box nice-container" id="c35-list-container">
                             ${this._generateListHTML()}
                         </div>
-                        
                         <div style="margin-top: 15px; display: flex; gap: 10px;">
                             <input type="text" id="c35-custom-input" class="nice-input" placeholder="Listede olmayan özel bir mal...">
                             <button class="nice-btn-primary" id="c35-add-custom">Ekle</button>
@@ -250,9 +232,7 @@ class Class35_5Manager {
                             <span style="font-weight:600; color:#3f3f46; font-size:13px;">SEÇİLENLER</span>
                             <span class="nice-badge" id="c35-count">0</span>
                         </div>
-                        
                         <div style="flex:1; overflow-y:auto;" id="c35-selected-container"></div>
-                        
                         <div style="margin-top:15px;">
                             <button class="nice-btn-danger-outline" id="c35-clear">Tümünü Temizle</button>
                         </div>
@@ -305,8 +285,6 @@ class Class35_5Manager {
         modal.addEventListener('click', (e) => {
             const target = e.target;
             if (target.dataset.action === 'close') return this.close();
-            
-            // Overlay tıklandığında kapat
             if (target === modal) return this.close();
 
             const header = target.closest('.c35-header');
@@ -320,7 +298,6 @@ class Class35_5Manager {
                 return;
             }
 
-            // Satıra tıklayınca checkbox tetikle
             const itemRow = target.closest('.c35-item-row');
             if (itemRow && target.tagName !== 'INPUT' && target.tagName !== 'LABEL') {
                 const checkbox = itemRow.querySelector('input[type="checkbox"]');
@@ -334,7 +311,6 @@ class Class35_5Manager {
             }
         });
 
-        // Arama
         document.getElementById('c35-search').addEventListener('input', (e) => {
             const term = e.target.value.toLowerCase();
             modal.querySelectorAll('.c35-group').forEach(group => {
@@ -359,7 +335,6 @@ class Class35_5Manager {
             });
         });
 
-        // Kaydet (DÜZELTİLDİ: İstenen metin formatı uygulandı)
         document.getElementById('c35-save').addEventListener('click', () => {
             const items = Object.values(this.selectedItems);
             if (items.length === 0) return alert('Lütfen en az bir mal seçin.');
@@ -370,7 +345,6 @@ class Class35_5Manager {
             this.close();
         });
 
-        // Özel Ekle
         document.getElementById('c35-add-custom').addEventListener('click', () => {
             const input = document.getElementById('c35-custom-input');
             const val = input.value.trim();
@@ -380,7 +354,6 @@ class Class35_5Manager {
             input.value = '';
         });
 
-        // Temizle
         document.getElementById('c35-clear').onclick = () => { 
             this.selectedItems = {}; 
             this.updateSelectedUI(); 
@@ -412,9 +385,6 @@ class Class35_5Manager {
     }
 }
 
-/**
- * Ana Nice Sınıflandırma Yöneticisi
- */
 class NiceClassificationManager {
     constructor() {
         this.allData = [];
@@ -424,11 +394,9 @@ class NiceClassificationManager {
         this.classTexts = {};
     }
 
-    // nice-classification.js içinde init() metodunu bu haliyle değiştirin:
     async init() {
         this.elements = {
             listContainer: document.getElementById('niceClassificationList'),
-            // İndeksleme sayfasında ID 'nice-classes-accordion' olduğu için her ikisini de kontrol ediyoruz
             selectedContainer: document.getElementById('selectedNiceClasses') || document.getElementById('nice-classes-accordion'),
             searchInput: document.getElementById('niceClassSearch'),
             selectedCountBadge: document.getElementById('selectedClassCount'),
@@ -437,18 +405,25 @@ class NiceClassificationManager {
             customCharCount: document.getElementById('customClassCharCount')
         };
 
-        // KRİTİK DÜZELTME: Eğer ikisi de yoksa dur, ama akordiyon varsa devam et!
         if (!this.elements.listContainer && !this.elements.selectedContainer) return;
 
         try {
             injectNiceStyles();
-            const snapshot = await getDocs(collection(db, "niceClassification"));
-            this.allData = snapshot.docs.map(doc => ({ 
-                ...doc.data(), 
-                classNumber: parseInt(doc.data().classNumber) 
-            })).sort((a, b) => a.classNumber - b.classNumber);
+            
+            // 🔥 YENİ: Firebase yerine Supabase üzerinden verileri çekiyoruz
+            const { data, error } = await supabase
+                .from('nice_classes')
+                .select('*')
+                .order('class_number', { ascending: true });
+                
+            if (error) throw error;
 
-            // Sadece liste varsa render et
+            this.allData = data.map(doc => ({ 
+                classNumber: parseInt(doc.class_number),
+                classTitle: doc.class_title,
+                subClasses: doc.sub_classes || []
+            }));
+
             if (this.elements.listContainer) this.renderList();
             
             this.setupEventListeners();
@@ -497,19 +472,16 @@ class NiceClassificationManager {
     }
 
     setupEventListeners() {
-        // --- 1. SOL LİSTE DİNLEYİCİSİ (Sadece liste varsa çalışır) ---
         if (this.elements.listContainer) {
             this.elements.listContainer.addEventListener('click', (e) => {
                 const target = e.target;
 
-                // Sınıfın tamamını seçme butonu
                 if (target.closest('.nice-btn-select-all')) {
                     e.stopPropagation();
                     this.toggleWholeClass(parseInt(target.closest('.nice-class-group').dataset.classNum));
                     return;
                 }
 
-                // Sınıf başlığına tıklayınca aç/kapat (Accordion)
                 if (target.closest('.nice-class-header')) {
                     const group = target.closest('.nice-class-header').parentElement;
                     const list = group.querySelector('.nice-sub-list');
@@ -519,12 +491,10 @@ class NiceClassificationManager {
                     return;
                 }
 
-                // Alt madde (Emtia) seçimi
                 const subItem = target.closest('.sub-item');
                 if (subItem) {
                     const checkbox = subItem.querySelector('.class-checkbox');
                     
-                    // Özel 35. sınıf yöneticisi kontrolü
                     if(subItem.dataset.code === '35-5') {
                         if (target.tagName === 'INPUT') target.checked = !target.checked; 
                         this.class35Manager.open();
@@ -541,18 +511,15 @@ class NiceClassificationManager {
             });
         }
 
-        // --- 2. AKORDEON (TEXTAREA) DİNLEYİCİSİ (Hem İndeksleme hem Veri Girişi için kritik!) ---
         if (this.elements.selectedContainer) {
             this.elements.selectedContainer.addEventListener('input', (e) => {
                 if (e.target.classList.contains('class-items-textarea')) {
                     const classNum = e.target.dataset.classNum;
-                    // Kullanıcı textarea'da ne yazarsa/silerse anlık olarak merkezi nesneye kaydet
                     this.classTexts[classNum] = e.target.value;
                 }
             });
         }
 
-        // --- 3. ARAMA VE ÖZEL TANIM DİNLEYİCİLERİ ---
         if (this.elements.searchInput) {
             this.elements.searchInput.addEventListener('input', (e) => this.handleSearch(e.target.value));
         }
@@ -575,15 +542,11 @@ class NiceClassificationManager {
     }
 
     addSelection(code, classNum, text) {
-        // 1. Seçimi kaydet
         this.selectedClasses[code] = { classNum: String(classNum), text };
         
-        // 2. Metin alanını güncelle
         if (!this.classTexts[classNum]) {
-            // Sınıf ilk kez seçiliyorsa metni direkt ata
             this.classTexts[classNum] = text;
         } else {
-            // Sınıf zaten varsa ve bu madde daha önce eklenmemişse altına ekle
             const existingItems = this.classTexts[classNum].split('\n').map(i => i.trim());
             if (!existingItems.includes(text.trim())) {
                 this.classTexts[classNum] += '\n' + text.trim();
@@ -592,7 +555,6 @@ class NiceClassificationManager {
         
         this.updateSelectionUI();
     }
-
 
     removeSelection(code) {
         delete this.selectedClasses[code];
@@ -647,11 +609,9 @@ class NiceClassificationManager {
         if (!this.elements.selectedContainer) return;
 
         if (this.elements.listContainer) {
-            // Önce tüm gruplardaki yeşil renklendirmeyi (has-selection) temizle
             const allGroups = this.elements.listContainer.querySelectorAll('.nice-class-group');
             allGroups.forEach(g => g.classList.remove('has-selection'));
 
-            // Checkbox'ları ve satırları güncelle
             const allCheckboxes = this.elements.listContainer.querySelectorAll('.class-checkbox');
             allCheckboxes.forEach(chk => {
                 const isSelected = !!this.selectedClasses[chk.value];
@@ -662,7 +622,6 @@ class NiceClassificationManager {
                     isSelected ? row.classList.add('selected') : row.classList.remove('selected');
                 }
 
-                // EĞER SEÇİLİYSE: Bağlı olduğu ana gruba yeşil renk sınıfını ekle
                 if (isSelected) {
                     const group = chk.closest('.nice-class-group');
                     if (group) group.classList.add('has-selection');
@@ -686,7 +645,6 @@ class NiceClassificationManager {
 
         let html = '';
         Object.keys(grouped).sort((a,b) => Number(a)-Number(b)).forEach(num => {
-            // Not: classTexts zaten addSelection içinde güncellendiği için burada sadece render ediyoruz
             html += `
             <div class="selected-group-card mb-3 border rounded shadow-sm bg-white">
                 <div class="selected-group-header bg-light p-2 font-weight-bold border-bottom d-flex justify-content-between align-items-center">
@@ -707,12 +665,8 @@ class NiceClassificationManager {
     }
 
     getSelectedData() {
-        // Sadece seçili olan sınıfları al (this.selectedClasses anahtarlarından sınıf numaralarını çek)
         const selectedNums = [...new Set(Object.values(this.selectedClasses).map(v => String(v.classNum)))];
-        
-        // Her sınıf için textarea'daki en güncel metni paketle
         return selectedNums.sort((a,b) => Number(a)-Number(b)).map(num => {
-            // Eğer textarea boşsa veya hiç dokunulmadıysa classTexts'ten al, yoksa boş dön
             const text = this.classTexts[num] || "";
             return `(${num}-1) ${text}`; 
         });
@@ -720,7 +674,7 @@ class NiceClassificationManager {
 
     setSelectedData(arr) {
         this.selectedClasses = {};
-        this.classTexts = {}; // YENİ: Önceki verileri temizle
+        this.classTexts = {}; 
         if (Array.isArray(arr)) {
             arr.forEach(s => {
                 const m = s.match(/^\((\d+(?:-\d+)?)\)\s*([\s\S]*)$/);
@@ -744,8 +698,6 @@ window.clearAllSelectedClasses = () => niceManager.clearAll();
 
 window.clearClassSelection = (classNum) => {
     if (!confirm(`Sınıf ${classNum} silinecek. Emin misiniz?`)) return;
-    
-    // niceManager nesnesi üzerinden silme yap
     const codesToRemove = Object.keys(niceManager.selectedClasses).filter(code => code.split('-')[0] === String(classNum));
     codesToRemove.forEach(code => delete niceManager.selectedClasses[code]);
     if (niceManager.classTexts) delete niceManager.classTexts[classNum];
