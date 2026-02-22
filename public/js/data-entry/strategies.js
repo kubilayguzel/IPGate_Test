@@ -3,14 +3,15 @@
 import { FormTemplates } from './form-templates.js';
 import { getSelectedNiceClasses } from '../nice-classification.js';
 import { STATUSES } from '../../utils.js';
-import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
-import { collection, addDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { db } from '../../firebase-config.js';
 
-// Yardımcı: ID'den değer al
+// 🔥 Veritabanı için Supabase
+import { supabase } from '../../supabase-config.js';
+
+// 🔥 Dosyalar için Firebase Storage
+import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
+
 const getVal = (id) => document.getElementById(id)?.value?.trim() || null;
 
-// Yardımcı: Tarih formatını DD.MM.YYYY -> YYYY-MM-DD çevirir
 const formatDate = (dateStr) => {
     if (!dateStr) return null;
     const parts = dateStr.split('.');
@@ -28,7 +29,6 @@ class BaseStrategy {
 export class TrademarkStrategy extends BaseStrategy {
     render(container, isEditMode = false) {
         container.innerHTML = FormTemplates.getTrademarkForm();
-        
         const stSel = document.getElementById('trademarkStatus');
         if (stSel) {
             const emptyOpt = '<option value="">Durum Seçiniz...</option>';
@@ -44,7 +44,6 @@ export class TrademarkStrategy extends BaseStrategy {
         const origin = getVal('originSelect');
         const brandText = getVal('brandExampleText');
         
-        // Nice Sınıflarını Daha Temiz Formatla
         let goodsAndServicesByClass = [];
         try {
             const rawNiceClasses = getSelectedNiceClasses();
@@ -63,9 +62,7 @@ export class TrademarkStrategy extends BaseStrategy {
                             const lines = rawText.split(/[\n]/).map(l => l.trim()).filter(Boolean);
                             lines.forEach(line => {
                                 const cleanLine = line.replace(/^\)+|\)+$/g, '').trim(); 
-                                if (cleanLine && !classObj.items.includes(cleanLine)) {
-                                    classObj.items.push(cleanLine);
-                                }
+                                if (cleanLine && !classObj.items.includes(cleanLine)) classObj.items.push(cleanLine);
                             });
                         }
                     }
@@ -75,35 +72,25 @@ export class TrademarkStrategy extends BaseStrategy {
         } catch (e) { console.warn('Nice classes hatası:', e); }
 
         const isInternational = (origin === 'WIPO' || origin === 'ARIPO');
-
         const bulletinNo = getVal('bulletinNo');
         const bulletinDate = getVal('bulletinDate');
-        const bulletins = (bulletinNo || bulletinDate) 
-            ? [{ bulletinNo, bulletinDate: formatDate(bulletinDate) }] 
-            : [];
+        const bulletins = (bulletinNo || bulletinDate) ? [{ bulletinNo, bulletinDate: formatDate(bulletinDate) }] : [];
 
         return {
-            ipType: 'trademark',
-            type: 'trademark',
-            portfoyStatus: 'active',
+            ipType: 'trademark', type: 'trademark', portfoyStatus: 'active',
             recordOwnerType: getVal('recordOwnerType') || 'self',
-            title: brandText,
-            brandText: brandText,
-            
+            title: brandText, brandText: brandText,
             applicationDate: formatDate(getVal('applicationDate')),
             registrationDate: formatDate(getVal('registrationDate')),
             renewalDate: formatDate(getVal('renewalDate')),
-            
             applicationNumber: getVal('applicationNumber'),
             registrationNumber: !isInternational ? getVal('registrationNumber') : null,
             internationalRegNumber: isInternational ? getVal('registrationNumber') : null, 
-
             description: getVal('brandDescription'),
             status: getVal('trademarkStatus'),
             brandType: getVal('brandType'),
             brandCategory: getVal('brandCategory'),
             bulletins: bulletins,
-            
             origin: origin,
             applicants: context.selectedApplicants.map(p => ({ id: p.id, email: p.email || null })),
             priorities: context.priorities || [],
@@ -115,14 +102,11 @@ export class TrademarkStrategy extends BaseStrategy {
     validate(data, context) {
         if (!data.brandText) return 'Marka adı (Metni) zorunludur.';
         if (!data.applicants || data.applicants.length === 0) return 'En az bir başvuru sahibi seçmelisiniz.';
-        
         if ((data.origin === 'WIPO' || data.origin === 'ARIPO')) {
             if (!data.internationalRegNumber) return `${data.origin} için IR Numarası (Tescil No alanında) zorunludur.`;
             if (!context.selectedCountries || context.selectedCountries.length === 0) return 'En az bir ülke seçmelisiniz.';
         }
-        
         if (!data.goodsAndServicesByClass || data.goodsAndServicesByClass.length === 0) return 'En az bir mal/hizmet sınıfı seçmelisiniz.';
-
         return null;
     }
 }
@@ -132,17 +116,10 @@ export class PatentStrategy extends BaseStrategy {
     collectData(context) {
         const title = getVal('patentTitle');
         return {
-            ipType: 'patent',
-            type: 'patent',
-            portfoyStatus: 'active',
-            title: title,
-            applicationNumber: getVal('patentApplicationNumber'),
-            description: getVal('patentDescription'),
-            status: 'başvuru',
-            origin: getVal('originSelect'),
-            applicants: context.selectedApplicants.map(p => ({ id: p.id, email: p.email || null })),
-            priorities: context.priorities || [],
-            details: { patentInfo: { patentTitle: title, description: getVal('patentDescription') } }
+            ipType: 'patent', type: 'patent', portfoyStatus: 'active', title: title,
+            applicationNumber: getVal('patentApplicationNumber'), description: getVal('patentDescription'), status: 'başvuru',
+            origin: getVal('originSelect'), applicants: context.selectedApplicants.map(p => ({ id: p.id, email: p.email || null })),
+            priorities: context.priorities || [], details: { patentInfo: { patentTitle: title, description: getVal('patentDescription') } }
         };
     }
     validate(data) { if (!data.title) return 'Patent başlığı zorunludur.'; return null; }
@@ -153,33 +130,20 @@ export class DesignStrategy extends BaseStrategy {
     collectData(context) {
         const title = getVal('designTitle');
         return {
-            ipType: 'design',
-            type: 'design',
-            portfoyStatus: 'active',
-            title: title,
-            applicationNumber: getVal('designApplicationNumber'),
-            description: getVal('designDescription'),
-            status: 'başvuru',
-            origin: getVal('originSelect'),
-            applicants: context.selectedApplicants.map(p => ({ id: p.id, email: p.email || null })),
-            priorities: context.priorities || [],
-            details: { designInfo: { designTitle: title, description: getVal('designDescription') } }
+            ipType: 'design', type: 'design', portfoyStatus: 'active', title: title,
+            applicationNumber: getVal('designApplicationNumber'), description: getVal('designDescription'), status: 'başvuru',
+            origin: getVal('originSelect'), applicants: context.selectedApplicants.map(p => ({ id: p.id, email: p.email || null })),
+            priorities: context.priorities || [], details: { designInfo: { designTitle: title, description: getVal('designDescription') } }
         };
     }
     validate(data) { if (!data.title) return 'Tasarım başlığı zorunludur.'; return null; }
 }
 
-// public/js/data-entry/strategies.js içindeki SuitStrategy sınıfı
-
 export class SuitStrategy extends BaseStrategy {
-    render(container) { 
-        container.innerHTML = '<div id="suitSpecificFieldsContainer"></div>'; 
-    }
+    render(container) { container.innerHTML = '<div id="suitSpecificFieldsContainer"></div>'; }
     
     renderSpecificFields(taskName) { 
-        return FormTemplates.getClientSection() + 
-               FormTemplates.getSubjectAssetSection() + 
-               FormTemplates.getSuitFields(taskName); 
+        return FormTemplates.getClientSection() + FormTemplates.getSubjectAssetSection() + FormTemplates.getSuitFields(taskName); 
     }
 
     validate(data) {
@@ -197,92 +161,48 @@ export class SuitStrategy extends BaseStrategy {
         return null;
     }
 
- collectData(context) {
+    collectData(context) {
         const specificTaskType = context.suitSpecificTaskType;
         const clientPerson = context.suitClientPerson;
         const clientRole = getVal('clientRole');
         
-        const courtSelect = document.getElementById('suitCourt');
-        const customCourt = document.getElementById('customCourtInput');
         let finalCourt = getVal('suitCourt');
-        if (finalCourt === 'other' || finalCourt === 'Diğer (Manuel Giriş)') {
-            finalCourt = customCourt?.value?.trim();
-        }
+        if (finalCourt === 'other' || finalCourt === 'Diğer (Manuel Giriş)') finalCourt = document.getElementById('customCourtInput')?.value?.trim();
 
-        // Seçilen varlığı sadeleştir
         let simplifiedAsset = null;
         if (context.suitSubjectAsset) {
-            simplifiedAsset = {
-                id: context.suitSubjectAsset.id,
-                type: context.suitSubjectAsset._source === 'suit' ? 'suit' : 'ipRecord',
-                title: context.suitSubjectAsset.title || context.suitSubjectAsset.markName || context.suitSubjectAsset.displayTitle
-            };
+            simplifiedAsset = { id: context.suitSubjectAsset.id, type: context.suitSubjectAsset._source === 'suit' ? 'suit' : 'ipRecord', title: context.suitSubjectAsset.title || context.suitSubjectAsset.markName || context.suitSubjectAsset.displayTitle };
         }
 
-        // --- TITLE (BAŞLIK) BELİRLEME MANTIĞI ---
         const caseNo = getVal('suitCaseNo');
-        let suitTitle = '';
-
-        if (simplifiedAsset && simplifiedAsset.title) {
-            // 1. Öncelik: Seçilen Varlığın Adı (Örn: "Garenta")
-            suitTitle = simplifiedAsset.title;
-        } else if (caseNo) {
-            // 2. Öncelik: Varlık yoksa Esas No (Örn: "2024/123 E.")
-            suitTitle = caseNo;
-        } else {
-            // 3. Öncelik: Hiçbiri yoksa İşlem Tipi (Örn: "Hükümsüzlük")
-            suitTitle = specificTaskType?.alias || specificTaskType?.name || 'Yeni Dava';
-        }
-        // ----------------------------------------
+        let suitTitle = simplifiedAsset?.title || caseNo || specificTaskType?.alias || specificTaskType?.name || 'Yeni Dava';
 
         return {
-            ipType: 'suit',
-            type: 'suit',
-            portfoyStatus: 'active',
-            
-            // DÜZELTME 1: Title artık varlık adı veya dosya no
-            title: suitTitle,
-            
-            origin: getVal('originSelect') || 'TURKEY_NATIONAL',
-            country: getVal('countrySelect'),
-            
+            ipType: 'suit', type: 'suit', portfoyStatus: 'active', title: suitTitle,
+            origin: getVal('originSelect') || 'TURKEY_NATIONAL', country: getVal('countrySelect'),
             client: clientPerson ? { id: clientPerson.id, name: clientPerson.name, role: clientRole } : null,
             clientRole: clientRole,
-            
             transactionTypeId: specificTaskType?.id || null,
-            // DÜZELTME 2: suitType alanı veritabanına eklendi (Portföy listesinde görünmesi için)
             suitType: specificTaskType?.alias || specificTaskType?.name || 'Dava İşlemi',
-            
-            // Bu alan sadece transaction oluştururken kullanılıyor, sonra silinecek
             transactionTypeName: specificTaskType?.alias || specificTaskType?.name || 'Dava İşlemi',
-            
             suitDetails: {
-                court: finalCourt,
-                description: getVal('suitDescription'), // Not: Şablondan kaldırıldıysa boş gelir, sorun değil
-                opposingParty: getVal('opposingParty'),
-                opposingCounsel: getVal('opposingCounsel'),
-                caseNo: caseNo,
-                openingDate: formatDate(getVal('suitOpeningDate')),
-                suitStatus: getVal('suitStatusSelect') || 'filed'
+                court: finalCourt, description: getVal('suitDescription'), opposingParty: getVal('opposingParty'),
+                opposingCounsel: getVal('opposingCounsel'), caseNo: caseNo, openingDate: formatDate(getVal('suitOpeningDate')), suitStatus: getVal('suitStatusSelect') || 'filed'
             },
-            
-            subjectAsset: simplifiedAsset,
-            createdAt: new Date().toISOString()
+            subjectAsset: simplifiedAsset, createdAt: new Date().toISOString()
         };
     }
 
-    // --- SAVE FONKSİYONU ---
-    // Bu fonksiyon data-entry.js tarafından ÇAĞRILMALIDIR
     async save(data) {
         try {
-            console.log('💾 Dava manuel kaydı başlatılıyor...', data);
+            console.log('💾 Dava manuel kaydı başlatılıyor (Hibrit: DB Supabase, Dosyalar Firebase)...', data);
 
-            // 1. DOKÜMAN YÜKLEME
+            // 1. DOKÜMAN YÜKLEME (FIREBASE STORAGE)
             const fileInput = document.getElementById('suitDocument');
             let uploadedDocs = [];
 
             if (fileInput && fileInput.files.length > 0) {
-                console.log(`📤 ${fileInput.files.length} belge yükleniyor...`);
+                console.log(`📤 ${fileInput.files.length} belge Firebase Storage'a yükleniyor...`);
                 const storage = getStorage();
                 
                 for (const file of fileInput.files) {
@@ -305,29 +225,41 @@ export class SuitStrategy extends BaseStrategy {
             }
             
             data.documents = uploadedDocs;
-
-            // Transaction adını ayır (Suits tablosuna kaydetmemek için)
             const txName = data.transactionTypeName;
             delete data.transactionTypeName; 
 
-            // 2. SUITS KOLEKSİYONUNA KAYIT
-            const docRef = await addDoc(collection(db, 'suits'), data);
-            const newSuitId = docRef.id;
-            console.log('✅ Dava kartı oluşturuldu ID:', newSuitId);
-
-            // 3. İLK TRANSACTION (Tarihçe)
-            const initialTransaction = {
-                type: data.transactionTypeId,
-                transactionTypeName: txName, // Doğru isimle kaydet
-                description: "Dava Açıldı",
-                transactionHierarchy: 'parent',
-                triggeringTaskId: 'manual_entry', 
-                createdAt: Timestamp.now(),
-                creationDate: data.suitDetails.openingDate || new Date().toISOString()
+            // 2. SUITS KOLEKSİYONUNA KAYIT (SUPABASE SQL)
+            const suitRow = {
+                file_no: data.suitDetails?.caseNo,
+                court_name: data.suitDetails?.court,
+                plaintiff: data.clientRole === 'davaci' ? data.client?.name : data.suitDetails?.opposingParty,
+                defendant: data.clientRole === 'davali' ? data.client?.name : data.suitDetails?.opposingParty,
+                subject: data.title,
+                status: data.suitDetails?.suitStatus,
+                details: data, 
+                created_at: new Date().toISOString()
             };
 
-            await addDoc(collection(db, 'suits', newSuitId, 'transactions'), initialTransaction);
-            console.log('✅ Transaction oluşturuldu.');
+            const { data: newSuit, error: suitError } = await supabase.from('suits').insert(suitRow).select('id').single();
+            if (suitError) throw new Error("Dava kaydedilirken hata oluştu: " + suitError.message);
+            const newSuitId = newSuit.id;
+
+            // 3. İLK TRANSACTION (SUPABASE SQL)
+            const initialTransaction = {
+                ip_record_id: newSuitId, // Dava ID'sini referans olarak ver
+                transaction_type_id: data.transactionTypeId,
+                description: "Dava Açıldı",
+                transaction_hierarchy: 'parent',
+                details: {
+                    transactionTypeName: txName,
+                    triggeringTaskId: 'manual_entry', 
+                    creationDate: data.suitDetails.openingDate || new Date().toISOString()
+                },
+                created_at: new Date().toISOString()
+            };
+
+            await supabase.from('transactions').insert(initialTransaction);
+            console.log('✅ Dava ve Transaction başarıyla oluşturuldu.');
 
             return newSuitId;
 
