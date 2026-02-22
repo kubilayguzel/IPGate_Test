@@ -139,7 +139,7 @@ export class PortfolioRenderer {
         
         // TP ise logoyu bas (Resmi beyaz yapmak için filter kullandık), değilse standart göz ikonu
         const btnContent = isTP 
-            ? `<img src="/tp-icon.png" style="width: 50px; height: 50px; object-fit: contain;" alt="TP">`
+            ? `<img src="./tp-icon.png" style="width: 50px; height: 50px; object-fit: contain;" alt="TP">`
             : `<i class="fas fa-eye"></i>`;
 
         const actions = `
