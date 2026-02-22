@@ -46,7 +46,7 @@ export class PersonUIManager {
             // personService'i çağır
             let service = window.personService; 
             if (!service) {
-                const module = await import('../../firebase-config.js');
+                const module = await import('../../supabase-config.js'); // DOĞRU YOL
                 service = module.personService;
             }
 
