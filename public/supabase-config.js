@@ -591,3 +591,156 @@ export const transactionService = {
         };
     }
 };
+
+// ==========================================
+// 8. GÖREV (TASK) SERVİSİ
+// ==========================================
+export const taskService = {
+    // 1. Kullanıcıları Çekme (Atama Listesi İçin)
+    async getAllUsers() {
+        // Şemanızdaki 'users' tablosundan okuyoruz
+        const { data, error } = await supabase.from('users').select('id, email, display_name');
+        if (error) {
+            console.error("Kullanıcılar çekilemedi:", error);
+            return { success: false, data: [] };
+        }
+        
+        const mappedUsers = data.map(u => ({
+            id: u.id,
+            email: u.email,
+            displayName: u.display_name || u.email
+        }));
+        return { success: true, data: mappedUsers };
+    },
+
+    // 2. Tüm Görevleri Çekme (Listeleme İçin)
+    async getTasksForUser(uid) {
+        // Not: Yetkilendirme veya role göre tüm taskları çekiyoruz.
+        // Daha sonra sadece kendisine atananları filtrelemek isterseniz .eq('assigned_to_user_id', uid) eklenebilir.
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        if (error) return { success: false, error: error.message };
+
+        const mappedData = data.map(t => ({
+            id: t.id,
+            title: t.title,
+            description: t.description,
+            taskType: t.task_type,
+            status: t.status,
+            priority: t.priority,
+            dueDate: t.due_date,
+            officialDueDate: t.official_due_date,
+            operationalDueDate: t.operational_due_date,
+            deliveryDate: t.delivery_date,
+            assignedTo_uid: t.assigned_to_user_id,
+            relatedIpRecordId: t.ip_record_id,
+            transactionId: t.transaction_id,
+            opponentId: t.opponent_id,
+            history: t.history || [],
+            createdAt: t.created_at,
+            updatedAt: t.updated_at,
+            // JSONB 'details' alanını yayıyoruz (Eski veriler ve dinamik form verileri için)
+            ...t.details,
+            // 'assignedTo_email' genelde Firebase'de details içine veya root'a yazılıyordu, onu güvenceye alalım:
+            assignedTo_email: t.details?.assignedTo_email || t.details?.assignedToEmail || null
+        }));
+
+        return { success: true, data: mappedData };
+    },
+
+    // 3. Tekil Görev Detayı (Güncelleme ve Görüntüleme İçin)
+    async getTaskById(taskId) {
+        const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
+        if (error) return { success: false, error: error.message };
+
+        const mappedData = {
+            id: data.id,
+            title: data.title,
+            description: data.description,
+            taskType: data.task_type,
+            status: data.status,
+            priority: data.priority,
+            dueDate: data.due_date,
+            officialDueDate: data.official_due_date,
+            operationalDueDate: data.operational_due_date,
+            deliveryDate: data.delivery_date,
+            assignedTo_uid: data.assigned_to_user_id,
+            relatedIpRecordId: data.ip_record_id,
+            transactionId: data.transaction_id,
+            opponentId: data.opponent_id,
+            history: data.history || [],
+            createdAt: data.created_at,
+            updatedAt: data.updated_at,
+            ...data.details,
+            assignedTo_email: data.details?.assignedTo_email || data.details?.assignedToEmail || null
+        };
+        return { success: true, data: mappedData };
+    },
+
+    // 4. Görev Oluşturma
+    async addTask(taskData) {
+        try {
+            const payload = {
+                title: taskData.title,
+                description: taskData.description || null,
+                task_type: String(taskData.taskType),
+                status: taskData.status || 'open',
+                priority: taskData.priority || 'normal',
+                due_date: taskData.dueDate || null,
+                official_due_date: taskData.officialDueDate || null,
+                operational_due_date: taskData.operationalDueDate || null,
+                assigned_to_user_id: taskData.assignedTo_uid || null,
+                ip_record_id: taskData.relatedIpRecordId ? String(taskData.relatedIpRecordId) : null,
+                transaction_id: taskData.transactionId ? String(taskData.transactionId) : null,
+                history: taskData.history || [],
+                details: taskData // Geri kalan esnek tüm veriler
+            };
+
+            // Undefined temizliği
+            Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
+
+            // ID'yi otomatik oluşturması için omit ediyoruz veya isterseniz JS tarafında generate edip basabiliriz
+            const { data, error } = await supabase.from('tasks').insert(payload).select('id').single();
+            if (error) throw error;
+            return { success: true, data: { id: data.id } };
+        } catch (error) {
+            console.error("Task add error:", error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    // 5. Görev Güncelleme
+    async updateTask(taskId, updateData) {
+        try {
+            const payload = {
+                title: updateData.title,
+                description: updateData.description,
+                task_type: updateData.taskType ? String(updateData.taskType) : undefined,
+                status: updateData.status,
+                priority: updateData.priority,
+                due_date: updateData.dueDate,
+                official_due_date: updateData.officialDueDate,
+                operational_due_date: updateData.operationalDueDate,
+                assigned_to_user_id: updateData.assignedTo_uid,
+                ip_record_id: updateData.relatedIpRecordId ? String(updateData.relatedIpRecordId) : undefined,
+                transaction_id: updateData.transactionId ? String(updateData.transactionId) : undefined,
+                history: updateData.history,
+                updated_at: new Date().toISOString(),
+                details: updateData // Tüm esnek veri içeriği güncellenir
+            };
+
+            // SQL'de sorun çıkarmaması için undefined olanları gönderilmeden sil
+            Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
+
+            const { error } = await supabase.from('tasks').update(payload).eq('id', String(taskId));
+            if (error) throw error;
+            return { success: true };
+        } catch (error) {
+            console.error("Task update error:", error);
+            return { success: false, error: error.message };
+        }
+    }
+};
