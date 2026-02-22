@@ -1,41 +1,5 @@
-import { ipRecordsService, transactionTypeService, personService, commonService, suitService } from '../../supabase-config.js';
+import { ipRecordsService, transactionTypeService, personService, commonService, suitService, transactionService } from '../../supabase-config.js';
 import { STATUSES } from '../../utils.js';
-
-// --- YENİ: ULTRA HIZLI ÖNBELLEK MOTORU ---
-const EvrekaFastCache = {
-    _db: null,
-    async getDB() {
-        if (this._db) return this._db;
-        return new Promise((resolve, reject) => {
-            const req = indexedDB.open("EvrekaFastCache", 1);
-            req.onupgradeneeded = e => e.target.result.createObjectStore("cache");
-            req.onsuccess = e => { this._db = e.target.result; resolve(this._db); };
-            req.onerror = e => reject(e);
-        });
-    },
-    async get(key) {
-        try {
-            const db = await this.getDB();
-            return new Promise(resolve => {
-                const tx = db.transaction("cache", "readonly");
-                const req = tx.objectStore("cache").get(key);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => resolve(null);
-            });
-        } catch { return null; }
-    },
-    async set(key, value) {
-        try {
-            const db = await this.getDB();
-            return new Promise(resolve => {
-                const tx = db.transaction("cache", "readwrite");
-                tx.objectStore("cache").put(value, key);
-                tx.oncomplete = () => resolve(true);
-                tx.onerror = () => resolve(false);
-            });
-        } catch { return false; }
-    }
-};
 
 export class PortfolioDataManager {
     constructor() {
@@ -119,30 +83,11 @@ export class PortfolioDataManager {
     }
 
     async loadPersons() {
-        // YENİ: Önce anında FastCache'den çek (0.05 Saniye)
-        const cached = await EvrekaFastCache.get('persons');
-        if (cached) {
-            this.personsMap.clear();
-            cached.forEach(p => { if(p.id) this.personsMap.set(p.id, p); });
-            
-        // Arka planda sessizce taze veriyi kontrol et (Sayfayı dondurmaz)
-            personService.getPersons().then(res => {
-                if(res.success) {
-                    EvrekaFastCache.set('persons', res.data || []);
-                    // YENİ: Arka planda gelen yeni müşterileri anında o anki hafızaya (RAM) dahil et
-                    res.data.forEach(p => { if(p.id) this.personsMap.set(p.id, p); });
-                }
-            });
-            return;
-        }
-
-        // FastCache boşsa (ilk giriş), normal yükle ve kaydet
+        // Artık doğrudan Supabase'den çekiyoruz, önbellek hamallığı yok!
         const result = await personService.getPersons();
         if (result.success) {
-            const persons = result.data || [];
             this.personsMap.clear();
-            persons.forEach(p => { if(p.id) this.personsMap.set(p.id, p); });
-            await EvrekaFastCache.set('persons', persons);
+            (result.data || []).forEach(p => { if(p.id) this.personsMap.set(p.id, p); });
         }
     }
 
@@ -179,33 +124,15 @@ export class PortfolioDataManager {
     }
 
     async loadRecords({ type = null } = {}) {
-        const cacheKey = type ? `records_${type}` : 'records_all';
-
-        let cachedData = await EvrekaFastCache.get(cacheKey);
-
-        // 🔥 OTO-ONARIM: Eğer Firebase hatası yüzünden cache'de çok az kayıt (örn: 100'den az) kaldıysa, bu bozuktur. Çöpe at!
-        if (cachedData && cachedData.length < 100 && type === 'trademark') {
-            cachedData = null; 
-            await EvrekaFastCache.set(cacheKey, null);
-        }
-
-        // Eğer sağlam bir cache varsa anında ekrana bas
-        if (cachedData && cachedData.length > 0) {
-            this.allRecords = cachedData;
-            this._buildWipoGroups();
-            return this.allRecords; 
-        }
-
-        // 🔥 GÜVENLİK: İlk yüklemede Firebase'in eksik local cache'ine düşmemek için { source: 'server' } zorluyoruz
+        // Supabase o kadar hızlı ki, önbelleğe bakmadan direkt çekiyoruz
         const result = type 
-            ? await ipRecordsService.getRecordsByType(type, { source: 'server' }) 
-            : await ipRecordsService.getRecords({ source: 'server' });            
+            ? await ipRecordsService.getRecordsByType(type) 
+            : await ipRecordsService.getRecords();            
         
         if (result.success) {
             const rawData = Array.isArray(result.data) ? result.data : [];
             this.allRecords = await this._mapRawToProcessed(rawData);
             this._buildWipoGroups();
-            await EvrekaFastCache.set(cacheKey, this.allRecords); // Gelecek sefer için kaydet
         }
         return this.allRecords;
     }
@@ -276,13 +203,11 @@ export class PortfolioDataManager {
         return this.wipoGroups.children.get(irNo) || [];
     }
 
-    // --- CACHE (ÖNBELLEK) YÖNETİMİ ---
     clearCache() {
+        // Artık sadece RAM'deki listeleri sıfırlamamız yeterli
         this.objectionRows = [];
         this.litigationRows = [];
-        // Yeni bir kayıt eklendiğinde İtirazlar önbelleğini de temizle ki tazesini çeksin
-        EvrekaFastCache.set('objectionRows', null); 
-        console.log("🧹 Önbellek temizlendi, veriler yeniden çekilecek.");
+        console.log("🧹 Sayfa verileri sıfırlandı, yeniden çekilecek.");
     }
 
     async loadLitigationData() {
@@ -303,67 +228,38 @@ export class PortfolioDataManager {
         }
     }
 
-        // --- OBJECTIONS: PREFETCH (Firestore sorgularını paralel başlatır) ---
+
+// --- OBJECTIONS: PREFETCH (Supabase Versiyonu) ---
     prefetchObjectionData() {
-        const PARENT_TYPES = ['7', '19', '20'];
-        const parentQuery = query(collectionGroup(db, 'transactions'), where('type', 'in', PARENT_TYPES));
-        const childQuery = query(collectionGroup(db, 'transactions'), where('transactionHierarchy', '==', 'child'));
-        
-        // İki sorguyu paralel başlat, Promise'leri döndür (await YOK, hemen başlar)
-        return {
-            parentPromise: getDocs(parentQuery),
-            childPromise: getDocs(childQuery)
-        };
+        // Supabase tarafında iki sorguyu aynı anda yapan servisimizi çağırıyoruz.
+        // Arayüzü dondurmamak için Promise (Söz) olarak dönüyoruz.
+        return transactionService.getObjectionData();
     }
 
-    // --- OBJECTIONS: BUILD ---
-    async buildObjectionRows(prefetch = null, forceRefresh = false) {
-        // Eğer zorunlu yenileme istenmişse mevcut RAM önbelleğini sıfırla
-        if (forceRefresh) {
-            this.objectionRows = [];
-        } else {
-            // RAM'de varsa direkt dön
-            if (this.objectionRows.length > 0) return this.objectionRows;
+    async buildObjectionRows(prefetchPromise = null, forceRefresh = false) {
+        // Eğer zaten sayfadayken hesapladıysak tekrar hesaplama (RAM'den ver)
+        if (!forceRefresh && this.objectionRows.length > 0) return this.objectionRows;
 
-            // IndexedDB Cache'den al (Sadece forceRefresh false ise)
-            const cached = await EvrekaFastCache.get('objectionRows');
-            if (cached && cached.length > 0) {
-                this.objectionRows = cached;
-                return this.objectionRows;
-            }
-        }
-
-        console.time('⏱️ buildObjectionRows (Firebase)');
+        console.time('⏱️ buildObjectionRows (Supabase)');
         try {
-            if (!prefetch) prefetch = this.prefetchObjectionData();
-            const [parentSnapshot, childSnapshot] = await Promise.all([prefetch.parentPromise, prefetch.childPromise]);
-
-            if (parentSnapshot.empty) {
+            const result = await (prefetchPromise || this.prefetchObjectionData());
+            
+            if (!result || !result.success || result.parents.length === 0) {
                 this.objectionRows = [];
-                // Eğer forceRefresh ile çağrıldıysa ve veri yoksa cache'i de sıfırla
-                await EvrekaFastCache.set('objectionRows', []);
                 return [];
             }
 
-            const parents = [];
             const parentIds = new Set();
-
-            parentSnapshot.forEach(docSnap => {
-                const data = docSnap.data();
-                const parentRecordId = docSnap.ref.parent.parent ? docSnap.ref.parent.parent.id : null;
-                if (parentRecordId) {
-                    parents.push({ ...data, id: docSnap.id, recordId: parentRecordId });
-                    parentIds.add(docSnap.id);
-                }
+            const parents = result.parents.map(p => {
+                parentIds.add(p.id);
+                return p;
             });
 
             const childrenMap = {};
-            childSnapshot.forEach(docSnap => {
-                const data = docSnap.data();
-                if (data.parentId && parentIds.has(data.parentId)) {
-                    const childRecordId = docSnap.ref.parent.parent ? docSnap.ref.parent.parent.id : null;
-                    if (!childrenMap[data.parentId]) childrenMap[data.parentId] = [];
-                    childrenMap[data.parentId].push({ ...data, id: docSnap.id, recordId: childRecordId });
+            result.children.forEach(child => {
+                if (child.parentId && parentIds.has(child.parentId)) {
+                    if (!childrenMap[child.parentId]) childrenMap[child.parentId] = [];
+                    childrenMap[child.parentId].push(child);
                 }
             });
 
@@ -383,17 +279,14 @@ export class PortfolioDataManager {
                     const childTypeInfo = this.transactionTypesMap.get(String(child.type));
                     parentRow.children.push(this._createObjectionRowDataFast(record, child, childTypeInfo, false, false, parent.id));
                 }
-                parentRow.children.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
+                
+                parentRow.children.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
                 return parentRow;
             }, 100); 
 
             this.objectionRows = localRows.filter(Boolean);
+            console.timeEnd('⏱️ buildObjectionRows (Supabase)');
             
-            // YENİ: Hesaplanan güncel İtirazları Cache'e yaz
-            await EvrekaFastCache.set('objectionRows', this.objectionRows);
-            
-            console.timeEnd('⏱️ buildObjectionRows (Firebase)');
             return this.objectionRows;
 
         } catch (error) {
@@ -413,31 +306,29 @@ export class PortfolioDataManager {
         // 1. TEK GERÇEKLİK KAYNAĞI: documents dizisi
         if (Array.isArray(tx.documents)) {
             docs = tx.documents.map(d => ({
-                fileName: d.name || 'Belge',
-                fileUrl: d.url || d.downloadURL || d.path,
+                fileName: d.name || d.fileName || 'Belge',
+                // YENİ: Supabase ve Firebase'den gelen tüm olası link yolları eklendi
+                fileUrl: d.fileUrl || d.url || d.downloadURL || d.path || d.link,
                 type: d.type || 'standard'
             }));
         }
 
-        // ESKİ (LEGACY) KAYITLARA DESTEK: Eğer documents dizisinde yoklarsa eski alanlardan kurtar
+        // ESKİ (LEGACY) KAYITLARA DESTEK
         if (tx.relatedPdfUrl && !docs.some(d => d.type === 'official_document')) docs.push({ fileName: 'Resmi Yazı', fileUrl: tx.relatedPdfUrl, type: 'official_document' });
         if (tx.oppositionEpatsPetitionFileUrl && !docs.some(d => d.type === 'epats_document')) docs.push({ fileName: 'ePATS İtiraz Evrakı', fileUrl: tx.oppositionEpatsPetitionFileUrl, type: 'epats_document' });
         if (!isParent && tx.oppositionPetitionFileUrl && !docs.some(d => d.type === 'opposition_petition')) docs.push({ fileName: 'İtiraz Dilekçesi', fileUrl: tx.oppositionPetitionFileUrl, type: 'opposition_petition' });
        
-        const isOwnRecord = record.recordOwnerType !== 'third_party';
-
-        // 🔥 KURALLAR: Hangi dosya nerede gösterilecek?
+        const isOwnRecord = record.recordOwnerType !== 'third_party' && record.recordOwnerType !== 'published_in_bulletin';
         if (isOwnRecord && String(tx.type) === '20') {
-            // Kural: Kendi markamız ve işlem Tipi 20 ise SADECE ePATS
             docs = docs.filter(d => d.type === 'epats_document');
         } else if (isParent) {
-            // Kural: Ana işlemlerde (Parent) normal itiraz dilekçesini kalabalık yapmasın diye gizle
             docs = docs.filter(d => d.type !== 'opposition_petition');
         }
 
-        // Karşı Taraf Çözümleme
+        // Karşı Taraf Çözümleme (Eksik ihtimaller eklendi)
         let opponentText = '-';
-        if (tx.oppositionOwner) opponentText = tx.oppositionOwner;
+        if (tx.opponent) opponentText = tx.opponent; // YENİ: Doğrudan opponent alanı varsa al
+        else if (tx.oppositionOwner) opponentText = tx.oppositionOwner;
         else if (tx.objectionOwners && tx.objectionOwners.length > 0) opponentText = tx.objectionOwners.map(o => o.name).join(', ');
         else if (tx.taskOwner) {
             if (Array.isArray(tx.taskOwner) && tx.taskOwner.length > 0) {
@@ -463,6 +354,11 @@ export class PortfolioDataManager {
             isChild: !isParent,
             hasChildren: hasChildren,
             isOwnRecord: isOwnRecord, 
+            
+            // YENİ: Arayüzün filtreleme (Pasifleri gizle) yapabilmesi için markanın durumunu iletiyoruz
+            portfoyStatus: record.portfoyStatus,
+            recordStatus: record.recordStatus,
+            
             title: record.title || record.brandText || '',
             transactionTypeName: typeInfo?.alias || typeInfo?.name || `İşlem ${tx.type}`,
             applicationNumber: record.applicationNumber || '-',
@@ -638,35 +534,43 @@ export class PortfolioDataManager {
     _fmtDate(val) {
         try {
             if(!val) return '-';
-            const d = val.toDate ? val.toDate() : new Date(val);
+            let d;
+            // 1. Eski Firebase Timestamp JSON formatı ise ({"_seconds": ...})
+            if (typeof val === 'object' && val._seconds) {
+                d = new Date(val._seconds * 1000);
+            } 
+            // 2. Normal Date veya ISO Metin ise
+            else {
+                d = val.toDate ? val.toDate() : new Date(val);
+            }
+            
             if(isNaN(d.getTime())) return '-';
             return d.toLocaleDateString('tr-TR');
         } catch { return '-'; }
     }
+
     _parseDate(val) {
         if (!val || val === '-') return 0;
-
-        // 1. Eğer zaten Date objesiyse (Excel'den gelenler gibi)
         if (val instanceof Date) return val.getTime();
 
-        // 2. Eğer Firestore Timestamp objesiyse (toDate fonksiyonu varsa)
+        // Eski Firebase Timestamp JSON formatını yakala
+        if (typeof val === 'object' && val._seconds) {
+            return val._seconds * 1000;
+        }
+
         if (val && typeof val.toDate === 'function') {
             return val.toDate().getTime();
         }
 
-        // 3. Eğer metin (String) değilse, güvenli bir şekilde sayıya çevirmeyi dene
         if (typeof val !== 'string') return 0;
 
-        // 4. "25.10.2023" gibi noktalı metin formatı (Eski kayıtlar için)
         if (val.includes('.')) {
             const parts = val.split('.');
             if (parts.length === 3) {
-                // Ay bilgisini 0-11 arasına çekmek için parts[1]-1 yapıyoruz
                 return new Date(parts[2], parts[1] - 1, parts[0]).getTime();
             }
         }
 
-        // 5. ISO formatı veya diğer metin formatları
         const parsed = new Date(val).getTime();
         return isNaN(parsed) ? 0 : parsed;
     }
@@ -687,30 +591,30 @@ export class PortfolioDataManager {
             // İtirazlar sekmesinde pasifleri gizle
             sourceData = this.objectionRows.filter(r => r.portfoyStatus !== 'inactive' && r.recordStatus !== 'pasif');
         } else {
-            // ANA LİSTE FİLTRESİ
+            // ANA LİSTE FİLTRESİ (Sadece Kendi Aktif Portföyümüz)
             sourceData = this.allRecords.filter(r => {
-                // 🔥 YENİ: Pasif olan kayıtları tamamen gizle
-                if (r.portfoyStatus === 'inactive' || r.recordStatus === 'pasif') return false;
+                // 1. PASİFLERİ GİZLE (Tüm ihtimalleri kapsar)
+                const isInactive = r.portfoyStatus === 'inactive' || r.recordStatus === 'pasif' || r.status === 'inactive';
+                if (isInactive) return false;
 
-                // 1. Temel Kontroller (Child kayıtları ve 3. şahıs kayıtlarını gizle)
+                // 2. ÜÇÜNCÜ ŞAHIS / BÜLTEN MARKALARINI GİZLE (Sadece Bize Ait Olanlar Kalsın)
+                const isThirdParty = r.recordOwnerType === 'third_party' || r.recordOwnerType === 'published_in_bulletin';
+                if (isThirdParty) return false;
+
+                // 3. WIPO ALT (CHILD) İŞLEMLERİNİ GİZLE (Sadece Ana Kayıt Görünsün)
                 if ((r.origin === 'WIPO' || r.origin === 'ARIPO') && r.transactionHierarchy === 'child') return false;
                 
-                // 2. Sekme Kontrolü
-                if (typeFilter === 'all') {
-                    return r.recordOwnerType !== 'third_party';
-                }
+                // 4. SEKME (TAB) KONTROLLERİ
+                if (typeFilter === 'all') return true;
                 
-                // 3. MARKA SEKMESİ ÖZEL FİLTRESİ (TÜRKPATENT vs YURTDIŞI)
                 if (typeFilter === 'trademark') {
-                    if (r.type !== 'trademark' || r.recordOwnerType === 'third_party') return false;
+                    if (r.type !== 'trademark') return false;
 
-                    // YENİ: Alt Sekme (SubTab) Kontrolü
+                    // Alt Sekme (SubTab) Kontrolü
                     if (subTab === 'turkpatent') {
-                        // Menşei TÜRKPATENT olanlar VEYA (Boşsa ve TR ise)
                         return r.origin === 'TÜRKPATENT' || r.origin === 'TR' || (!r.origin && r.country === 'TR');
                     } 
                     if (subTab === 'foreign') {
-                        // Menşei TÜRKPATENT OLMAYANLAR
                         const isTP = r.origin === 'TÜRKPATENT' || r.origin === 'TR' || (!r.origin && r.country === 'TR');
                         return !isTP;
                     }
@@ -721,6 +625,7 @@ export class PortfolioDataManager {
                 return r.type === typeFilter;
             });
         }
+
         return sourceData.filter(item => {
             // 1. GENEL ARAMA KUTUSU KONTROLÜ
             if (searchTerm) {
