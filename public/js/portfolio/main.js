@@ -289,7 +289,7 @@ class PortfolioController {
             });
         }
 
-// --- 1. ANA SEKME (TAB) DEĞİŞİMİ ---
+        // --- 1. ANA SEKME (TAB) DEĞİŞİMİ ---
         document.querySelectorAll('.tab-button').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 // 🔥 YENİ: Eğer sekme verisi zaten yükleniyorsa çift tıklamayı engelle
@@ -563,7 +563,7 @@ class PortfolioController {
             });
         }
 
-// --- 9. DURUM DEĞİŞTİR (AKTİF/PASİF) ---
+        // --- 9. DURUM DEĞİŞTİR (AKTİF/PASİF) ---
         const toggleStatusBtn = document.getElementById('toggleRecordStatusBtn');
         if (toggleStatusBtn) {
             toggleStatusBtn.addEventListener('click', async () => {
@@ -639,6 +639,17 @@ class PortfolioController {
                 }
             });
         }
+
+        document.getElementById('refreshPortfolioBtn')?.addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
+            const icon = btn.querySelector('i');
+            icon.classList.add('fa-spin'); // İkonu döndür
+            
+            // forceRefresh parametresini true göndererek cache'i atlıyoruz
+            await this.loadData(true); // Veya yöneticinizdeki yükleme fonksiyonunun adı neyse
+            
+            icon.classList.remove('fa-spin');
+        });
     }
 
     // public/js/portfolio/main.js içinde
