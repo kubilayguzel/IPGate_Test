@@ -54,6 +54,9 @@ export const localCache = {
     }
 };
 
+// MOTORU GLOBAL HALE GETİREN SATIR (Parantezlerin DIŞINDA olmalı)
+window.localCache = localCache;
+
 // --- YENİ: SUPABASE AUTH SERVICE ---
 export const authService = {
     // Supabase bağlantı durumunu kontrol etmek için
@@ -206,15 +209,25 @@ export const commonService = {
 
 // 4. PORTFÖY (IP RECORDS) SERVİSİ
 export const ipRecordsService = {
-    // A) Tüm Portföyü Getir (Sınırsız IndexedDB Önbellekli Versiyon)
+// A) Tüm Portföyü Getir (Sınırsız IndexedDB + 1 Dakika TTL Önbellekli Versiyon)
     async getRecords(forceRefresh = false) {
-        // 1. SINIRSIZ CACHE KONTROLÜ
+        const CACHE_KEY = 'ip_records_cache';
+        const TTL_MS = 1 * 60 * 1000; // 1 Dakika (Milisaniye)
+
+        // 1. SINIRSIZ CACHE VE SÜRE KONTROLÜ
         if (!forceRefresh) {
-            const cached = await localCache.get('ip_records_cache');
-            if (cached) {
-                console.log("⚡ Veriler 0 saniyede IndexedDB önbelleğinden geldi!");
-                return { success: true, data: cached, from: 'cache' };
+            const cachedObj = await localCache.get(CACHE_KEY);
+            if (cachedObj && cachedObj.timestamp && cachedObj.data) {
+                const isExpired = (Date.now() - cachedObj.timestamp) > TTL_MS;
+                
+                if (!isExpired) {
+                    console.log("⚡ Veriler 0 saniyede IndexedDB'den geldi (Güncel).");
+                    return { success: true, data: cachedObj.data, from: 'cache' };
+                }
+                console.log("⏳ 1 Dakikalık süre dolmuş, Supabase'den taze veri çekiliyor...");
             }
+        } else {
+            console.log("🔄 Kullanıcı manuel yenileme başlattı!");
         }
 
         console.log("☁️ Veriler Supabase'den çekiliyor...");
@@ -244,58 +257,30 @@ export const ipRecordsService = {
 
         const mappedData = data.map(record => {
             let applicantsArray = record.ip_record_persons
-                ? record.ip_record_persons
-                    .filter(rel => rel.role === 'applicant' && rel.persons)
-                    .map(rel => ({
-                        id: rel.persons.id,
-                        name: rel.persons.name,
-                        personType: rel.persons.person_type
-                    }))
-                : [];
+                ? record.ip_record_persons.filter(rel => rel.role === 'applicant' && rel.persons).map(rel => ({
+                    id: rel.persons.id, name: rel.persons.name, personType: rel.persons.person_type
+                })) : [];
 
-            if (applicantsArray.length === 0 && Array.isArray(record.applicantsJson)) {
-                applicantsArray = record.applicantsJson;
-            }
+            if (applicantsArray.length === 0 && Array.isArray(record.applicantsJson)) applicantsArray = record.applicantsJson;
 
             return {
-                id: record.id,
-                applicationNumber: record.application_number,
-                applicationDate: record.application_date,
-                registrationNumber: record.registration_number,
-                registrationDate: record.registration_date,
-                renewalDate: record.renewal_date,
-                title: record.brand_name,
-                brandText: record.brand_name,
-                type: record.ip_type,
-                status: record.official_status,
-                recordStatus: record.portfolio_status,
-                portfoyStatus: record.portfolio_status, 
-                origin: record.origin,
-                country: record.country_code,
-                niceClasses: record.nice_classes || [],
-                wipoIR: record.wipo_ir,
-                aripoIR: record.wipo_ir, 
-                transactionHierarchy: record.transaction_hierarchy,
-                brandImageUrl: record.brand_image_url,
-                trademarkImage: record.brand_image_url,
-                applicants: applicantsArray,
+                id: record.id, applicationNumber: record.application_number, applicationDate: record.application_date,
+                registrationNumber: record.registration_number, registrationDate: record.registration_date, renewalDate: record.renewal_date,
+                title: record.brand_name, brandText: record.brand_name, type: record.ip_type, status: record.official_status,
+                recordStatus: record.portfolio_status, portfoyStatus: record.portfolio_status, origin: record.origin, country: record.country_code,
+                niceClasses: record.nice_classes || [], wipoIR: record.wipo_ir, aripoIR: record.wipo_ir, transactionHierarchy: record.transaction_hierarchy,
+                brandImageUrl: record.brand_image_url, trademarkImage: record.brand_image_url, applicants: applicantsArray,
                 recordOwnerType: record.recordOwnerType || 'self', 
                 details: {
-                    recordOwnerType: record.recordOwnerType,
-                    bulletinNo: record.bulletinNo,
-                    bulletinDate: record.bulletinDate,
-                    brandInfo: record.brandInfo,
-                    bulletins: record.bulletins,
-                    ownerName: record.ownerName,
-                    applicantName: record.applicantName
+                    recordOwnerType: record.recordOwnerType, bulletinNo: record.bulletinNo, bulletinDate: record.bulletinDate,
+                    brandInfo: record.brandInfo, bulletins: record.bulletins, ownerName: record.ownerName, applicantName: record.applicantName
                 },                
-                createdAt: record.created_at,
-                updatedAt: record.updated_at
+                createdAt: record.created_at, updatedAt: record.updated_at
             };
         });
 
-        // 3. SONUCU SINIRSIZ ÖNBELLEĞE (IndexedDB) YAZ
-        await localCache.set('ip_records_cache', mappedData);
+        // 3. SONUCU SINIRSIZ ÖNBELLEĞE "ZAMAN DAMGASI" İLE YAZ
+        await localCache.set(CACHE_KEY, { timestamp: Date.now(), data: mappedData });
 
         return { success: true, data: mappedData, from: 'server' };
     },
