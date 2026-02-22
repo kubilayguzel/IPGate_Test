@@ -1,8 +1,6 @@
 // public/js/components/TaskDetailManager.js
-import { getFirestore, doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { formatToTRDate } from "../../utils.js";
-
-const db = getFirestore();
+import { supabase } from "../../supabase-config.js";
 
 export class TaskDetailManager {
     constructor(containerId) {
@@ -43,170 +41,100 @@ export class TaskDetailManager {
 
         try {
             // --- ID 66: DEĞERLENDİRME İŞİ KONTROLÜ ---
-            if (String(task.taskType) === '66') {
+            if (String(task.taskType) === '66' || String(task.task_type) === '66') {
                 await this._renderEvaluationEditor(task);
                 return;
             }
 
             let { ipRecord, transactionType, assignedUser, accruals = [] } = options;
 
-            // 1. ADIM: IP RECORD'U GARANTİLE
-            if (!ipRecord && task.relatedIpRecordId) {
+            // 1. ADIM: IP RECORD'U GARANTİLE (Supabase)
+            const recordId = task.relatedIpRecordId || task.ip_record_id;
+            if (!ipRecord && recordId) {
                 try {
-                    const ipDoc = await getDoc(doc(db, "ipRecords", task.relatedIpRecordId));
-                    if (ipDoc.exists()) {
-                        ipRecord = { id: ipDoc.id, ...ipDoc.data() };
+                    const { data: ipData } = await supabase.from("ip_records").select("*").eq("id", String(recordId)).single();
+                    if (ipData) {
+                        ipRecord = { id: ipData.id, ...ipData.details, ...ipData };
                     }
                 } catch (e) { console.warn("IP Record fetch error:", e); }
             }
 
             // 2. ADIM: MÜVEKKİL / İLGİLİ TARAF İSMİNİ ÇÖZÜMLE
             let relatedPartyTxt = '-';
-            console.log("🔍 İlgili taraf çözümleme başlıyor...");
+            const details = task.details || {};
 
-            // A) Task Details - relatedParties (çoğul, name zaten dolu)
-            if (task.details && Array.isArray(task.details.relatedParties) && task.details.relatedParties.length > 0) {
-                console.log("A aşaması - task.details.relatedParties var:", task.details.relatedParties);
-                const manualNames = task.details.relatedParties
+            // A) Task Details - relatedParties
+            if (Array.isArray(details.relatedParties) && details.relatedParties.length > 0) {
+                const manualNames = details.relatedParties
                     .map(p => (typeof p === 'object' ? (p.name || p.companyName) : p))
                     .filter(Boolean);
-                console.log("A aşaması - manualNames:", manualNames);
                 if (manualNames.length > 0) {
                     relatedPartyTxt = manualNames.join(', ');
-                    console.log("✅ A aşamasından bulundu:", relatedPartyTxt);
                 }
             }
 
-
-            // B) IP Record -> Applicants -> Persons Tablosu
+            // B) IP Record -> Applicants -> Persons Tablosu (Supabase)
             if ((!relatedPartyTxt || relatedPartyTxt === '-') && ipRecord && Array.isArray(ipRecord.applicants) && ipRecord.applicants.length > 0) {
-                console.log("B aşaması başladı - ipRecord.applicants:", ipRecord.applicants);
                 const applicantPromises = ipRecord.applicants.map(async (app) => {
                     if (app.name && app.name.trim() !== '') return app.name;
                     if (app.id) {
                         try {
-                            const personSnap = await getDoc(doc(db, "persons", app.id));
-                            if (personSnap.exists()) {
-                                const pData = personSnap.data();
-                                return pData.name || pData.companyName || null;
-                            }
+                            const { data: pData } = await supabase.from("persons").select("*").eq("id", app.id).single();
+                            if (pData) return pData.name || null;
                         } catch (err) {}
                     }
                     return null;
                 });
                 const resolvedNames = await Promise.all(applicantPromises);
                 const validNames = resolvedNames.filter(Boolean);
-                console.log("B aşaması - validNames:", validNames);
                 if (validNames.length > 0) {
                     relatedPartyTxt = validNames.join(', ');
-                    console.log("✅ B aşamasından bulundu:", relatedPartyTxt);
                 }
-            } else {
-                console.log("B aşaması atlandı - relatedPartyTxt:", relatedPartyTxt, "ipRecord var mı:", !!ipRecord);
             }
 
-            // C) Task Owner -> Persons Tablosu (relatedParties yoksa)
-            if ((!relatedPartyTxt || relatedPartyTxt === '-') && task.taskOwner) {
-                console.log("✅ C aşaması başladı - taskOwner:", task.taskOwner);
+            // C) Task Owner -> Persons Tablosu (Supabase)
+            if ((!relatedPartyTxt || relatedPartyTxt === '-') && (task.taskOwner || details.taskOwner)) {
                 try {
-                    // taskOwner array veya string olabilir
-                    const ownerIds = Array.isArray(task.taskOwner) ? task.taskOwner : [task.taskOwner];
-                    console.log("ownerIds:", ownerIds);
+                    const tOwner = task.taskOwner || details.taskOwner;
+                    const ownerIds = Array.isArray(tOwner) ? tOwner : [tOwner];
                     const ownerPromises = ownerIds.map(async (ownerId) => {
                         if (!ownerId) return null;
-                        console.log("Owner ID sorgulanıyor:", ownerId);
                         try {
-                            const ownerSnap = await getDoc(doc(db, "persons", ownerId));
-                            if (ownerSnap.exists()) {
-                                const ownerData = ownerSnap.data();
-                                console.log("Owner bulundu:", ownerData);
-                                return ownerData.name || ownerData.companyName || null;
-                            } else {
-                                console.log("Owner bulunamadı:", ownerId);
-                            }
-                        } catch (err) {
-                            console.error("Owner fetch hatası:", err);
-                        }
+                            const { data: ownerData } = await supabase.from("persons").select("*").eq("id", ownerId).single();
+                            if (ownerData) return ownerData.name || null;
+                        } catch (err) {}
                         return null;
                     });
                     const ownerNames = await Promise.all(ownerPromises);
-                    console.log("ownerNames:", ownerNames);
                     const validOwnerNames = ownerNames.filter(Boolean);
-                    console.log("validOwnerNames:", validOwnerNames);
                     if (validOwnerNames.length > 0) {
                         relatedPartyTxt = validOwnerNames.join(', ');
-                        console.log("✅ C aşamasından bulundu:", relatedPartyTxt);
                     }
                 } catch (err) {
                     console.warn("Task owner fetch error:", err);
                 }
-            } else {
-                console.log("C aşaması atlandı - relatedPartyTxt:", relatedPartyTxt, "taskOwner var mı:", !!task.taskOwner);
             }
-            console.log("🎯 Final relatedPartyTxt:", relatedPartyTxt);
 
             // --- Veri Formatlama ---
-            const assignedName = assignedUser ? (assignedUser.displayName || assignedUser.email) : (task.assignedTo_email || 'Atanmamış');
-            const relatedRecordTxt = ipRecord ? (ipRecord.applicationNumber || ipRecord.title) : 'İlgili kayıt bulunamadı';
-            const taskTypeDisplay = transactionType ? (transactionType.alias || transactionType.name) : (task.taskType || '-');
+            const assignedName = assignedUser ? (assignedUser.displayName || assignedUser.email) : (task.assignedTo_email || task.assigned_to_email || 'Atanmamış');
+            const relatedRecordTxt = ipRecord ? (ipRecord.application_number || ipRecord.brand_name || ipRecord.title || ipRecord.applicationNumber) : 'İlgili kayıt bulunamadı';
+            const taskTypeDisplay = transactionType ? (transactionType.alias || transactionType.name) : (task.taskType || task.task_type || '-');
             const statusText = this.statusDisplayMap[task.status] || task.status;
 
-            // --- CSS STYLES (SADE & KURUMSAL) ---
+            // --- CSS STYLES ---
             const styles = {
                 container: `font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #333; background-color: #f8f9fa; padding: 20px;`,
-                
-                // Kart: Beyaz, çok hafif gölge, gri kenarlık
-                card: `
-                    background: #fff;
-                    border: 1px solid #e0e0e0;
-                    border-radius: 8px;
-                    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
-                    margin-bottom: 20px;
-                    overflow: hidden;
-                `,
-                
-                // Başlık: Temiz, koyu gri zemin değil, sadece alt çizgi
-                cardHeader: `
-                    padding: 15px 20px;
-                    border-bottom: 1px solid #eee;
-                    display: flex;
-                    align-items: center;
-                    font-size: 0.95rem;
-                    font-weight: 700;
-                    color: #1e3c72; /* Kurumsal Lacivert */
-                    background-color: #fff;
-                `,
-
+                card: `background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); margin-bottom: 20px; overflow: hidden;`,
+                cardHeader: `padding: 15px 20px; border-bottom: 1px solid #eee; display: flex; align-items: center; font-size: 0.95rem; font-weight: 700; color: #1e3c72; background-color: #fff;`,
                 cardBody: `padding: 20px;`,
-                
-                // Etiket
-                label: `
-                    display: block;
-                    font-size: 0.75rem;
-                    font-weight: 600;
-                    text-transform: uppercase;
-                    color: #8898aa;
-                    margin-bottom: 6px;
-                    letter-spacing: 0.5px;
-                `,
-                
-                // Değer Kutusu
-                valueBox: `
-                    background: #f8f9fa;
-                    border: 1px solid #e9ecef;
-                    border-radius: 6px;
-                    padding: 12px 16px;
-                    font-size: 0.95rem;
-                    font-weight: 500;
-                    color: #2d3748;
-                    display: flex;
-                    align-items: center;
-                    min-height: 45px;
-                `
+                label: `display: block; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #8898aa; margin-bottom: 6px; letter-spacing: 0.5px;`,
+                valueBox: `background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 12px 16px; font-size: 0.95rem; font-weight: 500; color: #2d3748; display: flex; align-items: center; min-height: 45px;`
             };
 
             const accrualsHtml = this._generateAccrualsHtml(accruals);
             const docsContent = this._generateDocsHtml(task);
+            const officialDue = task.officialDueDate || task.official_due_date;
+            const createdAtStr = task.createdAt || task.created_at;
 
             const html = `
             <div style="${styles.container}">
@@ -216,7 +144,7 @@ export class TaskDetailManager {
                         <h5 class="mb-1" style="font-weight: 700; color: #2d3748;">${task.title || 'Başlıksız Görev'}</h5>
                         <div class="text-muted small">
                             <span class="mr-3"><i class="fas fa-hashtag mr-1"></i>${task.id}</span>
-                            <span><i class="far fa-clock mr-1"></i>${this._formatDate(task.createdAt)}</span>
+                            <span><i class="far fa-clock mr-1"></i>${this._formatDate(createdAtStr)}</span>
                         </div>
                     </div>
                     <span class="badge badge-pill px-3 py-2" style="font-size: 0.85rem; background-color: #1e3c72; color: #fff;">
@@ -225,11 +153,8 @@ export class TaskDetailManager {
                 </div>
 
                 <div style="${styles.card}">
-                    <div style="${styles.cardHeader}">
-                        <i class="fas fa-star mr-2 text-warning"></i> TEMEL BİLGİLER
-                    </div>
+                    <div style="${styles.cardHeader}"><i class="fas fa-star mr-2 text-warning"></i> TEMEL BİLGİLER</div>
                     <div style="${styles.cardBody}">
-                        
                         <div class="mb-4">
                             <label style="${styles.label}">İLGİLİ TARAF / MÜVEKKİL</label>
                             <div style="${styles.valueBox} border-left: 4px solid #1e3c72;">
@@ -237,7 +162,6 @@ export class TaskDetailManager {
                                  <span style="font-size: 1.1rem; font-weight: 600;">${relatedPartyTxt}</span>
                             </div>
                         </div>
-
                         <div>
                             <label style="${styles.label}">İLGİLİ VARLIK (DOSYA)</label>
                             <div style="${styles.valueBox}">
@@ -245,14 +169,11 @@ export class TaskDetailManager {
                                  <span style="font-size: 1rem; font-weight: 500;">${relatedRecordTxt}</span>
                             </div>
                         </div>
-
                     </div>
                 </div>
 
                 <div style="${styles.card}">
-                    <div style="${styles.cardHeader}">
-                        <i class="fas fa-list-alt mr-2 text-muted"></i> GÖREV DETAYLARI
-                    </div>
+                    <div style="${styles.cardHeader}"><i class="fas fa-list-alt mr-2 text-muted"></i> GÖREV DETAYLARI</div>
                     <div style="${styles.cardBody}">
                         <div class="row">
                             <div class="col-md-4 mb-3">
@@ -261,21 +182,18 @@ export class TaskDetailManager {
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label style="${styles.label}">ATANAN KİŞİ</label>
-                                <div style="${styles.valueBox}">
-                                    <i class="fas fa-user-circle text-muted mr-2"></i>${assignedName}
-                                </div>
+                                <div style="${styles.valueBox}"><i class="fas fa-user-circle text-muted mr-2"></i>${assignedName}</div>
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label style="${styles.label}">RESMİ BİTİŞ</label>
                                 <div style="${styles.valueBox}">
                                     <i class="far fa-calendar-alt text-muted mr-2"></i>
-                                    <span class="${task.officialDueDate ? 'text-danger font-weight-bold' : 'text-muted'}">
-                                        ${this._formatDate(task.officialDueDate)}
+                                    <span class="${officialDue ? 'text-danger font-weight-bold' : 'text-muted'}">
+                                        ${this._formatDate(officialDue)}
                                     </span>
                                 </div>
                             </div>
                         </div>
-
                         <div>
                             <label style="${styles.label}">AÇIKLAMA</label>
                             <div style="${styles.valueBox} height: auto; align-items: flex-start; min-height: 60px; white-space: pre-wrap; line-height: 1.6; color: #525f7f;">${task.description || 'Açıklama girilmemiş.'}</div>
@@ -284,23 +202,14 @@ export class TaskDetailManager {
                 </div>
 
                 <div style="${styles.card}">
-                    <div style="${styles.cardHeader}">
-                        <i class="fas fa-paperclip mr-2 text-muted"></i> BELGELER
-                    </div>
-                    <div style="${styles.cardBody}">
-                        ${docsContent}
-                    </div>
+                    <div style="${styles.cardHeader}"><i class="fas fa-paperclip mr-2 text-muted"></i> BELGELER</div>
+                    <div style="${styles.cardBody}">${docsContent}</div>
                 </div>
 
                 <div style="${styles.card} margin-bottom: 0;">
-                    <div style="${styles.cardHeader}">
-                        <i class="fas fa-coins mr-2 text-muted"></i> TAHAKKUKLAR
-                    </div>
-                    <div style="${styles.cardBody}">
-                        ${accrualsHtml}
-                    </div>
+                    <div style="${styles.cardHeader}"><i class="fas fa-coins mr-2 text-muted"></i> TAHAKKUKLAR</div>
+                    <div style="${styles.cardBody}">${accrualsHtml}</div>
                 </div>
-
             </div>`;
 
             this.container.innerHTML = html;
@@ -312,16 +221,21 @@ export class TaskDetailManager {
     }
 
     // =========================================================================
-    //  ID 66: GÖRSEL MAİL DEĞERLENDİRME EDİTÖRÜ (Düzeltildi)
+    //  ID 66: GÖRSEL MAİL DEĞERLENDİRME EDİTÖRÜ (Supabase Uyumlu)
     // =========================================================================
     async _renderEvaluationEditor(task) {
         this.showLoading();
         try {
-            const mailSnap = await getDoc(doc(db, "mail_notifications", task.mail_notification_id));
-            if (!mailSnap.exists()) throw new Error("İlişkili mail taslağı bulunamadı.");
-            const mail = mailSnap.data();
+            const mailId = task.mail_notification_id || task.details?.mail_notification_id;
+            if (!mailId) throw new Error("Göreve bağlı mail ID'si bulunamadı.");
 
-            // --- EK DOSYALARI HAZIRLA (Aynen Korundu) ---
+            const { data: mailRecord, error } = await supabase.from("mail_notifications").select("*").eq("id", mailId).single();
+            if (error || !mailRecord) throw new Error("İlişkili mail taslağı bulunamadı.");
+            
+            // Tüm esnek detayları birleştir
+            const mail = { ...mailRecord.details, ...mailRecord };
+
+            // --- EK DOSYALARI HAZIRLA ---
             const attachments = [];
             if (mail.epatsAttachment && (mail.epatsAttachment.downloadURL || mail.epatsAttachment.url)) {
                 attachments.push({ name: mail.epatsAttachment.fileName || 'EPATS Belgesi.pdf', url: mail.epatsAttachment.downloadURL || mail.epatsAttachment.url, icon: 'fa-file-pdf', color: 'text-danger', label: 'RESMİ EPATS BELGESİ' });
@@ -359,7 +273,7 @@ export class TaskDetailManager {
                 attachmentsHtml = `<div class="alert alert-light border text-muted small mb-4"><i class="fas fa-info-circle mr-2"></i>Ekli dosya yok.</div>`;
             }
 
-            // --- HTML ÇIKTISI (YENİ BUTONLAR İLE) ---
+            // --- HTML ÇIKTISI ---
             this.container.innerHTML = `
                 <div class="card shadow-sm border-0">
                     <div class="card-header bg-white border-bottom py-3">
@@ -370,17 +284,14 @@ export class TaskDetailManager {
                     </div>
                     <div class="card-body bg-white p-4">
                         ${attachmentsHtml}
-
                         <div class="mb-4">
                             <label class="d-block small font-weight-bold text-muted text-uppercase mb-2">KONU</label>
-                            <input type="text" class="form-control font-weight-bold text-dark" value="${mail.subject}" readonly style="background-color: #f8f9fa;">
+                            <input type="text" class="form-control font-weight-bold text-dark" value="${mail.subject || 'Konu Yok'}" readonly style="background-color: #f8f9fa;">
                         </div>
-
                         <div class="mb-4">
                              <label class="d-block small font-weight-bold text-muted text-uppercase mb-2">İÇERİK DÜZENLEME</label>
-                             <div id="eval-body-editor" contenteditable="true" class="form-control p-3" style="min-height: 400px; height: auto; border: 1px solid #ced4da; line-height: 1.6;">${mail.body}</div>
+                             <div id="eval-body-editor" contenteditable="true" class="form-control p-3" style="min-height: 400px; height: auto; border: 1px solid #ced4da; line-height: 1.6;">${mail.body || ''}</div>
                         </div>
-
                         <div class="d-flex justify-content-end pt-3 border-top">
                             <button id="btn-save-draft" class="btn btn-secondary px-4 mr-2 shadow-sm">
                                 <i class="fas fa-save mr-2"></i>Kaydet (Taslak)
@@ -393,9 +304,8 @@ export class TaskDetailManager {
                 </div>
             `;
             
-            // İki ayrı butona ayrı event listener ekliyoruz
-            document.getElementById('btn-save-draft').onclick = () => this._saveEvaluationDraft(task);
-            document.getElementById('btn-submit-final').onclick = () => this._submitEvaluationFinal(task);
+            document.getElementById('btn-save-draft').onclick = () => this._saveEvaluationDraft(task, mailId);
+            document.getElementById('btn-submit-final').onclick = () => this._submitEvaluationFinal(task, mailId);
         
         } catch (e) { 
             console.error("Evaluation render error:", e);
@@ -403,8 +313,7 @@ export class TaskDetailManager {
         }
     }
 
-    // SADECE KAYDET (Taslak olarak kalır, sayfa yenilenmez)
-    async _saveEvaluationDraft(task) {
+    async _saveEvaluationDraft(task, mailId) {
         const newBody = document.getElementById('eval-body-editor').innerHTML;
         const btn = document.getElementById('btn-save-draft');
         const originalText = btn.innerHTML;
@@ -413,18 +322,15 @@ export class TaskDetailManager {
             btn.disabled = true;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Kaydediliyor...';
 
-            // Sadece Mail Notification'ı güncelle, statüleri değiştirme
-            await updateDoc(doc(db, "mail_notifications", task.mail_notification_id), {
+            await supabase.from("mail_notifications").update({
                 body: newBody,
-                updatedAt: Timestamp.now()
-            });
+                updated_at: new Date().toISOString()
+            }).eq("id", mailId);
 
-            // Kullanıcıya bildirim ver (Toast veya Alert yerine buton üzerinde gösterim daha şık)
             btn.innerHTML = '<i class="fas fa-check mr-2"></i>Kaydedildi';
             btn.classList.remove('btn-secondary');
             btn.classList.add('btn-info');
 
-            // 2 saniye sonra butonu eski haline getir
             setTimeout(() => {
                 btn.disabled = false;
                 btn.innerHTML = originalText;
@@ -439,8 +345,7 @@ export class TaskDetailManager {
         }
     }
 
-    // KAYDET VE BİTİR (İşi tamamlar, sayfayı yeniler)
-    async _submitEvaluationFinal(task) {
+    async _submitEvaluationFinal(task, mailId) {
         const newBody = document.getElementById('eval-body-editor').innerHTML;
         const btn = document.getElementById('btn-submit-final');
         
@@ -450,21 +355,19 @@ export class TaskDetailManager {
             btn.disabled = true;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>İşleniyor...';
 
-            // 1. Mail bildirimini onaya gönder statüsüne çek
-            await updateDoc(doc(db, "mail_notifications", task.mail_notification_id), {
+            await supabase.from("mail_notifications").update({
                 body: newBody,
-                status: "awaiting_client_approval", // Onay bekliyor statüsü
-                updatedAt: Timestamp.now()
-            });
+                status: "awaiting_client_approval",
+                updated_at: new Date().toISOString()
+            }).eq("id", mailId);
 
-            // 2. Task'ı tamamlandı yap
-            await updateDoc(doc(db, "tasks", task.id), {
+            await supabase.from("tasks").update({
                 status: "completed",
-                updatedAt: Timestamp.now()
-            });
+                updated_at: new Date().toISOString()
+            }).eq("id", task.id);
 
             alert("İşlem başarıyla tamamlandı. Mail onaya sunuldu.");
-            window.location.reload(); // Listeyi yenilemek için sayfayı tazele
+            window.location.reload(); 
 
         } catch (e) {
             alert("Güncelleme hatası: " + e.message);
@@ -474,11 +377,12 @@ export class TaskDetailManager {
     }
 
     // =========================================================================
-    //  YARDIMCI METODLAR (SADE)
+    //  YARDIMCI METODLAR
     // =========================================================================
     _generateDocsHtml(task) {
         let items = [];
-        const epatsDoc = task.details?.epatsDocument;
+        const d = task.details || {};
+        const epatsDoc = d.epatsDocument || task.epatsDocument;
         const epatsUrl = epatsDoc?.downloadURL || epatsDoc?.url;
 
         if (epatsDoc && epatsUrl) {
@@ -488,7 +392,7 @@ export class TaskDetailManager {
                         <i class="fas fa-file-pdf text-danger fa-lg mr-3"></i>
                         <div class="text-truncate">
                             <span class="d-block text-dark font-weight-bold" style="font-size: 0.9rem;">EPATS Belgesi</span>
-                            <span class="d-block text-muted small text-truncate">${epatsDoc.name}</span>
+                            <span class="d-block text-muted small text-truncate">${epatsDoc.name || 'Belge'}</span>
                         </div>
                     </div>
                     <i class="fas fa-external-link-alt text-muted small"></i>
@@ -502,8 +406,7 @@ export class TaskDetailManager {
             if (Array.isArray(source)) allFiles.push(...source);
             else if (typeof source === 'object') allFiles.push(...Object.values(source));
         };
-        if (task.details) { addFiles(task.details.documents); addFiles(task.details.files); }
-        addFiles(task.files); addFiles(task.documents);
+        addFiles(d.documents); addFiles(d.files); addFiles(task.files); addFiles(task.documents);
 
         const seenUrls = new Set();
         if (epatsUrl) seenUrls.add(epatsUrl);
@@ -533,8 +436,9 @@ export class TaskDetailManager {
     _generateAccrualsHtml(accruals) {
         if (!accruals || accruals.length === 0) return `<div class="text-muted small font-italic p-2">Bağlı tahakkuk bulunmuyor.</div>`;
         return accruals.map(acc => {
-            let statusColor = '#f39c12'; // Default warning
+            let statusColor = '#f39c12'; 
             let statusText = 'Ödenmedi';
+            const accDetails = acc.details || acc;
             
             if(acc.status === 'paid') { statusColor = '#27ae60'; statusText = 'Ödendi'; }
             else if(acc.status === 'cancelled') { statusColor = '#95a5a6'; statusText = 'İptal'; }
@@ -542,19 +446,20 @@ export class TaskDetailManager {
             return `
             <div class="d-flex justify-content-between align-items-center p-3 mb-2 rounded bg-white border">
                 <div class="d-flex align-items-center">
-                    <span class="badge badge-light border mr-3">#${acc.id}</span>
-                    <span class="font-weight-bold text-dark" style="font-size: 0.95rem;">${this._formatCurrency(acc.totalAmount, acc.totalAmountCurrency)}</span>
+                    <span class="badge badge-light border mr-3">#${acc.id.substring(0,8)}</span>
+                    <span class="font-weight-bold text-dark" style="font-size: 0.95rem;">${this._formatCurrency(accDetails.totalAmount || acc.official_fee_amount, accDetails.totalAmountCurrency || 'TRY')}</span>
                 </div>
                 <div class="text-right">
                     <span class="badge badge-pill text-white" style="background-color: ${statusColor}; font-size: 0.75rem;">${statusText}</span>
-                    <div class="text-muted small mt-1">${this._formatDate(acc.createdAt)}</div>
+                    <div class="text-muted small mt-1">${this._formatDate(acc.created_at || acc.createdAt)}</div>
                 </div>
             </div>`;
         }).join('');
     }
 
     _formatDate(dateVal) {
-        return formatToTRDate(dateVal); // utils'deki fonksiyonu kullanır
+        if (!dateVal) return '-';
+        return formatToTRDate(new Date(dateVal)); 
     }
 
     _formatCurrency(amount, currency) {
@@ -562,23 +467,15 @@ export class TaskDetailManager {
         return new Intl.NumberFormat('tr-TR', { style: 'currency', currency: currency || 'TRY' }).format(amount || 0);
     }
 
-    /**
-     * Marka Başvuru Özetini Gösteren Metot
-     */
     showApplicationSummary(task) {
         const container = document.getElementById('applicationSummaryContent');
         const goToBtn = document.getElementById('btnGoToTaskUpdate');
         
-        // "İşe Git" butonunun linkini ayarla
-        if (goToBtn) {
-            goToBtn.href = `task-update.html?id=${task.id}`;
-        }
-
+        if (goToBtn) goToBtn.href = `task-update.html?id=${task.id}`;
         if (!container) return;
 
         const d = task.details || {}; 
 
-        // --- VERİLERİ HAZIRLA ---
         const brandName = d.brandName || d.brandExampleText || '-'; 
         const brandType = d.brandType || '-';
         const brandCategory = d.brandCategory || '-';
@@ -589,7 +486,6 @@ export class TaskDetailManager {
             origin += ` (${d.countrySelect})`;
         }
 
-        // Sınıflar (Liste Görünümü)
         let classHtml = '<span class="text-muted font-italic">Seçim Yok</span>';
         if (d.niceClasses && Array.isArray(d.niceClasses) && d.niceClasses.length > 0) {
             const listItems = d.niceClasses.map(c => {
@@ -602,7 +498,6 @@ export class TaskDetailManager {
             classHtml += `<div class="mt-2 p-2 alert alert-warning small border-warning"><i class="fas fa-exclamation-circle mr-1"></i><strong>Özel Tanım:</strong> ${d.customClassDefinition}</div>`;
         }
 
-        // Başvuru Sahipleri (Etiket Görünümü)
         let applicantsHtml = '<span class="text-muted font-italic">Seçilmedi</span>';
         if (d.selectedApplicants && d.selectedApplicants.length > 0) {
             applicantsHtml = d.selectedApplicants.map(a => 
@@ -610,7 +505,6 @@ export class TaskDetailManager {
             ).join(' ');
         }
 
-        // Rüçhanlar
         let priorityHtml = '<span class="text-muted font-italic">Yok</span>';
         if (d.priorities && d.priorities.length > 0) {
             priorityHtml = '<ul class="list-group list-group-flush small border rounded">' + 
@@ -623,14 +517,14 @@ export class TaskDetailManager {
                 '</ul>';
         }
 
-        // Görsel Alanı
         let imageHtml = `
             <div class="text-center py-5 text-muted bg-light rounded border border-light">
                 <i class="fas fa-image fa-3x mb-2 text-secondary"></i><br>Görsel Yok
             </div>`;
             
-        if (task.documents && task.documents.length > 0) {
-            const imgDoc = task.documents.find(doc => doc.name.match(/\.(jpg|jpeg|png|gif)$/i));
+        const allDocs = [...(d.documents || []), ...(d.files || []), ...(task.documents || []), ...(task.files || [])];
+        if (allDocs.length > 0) {
+            const imgDoc = allDocs.find(doc => doc.name && doc.name.match(/\.(jpg|jpeg|png|gif)$/i));
             if (imgDoc) {
                 imageHtml = `
                     <div class="card shadow-sm border-0">
@@ -647,7 +541,6 @@ export class TaskDetailManager {
             }
         }
 
-        // --- HTML ŞABLONU (GRID YAPISI) ---
         const html = `
             <div class="row">
                 <div class="col-lg-8">
@@ -673,7 +566,6 @@ export class TaskDetailManager {
 
                 <div class="col-lg-4">
                     ${imageHtml}
-                    
                     <div class="alert alert-info mt-3 shadow-sm border-info" style="font-size: 0.9em;">
                         <div class="d-flex">
                             <i class="fas fa-info-circle fa-2x mr-3 mt-1"></i>
@@ -689,7 +581,6 @@ export class TaskDetailManager {
         
         container.innerHTML = html;
 
-        // Modalı Aç (jQuery ile)
         if (window.$) {
             $('#applicationSummaryModal').modal('show');
         }
