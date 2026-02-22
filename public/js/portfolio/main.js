@@ -1,7 +1,6 @@
-// public/js/portfolio/main.js
 import { PortfolioDataManager } from './PortfolioDataManager.js';
 import { PortfolioRenderer } from './PortfolioRenderer.js';
-import { auth, monitoringService, waitForAuthUser, redirectOnLogout } from '../../firebase-config.js';
+import { authService, monitoringService, waitForAuthUser, redirectOnLogout } from '../../supabase-config.js';
 import { loadSharedLayout } from '../layout-loader.js';
 import { showNotification } from '../../utils.js';
 import Pagination from '../pagination.js';
