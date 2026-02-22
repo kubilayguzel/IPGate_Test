@@ -1,9 +1,8 @@
 // public/js/portfolio/PortfolioDetailManager.js
 import { TransactionHelper } from './TransactionHelper.js';
 import { loadSharedLayout } from '../layout-loader.js';
-import { ipRecordsService, transactionTypeService, db, storage, waitForAuthUser, redirectOnLogout } from '../../firebase-config.js';
-import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
+// 🔥 Firebase kütüphaneleri silindi, yerine Supabase servisleri eklendi!
+import { ipRecordsService, transactionTypeService, personService, commonService, waitForAuthUser, redirectOnLogout } from '../../supabase-config.js';
 import { STATUSES } from '../../utils.js';
 import '../simple-loading.js';
 
@@ -14,7 +13,6 @@ export class PortfolioDetailManager {
         this.transactionTypesMap = new Map();
         this.countriesMap = new Map();
         
-        // SimpleLoading Panelini Singleton üzerinden yakala
         this.loader = window.SimpleLoadingController || (window.SimpleLoading ? new window.SimpleLoading() : null);
 
         this.initElements();
@@ -34,30 +32,28 @@ export class PortfolioDetailManager {
             applicantName: document.getElementById('applicantName'),
             applicantAddress: document.getElementById('applicantAddress'),
             tpQueryBtn: document.getElementById('tpQueryBtn'),
-            loadingStatic: document.getElementById('loading'), // "Yükleniyor..." yazan div
+            loadingStatic: document.getElementById('loading'),
             detailRoot: document.getElementById('detail-root')
         };
     }
 
     async init() {
         try {
-            // Önce statik loading yazısını gizle ve profesyonel loader'ı aç
             this.toggleLoading(true);
-            
             await waitForAuthUser(); 
 
-            // HIZLI YÜKLEME: Kayıt, Ülkeler ve İşlem Tiplerini paralel çek
-            const [recordSnap, countriesSnap, txTypesRes] = await Promise.all([
-                getDoc(doc(db, "ipRecords", this.recordId)),
-                getDoc(doc(db, 'common', 'countries')),
+            // 🔥 YENİ: Firebase yerine Supabase Servisleri ile paralel çekim
+            const [recordRes, countriesRes, txTypesRes] = await Promise.all([
+                ipRecordsService.getRecordById(this.recordId),
+                commonService.getCountries(),
                 transactionTypeService.getTransactionTypes().catch(() => ({ success: false, data: [] }))
             ]);
 
-            if (!recordSnap.exists()) throw new Error("Kayıt bulunamadı.");
+            if (!recordRes || !recordRes.success || !recordRes.data) throw new Error("Kayıt bulunamadı.");
 
             // Ülke ve İşlem Tipi haritalarını doldur
-            if (countriesSnap.exists()) {
-                countriesSnap.data().list?.forEach(c => this.countriesMap.set(String(c.id || c.code), c.name));
+            if (countriesRes.success && Array.isArray(countriesRes.data)) {
+                countriesRes.data.forEach(c => this.countriesMap.set(String(c.code), c.name));
             }
             if (txTypesRes.success && Array.isArray(txTypesRes.data)) {
                 txTypesRes.data.forEach(t => {
@@ -66,9 +62,8 @@ export class PortfolioDetailManager {
                 });
             }
 
-            this.currentRecord = { id: recordSnap.id, ...recordSnap.data() };
+            this.currentRecord = recordRes.data;
             
-            // Tüm render işlemlerini başlat
             await this.renderAll();
 
             if (typeof loadSharedLayout === 'function') loadSharedLayout();
@@ -88,8 +83,6 @@ export class PortfolioDetailManager {
         this.renderGoodsList();
         this.renderDocuments();
         
-        // "Ağır işleri" artık arka planda değil, paralel olarak ancak loading ekranı 
-        // kapanmadan BİTMESİNİ BEKLEYEREK çalıştırıyoruz.
         await Promise.all([
             this.renderApplicants(),
             this.renderTransactions()
@@ -100,31 +93,29 @@ export class PortfolioDetailManager {
         const r = this.currentRecord;
         if (!r) return;
 
-        this.elements.heroTitle.textContent = r.trademarkName || r.brandText || r.title || '-';
+        this.elements.heroTitle.textContent = r.title || r.brandText || r.trademarkName || '-';
         
-        // Marka örneği olmasa da kart her zaman görünür (İstediğiniz güncelleme)
         if (this.elements.heroCard) {
             this.elements.heroCard.classList.remove('d-none');
             this.elements.heroCard.style.display = 'flex';
         }
 
-        const imgSrc = r.brandImageUrl || r.brandImage || r.details?.brandInfo?.brandImage;
+        const imgSrc = r.brandImageUrl || r.brandImage || r.brandInfo?.brandImage;
         const imgWrap = this.elements.brandImage?.closest('.hero-img-wrap');
         if (imgSrc && this.elements.brandImage) {
             this.elements.brandImage.src = imgSrc;
             if (imgWrap) imgWrap.style.display = 'block';
         } else {
-            if (imgWrap) imgWrap.style.display = 'none'; // Görsel yoksa alanı kapat, bilgiler genişlesin
+            if (imgWrap) imgWrap.style.display = 'none'; 
         }
 
         const isTP = this.checkIfTurkPatentOrigin(r);
         const countryName = this.countriesMap.get(String(r.country)) || r.country || '-';
-        const regNo = r.registrationNumber || r.internationalRegNumber || r.wipoIrNumber || '-';
+        const regNo = r.registrationNumber || r.internationalRegNumber || r.wipoIR || '-';
 
-        // Sınıf metni
         const gsbc = r.goodsAndServicesByClass;
         let classList = Array.isArray(gsbc) ? gsbc : (gsbc ? Object.values(gsbc) : []);
-        let classesStr = classList.length > 0 ? classList.map(c => c.classNo).join(', ') : (r.classes || '-');
+        let classesStr = classList.length > 0 ? classList.map(c => c.classNo).join(', ') : (r.niceClasses ? r.niceClasses.join(', ') : '-');
 
         if (this.elements.heroKv) {
             this.elements.heroKv.innerHTML = `
@@ -213,7 +204,6 @@ export class PortfolioDetailManager {
             const children = childrenMap[parent.id] || [];
             const pId = this.safeDomId(`txdocs-${parent.id}`);
 
-            // Direkt PDF'leri bul
             const pDirectDocs = TransactionHelper.getDirectDocuments(parent);
             const pIcons = pDirectDocs.map((d, i) => this.createDocIcon(d, i === 0)).join(' ');
 
@@ -305,23 +295,26 @@ export class PortfolioDetailManager {
         }
     }
 
-    // --- DİĞER METOTLAR (Orijinal ile aynı) ---
     async renderApplicants() {
         const r = this.currentRecord;
         if (!this.elements.applicantName) return;
         let names = [], addresses = [];
+        
         if (Array.isArray(r.applicants) && r.applicants.length > 0) {
             const resolved = await Promise.all(r.applicants.map(async (app) => {
                 const pId = typeof app === 'string' ? app : app.id;
                 if (!pId) return { name: app.name || '-' };
                 try {
-                    const snap = await getDoc(doc(db, 'persons', pId));
-                    return snap.exists() ? { name: snap.data().name, address: snap.data().address } : { name: app.name || '-' };
+                    // 🔥 YENİ: Firebase db yerine Supabase personService kullanılıyor
+                    const res = await personService.getPersonById(pId);
+                    return (res.success && res.data) ? { name: res.data.name, address: res.data.address } : { name: app.name || '-' };
                 } catch { return { name: app.name || '-' }; }
             }));
-            names = resolved.map(a => a.name); addresses = resolved.map(a => a.address).filter(Boolean);
+            names = resolved.map(a => a.name); 
+            addresses = resolved.map(a => a.address).filter(Boolean);
         } else {
-            names = [r.applicantName || r.clientName || '-']; addresses = [r.applicantAddress || '-'];
+            names = [r.applicantName || r.clientName || r.ownerName || '-']; 
+            addresses = [r.applicantAddress || '-'];
         }
         this.elements.applicantName.innerHTML = names.join('<br>');
         if (this.elements.applicantAddress) this.elements.applicantAddress.innerHTML = addresses.join('<br>') || '-';
@@ -331,8 +324,8 @@ export class PortfolioDetailManager {
         const docs = this.currentRecord.documents || [];
         if (this.elements.docsTbody) {
             this.elements.docsTbody.innerHTML = docs.length ? docs.map(d => `
-                <tr><td>${d.name}</td><td>${d.documentDesignation || '-'}</td><td>${this.formatDate(d.uploadedAt)}</td>
-                <td class="text-right"><i class="fas fa-eye text-primary cursor-pointer" onclick="window.open('${d.url}','_blank')"></i></td></tr>`).join('') : '<tr><td colspan="4" class="text-center">Belge yok.</td></tr>';
+                <tr><td>${d.name || d.fileName}</td><td>${d.documentDesignation || '-'}</td><td>${this.formatDate(d.uploadedAt || d.date)}</td>
+                <td class="text-right"><i class="fas fa-eye text-primary cursor-pointer" onclick="window.open('${d.url || d.fileUrl}','_blank')"></i></td></tr>`).join('') : '<tr><td colspan="4" class="text-center">Belge yok.</td></tr>';
         }
     }
 
@@ -352,9 +345,12 @@ export class PortfolioDetailManager {
     }
 
     formatDate(d, withTime = false) {
-        if (!d) return '-';
+        if (!d || d === '-') return '-';
         try {
+            // Eğer JSON'dan saniye objesi gelirse
+            if (typeof d === 'object' && d._seconds) d = d._seconds * 1000;
             const dateObj = d.toDate ? d.toDate() : new Date(d);
+            if (isNaN(dateObj.getTime())) return '-';
             return dateObj.toLocaleDateString('tr-TR', withTime ? { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit', year:'numeric'} : {});
         } catch { return String(d); }
     }
