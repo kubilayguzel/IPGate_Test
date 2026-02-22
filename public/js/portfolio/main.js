@@ -643,12 +643,31 @@ class PortfolioController {
         document.getElementById('refreshPortfolioBtn')?.addEventListener('click', async (e) => {
             const btn = e.currentTarget;
             const icon = btn.querySelector('i');
-            icon.classList.add('fa-spin'); // İkonu döndür
             
-            // forceRefresh parametresini true göndererek cache'i atlıyoruz
-            await this.loadData(true); // Veya yöneticinizdeki yükleme fonksiyonunun adı neyse
+            // 1. İkonu döndürmeye başla
+            icon.classList.add('fa-spin'); 
             
-            icon.classList.remove('fa-spin');
+            try {
+                // 2. IndexedDB'deki o sınırsız hafızayı zorla sil! (Böylece sistem mecburen Supabase'e gidecek)
+                if (window.localCache) {
+                    await window.localCache.remove('ip_records_cache');
+                } else {
+                    // Modül içinden çağrılıyorsa import edilmiş localCache'i kullan
+                    await localCache.remove('ip_records_cache');
+                }
+
+                // 3. Sizin kendi sayfa yükleme (render) fonksiyonunuzu baştan tetikle
+                if (typeof this.init === 'function') {
+                    await this.init(); 
+                } else {
+                    // Eğer class yapısından dolayı init'i bulamazsa, sayfayı tertemiz yenile (En garantili yol)
+                    window.location.reload();
+                }
+            } catch (err) {
+                console.error("Yenileme hatası:", err);
+            } finally {
+                icon.classList.remove('fa-spin');
+            }
         });
     }
 
