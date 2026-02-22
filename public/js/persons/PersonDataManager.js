@@ -1,35 +1,61 @@
 // public/js/persons/PersonDataManager.js
-import { db, storage, personService } from '../../firebase-config.js';
-import { collection, doc, getDoc, getDocs, query, where, deleteDoc, updateDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
+import { personService, commonService, supabase } from '../../supabase-config.js';
 
 export class PersonDataManager {
     async fetchPersons() { return await personService.getPersons(); }
     
     async getCountries() {
-        const snap = await getDoc(doc(db, 'common', 'countries'));
-        return snap.exists() ? (snap.data().list || snap.data().countries || []) : [];
+        const res = await commonService.getCountries();
+        return res.success ? res.data : [];
     }
 
     async getProvinces(countryCode) {
         if (!/^(TR|TUR)$/i.test(countryCode)) return [];
-        for (const docId of ['provinces_TR', 'cities_TR', 'turkey_provinces']) {
-            const snap = await getDoc(doc(db, 'common', docId));
-            if (snap.exists()) return snap.data().list || snap.data().provinces || [];
+        // Türkiye illerini Supabase common_data'dan çekiyoruz
+        const { data, error } = await supabase.from('common_data').select('data').in('id', ['provinces_TR', 'cities_TR', 'turkey_provinces']);
+        if (data && data.length > 0) {
+            for(const row of data) {
+                if(row.data.list) return row.data.list;
+                if(row.data.provinces) return row.data.provinces;
+            }
         }
         return [];
     }
 
     async getRelatedPersons(personId) {
-        const q = query(collection(db, 'personsRelated'), where('personId', '==', personId));
-        const snap = await getDocs(q);
-        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        return await personService.getRelatedPersons(personId);
     }
 
+    // 🚀 DOSYA YÜKLEME: Artık %100 Supabase Storage kullanıyor!
     async uploadDocument(file) {
-        const path = `person_documents/${Date.now()}_${file.name}`;
-        const sRef = ref(storage, path);
-        await uploadBytes(sRef, file);
-        return await getDownloadURL(sRef);
+        try {
+            // Dosya adındaki boşluk ve Türkçe karakterleri temizleyelim ki URL sorun çıkarmasın
+            const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            const path = `${Date.now()}_${cleanFileName}`;
+
+            // 1. Supabase Storage'a Yükle
+            const { data, error } = await supabase.storage
+                .from('person_documents')
+                .upload(path, file, {
+                    cacheControl: '3600',
+                    upsert: false
+                });
+
+            if (error) {
+                console.error("Supabase Storage Yükleme Hatası:", error);
+                throw error;
+            }
+
+            // 2. Yüklenen dosyanın Public (Açık) URL'ini al
+            const { data: urlData } = supabase.storage
+                .from('person_documents')
+                .getPublicUrl(path);
+
+            return urlData.publicUrl;
+
+        } catch (error) {
+            console.error("Doküman yüklenirken hata oluştu:", error);
+            throw error;
+        }
     }
 }
