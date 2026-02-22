@@ -1,7 +1,6 @@
 import { PersonDataManager } from '../persons/PersonDataManager.js';
-import { personService, db } from '../../firebase-config.js';
+import { personService } from '../../supabase-config.js';
 import { showNotification } from '../../utils.js';
-import { collection, doc, writeBatch, deleteDoc, updateDoc, getDocs, query, where } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const $ = window.jQuery || window.$;
 
@@ -436,12 +435,14 @@ export class PersonModalManager {
                 updatedAt: new Date().toISOString()
             };
 
-            // 3. Firestore Kayıt (Service üzerinden)
+            // 3. Supabase Kayıt (Service üzerinden)
             let savedId = this.currentPersonId;
             if (this.isEdit) {
-                await personService.updatePerson(this.currentPersonId, personData);
+                const res = await personService.updatePerson(this.currentPersonId, personData);
+                if (!res.success) throw new Error("Supabase Güncelleme Hatası: " + res.error);
             } else {
                 const res = await personService.addPerson(personData);
+                if (!res.success) throw new Error("Supabase Ekleme Hatası: " + res.error);
                 savedId = res.data.id;
             }
 
@@ -903,49 +904,18 @@ resetRelatedForm() {
     }
 
     async saveRelatedToDb(personId) {
-        const batch = writeBatch(db);
-        let hasOperations = false;
-
-        // 1. YENİ EKLENENLERİ KAYDET (Create)
-        if (this.relatedDraft.length > 0) {
-            this.relatedDraft.forEach(r => {
-                const newRef = doc(collection(db, 'personsRelated'));
-                batch.set(newRef, { ...r, personId, createdAt: Date.now() });
-                hasOperations = true;
-            });
+        try {
+            await personService.saveRelatedPersons(
+                personId, 
+                this.relatedDraft, 
+                this.relatedLoaded, 
+                this.relatedToDelete
+            );
+            // Temizlik
+            this.relatedDraft = [];
+            this.relatedToDelete = [];
+        } catch (error) {
+            console.error("Related person save error:", error);
         }
-
-        // 2. MEVCUT KAYITLARI GÜNCELLE (Update) -- EKSİK OLAN KISIM BUYDU --
-        if (this.relatedLoaded.length > 0) {
-            this.relatedLoaded.forEach(r => {
-                // Sadece ID'si olan (veritabanından gelmiş) kayıtları güncelle
-                if (r.id) {
-                    const ref = doc(db, 'personsRelated', r.id);
-                    // ID alanını verinin içinden çıkarıp saf veriyi güncelle
-                    const { id, ...dataToUpdate } = r; 
-                    batch.update(ref, dataToUpdate);
-                    hasOperations = true;
-                }
-            });
-        }
-
-        // 3. SİLİNECEKLERİ SİL (Delete) -- YENİ EKLENEN GÜVENLİ SİLME --
-        if (this.relatedToDelete.length > 0) {
-            this.relatedToDelete.forEach(delId => {
-                const ref = doc(db, 'personsRelated', delId);
-                batch.delete(ref);
-                hasOperations = true;
-            });
-        }
-
-        // Eğer yapılacak işlem varsa batch'i çalıştır
-        if (hasOperations) {
-            await batch.commit();
-        }
-        
-        // Temizlik
-        this.relatedDraft = [];
-        this.relatedToDelete = [];
-        // relatedLoaded'ı temizlemiyoruz çünkü modal kapanmadan tekrar işlem yapılabilir
     }
 }
