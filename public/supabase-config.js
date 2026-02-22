@@ -7,6 +7,53 @@ const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 export const supabase = createClient(supabaseUrl, supabaseKey);
 console.log('🚀 Supabase Motoru Başarıyla Çalıştı!');
 
+// --- YENİ: Sınırsız Önbellek (IndexedDB) Motoru ---
+export const localCache = {
+    async get(key) {
+        return new Promise((resolve) => {
+            const req = indexedDB.open('IPGateDB', 1);
+            req.onupgradeneeded = (e) => e.target.result.createObjectStore('store');
+            req.onsuccess = (e) => {
+                try {
+                    const db = e.target.result;
+                    const tx = db.transaction('store', 'readonly');
+                    const req2 = tx.objectStore('store').get(key);
+                    req2.onsuccess = () => resolve(req2.result ? JSON.parse(req2.result) : null);
+                    req2.onerror = () => resolve(null);
+                } catch(err) { resolve(null); }
+            };
+            req.onerror = () => resolve(null);
+        });
+    },
+    async set(key, value) {
+        return new Promise((resolve) => {
+            const req = indexedDB.open('IPGateDB', 1);
+            req.onupgradeneeded = (e) => e.target.result.createObjectStore('store');
+            req.onsuccess = (e) => {
+                try {
+                    const db = e.target.result;
+                    const tx = db.transaction('store', 'readwrite');
+                    tx.objectStore('store').put(JSON.stringify(value), key);
+                    tx.oncomplete = () => resolve(true);
+                } catch(err) { resolve(false); }
+            };
+        });
+    },
+    async remove(key) {
+        return new Promise((resolve) => {
+            const req = indexedDB.open('IPGateDB', 1);
+            req.onsuccess = (e) => {
+                try {
+                    const db = e.target.result;
+                    const tx = db.transaction('store', 'readwrite');
+                    tx.objectStore('store').delete(key);
+                    tx.oncomplete = () => resolve(true);
+                } catch(err) { resolve(false); }
+            };
+        });
+    }
+};
+
 // --- YENİ: SUPABASE AUTH SERVICE ---
 export const authService = {
     // Supabase bağlantı durumunu kontrol etmek için
@@ -159,18 +206,35 @@ export const commonService = {
 
 // 4. PORTFÖY (IP RECORDS) SERVİSİ
 export const ipRecordsService = {
-    // A) Tüm Portföyü Getir
-    async getRecords() {
+    // A) Tüm Portföyü Getir (Sınırsız IndexedDB Önbellekli Versiyon)
+    async getRecords(forceRefresh = false) {
+        // 1. SINIRSIZ CACHE KONTROLÜ
+        if (!forceRefresh) {
+            const cached = await localCache.get('ip_records_cache');
+            if (cached) {
+                console.log("⚡ Veriler 0 saniyede IndexedDB önbelleğinden geldi!");
+                return { success: true, data: cached, from: 'cache' };
+            }
+        }
+
+        console.log("☁️ Veriler Supabase'den çekiliyor...");
         const { data, error } = await supabase
             .from('ip_records')
             .select(`
-                *,
-                ip_record_persons (
-                    role,
-                    persons ( id, name, person_type )
-                )
+                id, application_number, application_date, registration_number, registration_date, renewal_date, 
+                brand_name, ip_type, official_status, portfolio_status, origin, country_code, nice_classes, 
+                wipo_ir, transaction_hierarchy, brand_image_url, created_at, updated_at,
+                recordOwnerType:details->>recordOwnerType,
+                applicantsJson:details->applicants,
+                bulletinNo:details->>bulletinNo,
+                bulletinDate:details->>bulletinDate,
+                brandInfo:details->brandInfo,
+                bulletins:details->bulletins,
+                ownerName:details->>ownerName,
+                applicantName:details->>applicantName,
+                ip_record_persons ( role, persons ( id, name, person_type ) )
             `)
-            .limit(10000) // 🔥 YENİ: 1000 satır sınırını kaldırıp 10.000'e çıkarıyoruz
+            .limit(10000)
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -179,7 +243,7 @@ export const ipRecordsService = {
         }
 
         const mappedData = data.map(record => {
-        let applicantsArray = record.ip_record_persons
+            let applicantsArray = record.ip_record_persons
                 ? record.ip_record_persons
                     .filter(rel => rel.role === 'applicant' && rel.persons)
                     .map(rel => ({
@@ -189,10 +253,8 @@ export const ipRecordsService = {
                     }))
                 : [];
 
-            // 🔥 YENİ: Eğer Supabase'de ilişkili bir kişi yoksa (Yani 3. Şahıs/Bülten markasıysa)
-            // Firebase migration'ından gelen details içindeki applicants listesini kullan!
-            if (applicantsArray.length === 0 && record.details && Array.isArray(record.details.applicants)) {
-                applicantsArray = record.details.applicants;
+            if (applicantsArray.length === 0 && Array.isArray(record.applicantsJson)) {
+                applicantsArray = record.applicantsJson;
             }
 
             return {
@@ -216,18 +278,29 @@ export const ipRecordsService = {
                 transactionHierarchy: record.transaction_hierarchy,
                 brandImageUrl: record.brand_image_url,
                 trademarkImage: record.brand_image_url,
-                goodsAndServicesByClass: record.goods_and_services,
                 applicants: applicantsArray,
-                recordOwnerType: record.record_owner_type, 
-                details: record.details,                
+                recordOwnerType: record.recordOwnerType || 'self', 
+                details: {
+                    recordOwnerType: record.recordOwnerType,
+                    bulletinNo: record.bulletinNo,
+                    bulletinDate: record.bulletinDate,
+                    brandInfo: record.brandInfo,
+                    bulletins: record.bulletins,
+                    ownerName: record.ownerName,
+                    applicantName: record.applicantName
+                },                
                 createdAt: record.created_at,
                 updatedAt: record.updated_at
             };
         });
 
+        // 3. SONUCU SINIRSIZ ÖNBELLEĞE (IndexedDB) YAZ
+        await localCache.set('ip_records_cache', mappedData);
+
         return { success: true, data: mappedData, from: 'server' };
     },
-    // Tek bir markanın detaylarını çeker
+
+    // B) Tek bir markanın detaylarını çeker (Burada * kalmalı çünkü tüm detaylar lazım)
     async getRecordById(id) {
         const { data: record, error } = await supabase
             .from('ip_records')
@@ -240,48 +313,34 @@ export const ipRecordsService = {
 
         if (error) return { success: false, error: error.message };
 
-        // Firebase'den gelen esnek verileri (JSON) dışarı yayıyoruz ki eski arayüz tanısın
         let detailsObj = record.details || {};
-        
         let applicantsArray = record.ip_record_persons
             ? record.ip_record_persons
                 .filter(rel => rel.role === 'applicant' && rel.persons)
                 .map(rel => ({
-                    id: rel.persons.id,
-                    name: rel.persons.name,
-                    personType: rel.persons.person_type
+                    id: rel.persons.id, name: rel.persons.name, personType: rel.persons.person_type
                 }))
             : [];
 
-        if (applicantsArray.length === 0 && Array.isArray(detailsObj.applicants)) {
-            applicantsArray = detailsObj.applicants;
-        }
+        if (applicantsArray.length === 0 && Array.isArray(detailsObj.applicants)) applicantsArray = detailsObj.applicants;
 
         const mappedData = {
-            ...detailsObj, // Geri kalan tüm esnek veriler (Sınıflar, eşyalar vb.)
-            id: record.id,
-            applicationNumber: record.application_number,
-            applicationDate: record.application_date,
-            registrationNumber: record.registration_number,
-            registrationDate: record.registration_date,
-            renewalDate: record.renewal_date,
-            title: record.brand_name || detailsObj.title,
-            brandText: record.brand_name || detailsObj.brandText,
-            type: record.ip_type || detailsObj.type,
-            status: record.official_status || detailsObj.status,
-            portfoyStatus: record.portfolio_status || detailsObj.portfoyStatus, 
-            origin: record.origin || detailsObj.origin,
-            country: record.country_code || detailsObj.country,
-            wipoIR: record.wipo_ir || detailsObj.wipoIR,
-            brandImageUrl: record.brand_image_url || detailsObj.brandImageUrl,
-            applicants: applicantsArray,
-            createdAt: record.created_at,
-            updatedAt: record.updated_at
+            ...detailsObj, 
+            id: record.id, applicationNumber: record.application_number, applicationDate: record.application_date,
+            registrationNumber: record.registration_number, registrationDate: record.registration_date, renewalDate: record.renewal_date,
+            title: record.brand_name || detailsObj.title, brandText: record.brand_name || detailsObj.brandText,
+            type: record.ip_type || detailsObj.type, status: record.official_status || detailsObj.status,
+            portfoyStatus: record.portfolio_status || detailsObj.portfoyStatus, origin: record.origin || detailsObj.origin,
+            country: record.country_code || detailsObj.country, wipoIR: record.wipo_ir || detailsObj.wipoIR,
+            brandImageUrl: record.brand_image_url || detailsObj.brandImageUrl, niceClasses: record.nice_classes || detailsObj.niceClasses || [],
+            goodsAndServicesByClass: record.goods_and_services || detailsObj.goodsAndServicesByClass || [],
+            applicants: applicantsArray, createdAt: record.created_at, updatedAt: record.updated_at
         };
 
         return { success: true, data: mappedData };
     },
-    // Belirli bir markaya ait tüm işlem geçmişini (Transactions) çeker
+
+    // C) İşlem Geçmişini Çeker
     async getTransactionsForRecord(recordId) {
         const { data, error } = await supabase
             .from('transactions')
@@ -289,53 +348,99 @@ export const ipRecordsService = {
             .eq('ip_record_id', recordId)
             .order('created_at', { ascending: true });
 
-        if (error) {
-            console.error("İşlemler çekilemedi:", error.message);
-            return { success: false, error: error.message };
-        }
+        if (error) return { success: false, error: error.message };
 
-        // Arayüzün beklediği JSON formatına çevir
         const mappedTransactions = data.map(tx => ({
-            id: tx.id,
-            type: tx.transaction_type_id || (tx.details && tx.details.type),
-            timestamp: tx.created_at,
-            date: tx.created_at,
-            transactionHierarchy: tx.transaction_hierarchy,
-            parentId: tx.parent_id,
-            ...tx.details // Eski Firebase verileri (Dilekçeler, atanan görevler vb.)
+            id: tx.id, type: tx.transaction_type_id || (tx.details && tx.details.type), timestamp: tx.created_at,
+            date: tx.created_at, transactionHierarchy: tx.transaction_hierarchy, parentId: tx.parent_id, ...tx.details 
         }));
-
         return { success: true, transactions: mappedTransactions };
     },
 
-    // B) Sadece Belirli Türdeki (Örn: trademark) Kayıtları Getir
     async getRecordsByType(type) {
-        // Aslında backend'de filtreleme yapabiliriz ama hızlı geçiş için
-        // tümünü çekip filtrelemek (mevcut FastCache mimarinize uygun) daha güvenli:
         const result = await this.getRecords();
-        if(result.success) {
-            result.data = result.data.filter(r => r.type === type);
-        }
+        if(result.success) result.data = result.data.filter(r => r.type === type);
         return result;
     },
 
-    // C) Kayıt Silme
+    // D) SİLME İŞLEMİ (Cache Temizliği Güncellendi)
     async deleteParentWithChildren(id) {
-        // ON DELETE CASCADE kullandığımız için parent'ı silince tüm her şey otomatik silinecek!
         const { error } = await supabase.from('ip_records').delete().eq('id', id);
         if (error) return { success: false, error: error.message };
+        await localCache.remove('ip_records_cache'); 
         return { success: true };
     },
 
-    // D) Durum Güncelleme
-    async updateRecord(id, updates) {
-        const payload = { updated_at: new Date().toISOString() };
-        if (updates.portfoyStatus) payload.portfolio_status = updates.portfoyStatus;
-        if (updates.recordStatus) payload.portfolio_status = updates.recordStatus;
+    // E) GÜNCELLEME İŞLEMİ (Cache Temizliği Güncellendi)
+    async updateRecord(id, data) {
+        try {
+            const updateData = {
+                brand_name: data.title || data.brandText || null, application_number: data.applicationNumber || null, application_date: data.applicationDate || null,
+                registration_number: data.registrationNumber || data.internationalRegNumber || null, registration_date: data.registrationDate || null,
+                renewal_date: data.renewalDate || null, brand_type: data.brandType || null, brand_category: data.brandCategory || null,
+                ip_type: data.ipType || data.type || null, origin: data.origin || null, portfolio_status: data.portfoyStatus || data.recordStatus || null,
+                official_status: data.status || null, nice_classes: data.niceClasses ? data.niceClasses.map(Number).filter(n => !isNaN(n)) : [],
+                goods_and_services: data.goodsAndServicesByClass || null, wipo_ir: data.wipoIR || data.aripoIR || data.internationalRegNumber || null,
+                country_code: data.country || null, brand_image_url: data.brandImageUrl || null, updated_at: new Date().toISOString(), details: data 
+            };
 
-        const { error } = await supabase.from('ip_records').update(payload).eq('id', id);
-        if (error) return { success: false, error: error.message };
-        return { success: true };
+            Object.keys(updateData).forEach(key => { if (updateData[key] === undefined) delete updateData[key]; });
+
+            const { error: updateError } = await supabase.from('ip_records').update(updateData).eq('id', id);
+            if (updateError) throw updateError;
+
+            if (data.applicants && Array.isArray(data.applicants)) {
+                await supabase.from('ip_record_persons').delete().eq('ip_record_id', id).eq('role', 'applicant');
+                if (data.applicants.length > 0) {
+                    const personsToInsert = data.applicants.map(app => ({ ip_record_id: id, person_id: app.id, role: 'applicant' }));
+                    await supabase.from('ip_record_persons').insert(personsToInsert);
+                }
+            }
+
+            await localCache.remove('ip_records_cache'); 
+            return { success: true };
+        } catch (error) { return { success: false, error: error.message }; }
+    },
+
+    // F) YENİ KAYIT EKLEME (Cache Temizliği Güncellendi)
+    async createRecordFromDataEntry(data) {
+        try {
+            const insertData = {
+                brand_name: data.title || data.brandText || null, application_number: data.applicationNumber || null, application_date: data.applicationDate || null,
+                registration_number: data.registrationNumber || data.internationalRegNumber || null, registration_date: data.registrationDate || null, renewal_date: data.renewalDate || null,
+                brand_type: data.brandType || null, brand_category: data.brandCategory || null, ip_type: data.ipType || data.type || null, origin: data.origin || null,
+                portfolio_status: data.portfoyStatus || data.status || 'active', official_status: data.status || null,
+                nice_classes: data.niceClasses ? data.niceClasses.map(Number).filter(n => !isNaN(n)) : [], goods_and_services: data.goodsAndServicesByClass || null,
+                wipo_ir: data.wipoIR || data.aripoIR || data.internationalRegNumber || null, country_code: data.country || null, parent_id: data.parentId || null,
+                transaction_hierarchy: data.transactionHierarchy || 'parent', brand_image_url: data.brandImageUrl || null, details: data
+            };
+
+            Object.keys(insertData).forEach(key => { if (insertData[key] === undefined) delete insertData[key]; });
+
+            const { data: newRecord, error: insertError } = await supabase.from('ip_records').insert(insertData).select('id').single();
+            if (insertError) throw insertError;
+
+            if (data.applicants && Array.isArray(data.applicants) && data.applicants.length > 0) {
+                const personsToInsert = data.applicants.map(app => ({ ip_record_id: newRecord.id, person_id: app.id, role: 'applicant' }));
+                await supabase.from('ip_record_persons').insert(personsToInsert);
+            }
+
+            await localCache.remove('ip_records_cache'); 
+            return { success: true, id: newRecord.id };
+        } catch (error) { return { success: false, error: error.message }; }
+    },
+
+    // G) İŞLEM (TRANSACTION) EKLEME 
+    async addTransactionToRecord(recordId, txData) {
+        try {
+            const insertData = {
+                ip_record_id: recordId, transaction_type_id: txData.transactionTypeId || txData.type, description: txData.description || 'Yeni İşlem',
+                transaction_hierarchy: txData.transactionHierarchy || 'parent', parent_id: txData.parentId || null, details: txData, created_at: new Date().toISOString()
+            };
+            const { data, error } = await supabase.from('transactions').insert(insertData).select('id').single();
+            if (error) throw error;
+            return { success: true, id: data.id };
+        } catch (error) { return { success: false, error: error.message }; }
     }
 };
 
