@@ -318,7 +318,12 @@ export class PortfolioDataManager {
         if (tx.oppositionEpatsPetitionFileUrl && !docs.some(d => d.type === 'epats_document')) docs.push({ fileName: 'ePATS İtiraz Evrakı', fileUrl: tx.oppositionEpatsPetitionFileUrl, type: 'epats_document' });
         if (!isParent && tx.oppositionPetitionFileUrl && !docs.some(d => d.type === 'opposition_petition')) docs.push({ fileName: 'İtiraz Dilekçesi', fileUrl: tx.oppositionPetitionFileUrl, type: 'opposition_petition' });
        
-        const isOwnRecord = record.recordOwnerType !== 'third_party' && record.recordOwnerType !== 'published_in_bulletin';
+        // Supabase DB yapısına göre Kendi Markamız Mı Kontrolü
+        const isOwnRecord = !(
+            record.portfoyStatus === 'third_party' || record.portfoyStatus === 'published_in_bulletin' ||
+            record.recordStatus === 'third_party' || record.recordStatus === 'published_in_bulletin' ||
+            record.status === 'third_party' || record.status === 'published_in_bulletin'
+        );
         if (isOwnRecord && String(tx.type) === '20') {
             docs = docs.filter(d => d.type === 'epats_document');
         } else if (isParent) {
@@ -591,20 +596,24 @@ export class PortfolioDataManager {
             // İtirazlar sekmesinde pasifleri gizle
             sourceData = this.objectionRows.filter(r => r.portfoyStatus !== 'inactive' && r.recordStatus !== 'pasif');
         } else {
-            // ANA LİSTE FİLTRESİ (Sadece Kendi Aktif Portföyümüz)
+            // ANA LİSTE FİLTRESİ
             sourceData = this.allRecords.filter(r => {
-                // 1. PASİFLERİ GİZLE (Tüm ihtimalleri kapsar)
+                // 1. Üçüncü Şahıs / Bülten ve Pasif Markaları Dinamik Yakalama
+                // Veritabanında ayrı bir sütun olmadığı için durumu (status) kontrol ediyoruz.
+                const isThirdPartyOrBulletin = 
+                    r.portfoyStatus === 'third_party' || r.portfoyStatus === 'published_in_bulletin' ||
+                    r.recordStatus === 'third_party' || r.recordStatus === 'published_in_bulletin' ||
+                    r.status === 'third_party' || r.status === 'published_in_bulletin';
+                
                 const isInactive = r.portfoyStatus === 'inactive' || r.recordStatus === 'pasif' || r.status === 'inactive';
-                if (isInactive) return false;
 
-                // 2. ÜÇÜNCÜ ŞAHIS / BÜLTEN MARKALARINI GİZLE (Sadece Bize Ait Olanlar Kalsın)
-                const isThirdParty = r.recordOwnerType === 'third_party' || r.recordOwnerType === 'published_in_bulletin';
-                if (isThirdParty) return false;
+                // Eğer pasifse veya bize ait değilse anında listenden at!
+                if (isInactive || isThirdPartyOrBulletin) return false;
 
-                // 3. WIPO ALT (CHILD) İŞLEMLERİNİ GİZLE (Sadece Ana Kayıt Görünsün)
+                // 2. Temel Kontroller (WIPO alt kayıtlarını gizle)
                 if ((r.origin === 'WIPO' || r.origin === 'ARIPO') && r.transactionHierarchy === 'child') return false;
                 
-                // 4. SEKME (TAB) KONTROLLERİ
+                // 3. SEKME KONTROLLERİ
                 if (typeFilter === 'all') return true;
                 
                 if (typeFilter === 'trademark') {
@@ -621,7 +630,7 @@ export class PortfolioDataManager {
                     return true;
                 }
 
-                // Diğer türler (Patent, Tasarım vb.)
+                // Diğer türler
                 return r.type === typeFilter;
             });
         }
