@@ -79,3 +79,210 @@ export const authService = {
         return localData ? JSON.parse(localData) : null;
     }
 };
+
+// ==========================================
+// YÖNLENDİRME VE OTURUM BEKLEME YARDIMCILARI
+// ==========================================
+
+export async function waitForAuthUser({ requireAuth = true, redirectTo = 'index.html', graceMs = 0 } = {}) {
+    const user = authService.getCurrentUser();
+    
+    if (requireAuth && !user) {
+        console.warn("Kullanıcı oturumu bulunamadı, logine dönülüyor...");
+        window.location.href = redirectTo;
+        return null;
+    }
+    return user;
+}
+
+export function redirectOnLogout(redirectTo = 'index.html', graceMs = 0) {
+    window.addEventListener('storage', (e) => {
+        if (e.key === 'currentUser' && !e.newValue) {
+            window.location.href = redirectTo;
+        }
+    });
+}
+
+// ==========================================
+// PORTFÖY VE ORTAK MODÜL SERVİSLERİ
+// ==========================================
+
+// 1. KİŞİLER (PERSONS) SERVİSİ
+export const personService = {
+    async getPersons() {
+        const { data, error } = await supabase.from('persons').select('id, name, person_type').order('name', { ascending: true });
+        if (error) {
+            console.error("Kişiler çekilemedi:", error);
+            return { success: false, error: error.message };
+        }
+        return { success: true, data: data };
+    }
+};
+
+// 2. İŞLEM TİPLERİ (TRANSACTION TYPES) SERVİSİ
+export const transactionTypeService = {
+    async getTransactionTypes() {
+        const { data, error } = await supabase.from('transaction_types').select('id, name, alias, ip_type');
+        if (error) return { success: false, data: [] };
+        
+        // Arayüzün beklediği format
+        const mappedData = data.map(t => ({
+            id: t.id,
+            name: t.name,
+            alias: t.alias,
+            applicableToMainType: t.ip_type ? [t.ip_type] : [],
+            code: t.id // Eğer eski sistem code arıyorsa diye fallback
+        }));
+        return { success: true, data: mappedData };
+    }
+};
+
+// 3. ORTAK (COMMON) VERİLER SERVİSİ
+export const commonService = {
+    async getCountries() {
+        const { data, error } = await supabase.from('common_data').select('data').eq('id', 'countries').single();
+        if (error || !data) return { success: false, data: [] };
+        // Veriyi JSONB olarak kaydetmiştik, aynen çıkarıyoruz
+        return { success: true, data: data.data.list || [] };
+    }
+};
+
+// 4. PORTFÖY (IP RECORDS) SERVİSİ
+export const ipRecordsService = {
+    // A) Tüm Portföyü Getir
+    async getRecords() {
+        // İŞTE SQL'İN GÜCÜ: Markaları ve Sahiplerini tek bir sorguyla (JOIN) çekiyoruz!
+        const { data, error } = await supabase
+            .from('ip_records')
+            .select(`
+                *,
+                ip_record_persons (
+                    role,
+                    persons ( id, name, person_type )
+                )
+            `)
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error("Markalar çekilemedi:", error);
+            return { success: false, data: [] };
+        }
+
+        // Supabase formatını, UI'ın beklediği eski Firebase formatına çeviriyoruz
+        const mappedData = data.map(record => {
+            // Müvekkilleri (Applicants) ilişkili tablodan ayıkla
+            const applicantsArray = record.ip_record_persons
+                ? record.ip_record_persons
+                    .filter(rel => rel.role === 'applicant' && rel.persons)
+                    .map(rel => ({
+                        id: rel.persons.id,
+                        name: rel.persons.name,
+                        personType: rel.persons.person_type
+                    }))
+                : [];
+
+            return {
+                id: record.id,
+                applicationNumber: record.application_number,
+                applicationDate: record.application_date,
+                registrationNumber: record.registration_number,
+                registrationDate: record.registration_date,
+                renewalDate: record.renewal_date,
+                title: record.brand_name,
+                brandText: record.brand_name,
+                type: record.ip_type,
+                status: record.official_status,
+                recordStatus: record.portfolio_status,
+                portfoyStatus: record.portfolio_status, // Eski arayüz 2 isimle de kullanıyor
+                origin: record.origin,
+                country: record.country_code,
+                niceClasses: record.nice_classes || [],
+                wipoIR: record.wipo_ir,
+                aripoIR: record.wipo_ir, // Eski sistemde aynı alanı kullanıyordunuz
+                transactionHierarchy: record.transaction_hierarchy,
+                brandImageUrl: record.brand_image_url,
+                trademarkImage: record.brand_image_url,
+                goodsAndServicesByClass: record.goods_and_services,
+                applicants: applicantsArray,
+                createdAt: record.created_at,
+                updatedAt: record.updated_at
+            };
+        });
+
+        return { success: true, data: mappedData, from: 'server' };
+    },
+
+    // B) Sadece Belirli Türdeki (Örn: trademark) Kayıtları Getir
+    async getRecordsByType(type) {
+        // Aslında backend'de filtreleme yapabiliriz ama hızlı geçiş için
+        // tümünü çekip filtrelemek (mevcut FastCache mimarinize uygun) daha güvenli:
+        const result = await this.getRecords();
+        if(result.success) {
+            result.data = result.data.filter(r => r.type === type);
+        }
+        return result;
+    },
+
+    // C) Kayıt Silme
+    async deleteParentWithChildren(id) {
+        // ON DELETE CASCADE kullandığımız için parent'ı silince tüm her şey otomatik silinecek!
+        const { error } = await supabase.from('ip_records').delete().eq('id', id);
+        if (error) return { success: false, error: error.message };
+        return { success: true };
+    },
+
+    // D) Durum Güncelleme
+    async updateRecord(id, updates) {
+        const payload = { updated_at: new Date().toISOString() };
+        if (updates.portfoyStatus) payload.portfolio_status = updates.portfoyStatus;
+        if (updates.recordStatus) payload.portfolio_status = updates.recordStatus;
+
+        const { error } = await supabase.from('ip_records').update(payload).eq('id', id);
+        if (error) return { success: false, error: error.message };
+        return { success: true };
+    }
+};
+
+// 5. İZLEME (MONITORING) SERVİSİ
+export const monitoringService = {
+    async addMonitoringItem(recordData) {
+        // Ön yüzden gelen veriyi Supabase 'details' JSON alanına gömüyoruz
+        const payload = {
+            id: recordData.id,
+            ip_record_id: recordData.relatedRecordId || recordData.id,
+            search_mark_name: recordData.markName || 'İsimsiz İzleme',
+            details: recordData,
+            updated_at: new Date().toISOString()
+        };
+
+        const { error } = await supabase.from('monitoring_trademarks').upsert(payload);
+        if (error) return { success: false, error: error.message };
+        return { success: true };
+    }
+};
+
+// 6. DAVA (LITIGATION) SERVİSİ
+export const suitService = {
+    async getSuits() {
+        const { data, error } = await supabase.from('suits').select('*').order('created_at', { ascending: false });
+        if (error) {
+            console.error("Davalar çekilemedi:", error);
+            return { success: false, data: [] };
+        }
+        
+        const mappedData = data.map(s => ({
+            id: s.id,
+            ...s.details, // Esnek json verilerini dışarı aç
+            type: 'litigation',
+            status: s.status,
+            suitType: s.details?.suitType || '-',
+            caseNo: s.file_no || '-',
+            court: s.court_name || '-',
+            client: { name: s.details?.client?.name || '-' },
+            opposingParty: s.defendant || s.details?.opposingParty || '-',
+            openedDate: s.created_at
+        }));
+
+        return { success: true, data: mappedData };
+    }
+};
