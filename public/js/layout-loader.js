@@ -107,7 +107,7 @@ export async function loadSharedLayout(options = {}) {
 // 2. [ARKAPLAN] Gerekli Kütüphaneleri Dinamik Olarak Yükle
     try {
         // YENİ: Firebase yerine Supabase'i çağırıyoruz
-        const { authService, supabase } = await import('./supabase-config.js');
+        const { authService, supabase } = await import('../supabase-config.js');
 
         // Layout HTML'ini tazelemek için istek at
         fetchAndCacheLayout(placeholder, cachedHTML);
@@ -487,7 +487,7 @@ async function handlePersonSubmit(e) {
   e.preventDefault();
   
   // Modül içinde dinamik import (PersonService için)
-  const { personService } = await import('../firebase-config.js');
+  const { personService } = await import('../supabase-config.js');
 
   const payload = {
     type: document.getElementById('pm_personType').value,
@@ -545,7 +545,7 @@ let __citiesCacheByCountry = new Map();
 
 async function loadCountries() {
   if (__countriesCache) return __countriesCache;
-  const { db } = await import('../firebase-config.js'); // Dinamik import
+  const { commonService } = await import('../supabase-config.js');
   const { doc, getDoc } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js");
 
   try {
