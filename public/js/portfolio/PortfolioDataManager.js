@@ -1,7 +1,4 @@
-// public/js/portfolio/PortfolioDataManager.js
-import { ipRecordsService, transactionTypeService, personService, db } from '../../firebase-config.js';
-// GÜNCEL IMPORT: collectionGroup, query, where EKLENDİ
-import { doc, getDoc, collection, getDocs, collectionGroup, query, where,getDocFromCache } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { ipRecordsService, transactionTypeService, personService, commonService, suitService } from '../../supabase-config.js';
 import { STATUSES } from '../../utils.js';
 
 // --- YENİ: ULTRA HIZLI ÖNBELLEK MOTORU ---
@@ -151,18 +148,10 @@ export class PortfolioDataManager {
 
     async loadCountries() {
         try {
-            const docRef = doc(db, 'common', 'countries');
-            
-            // YENİ: Önce önbelleğe bak
-            let docSnap;
-            try {
-                docSnap = await getDocFromCache(docRef);
-            } catch(e) {
-                docSnap = await getDoc(docRef);
-            }
-
-            if (docSnap && docSnap.exists()) {
-                this.allCountries = docSnap.data().list || [];
+            // YENİ: Firebase db.doc yerine doğrudan servisimizi çağırıyoruz
+            const result = await commonService.getCountries();
+            if (result.success) {
+                this.allCountries = result.data;
                 this.countriesMap = new Map(this.allCountries.map(c => [c.code, c.name]));
             } else {
                 this.allCountries = [];
@@ -223,56 +212,15 @@ export class PortfolioDataManager {
 
 
     startListening(onDataReceived, { type = null } = {}) {
-        const subscribeFn = type ? ipRecordsService.subscribeToRecordsByType : ipRecordsService.subscribeToRecords;
-        const cacheKey = type ? `records_${type}` : 'records_all';
-        const args = type ? [type] : [];
-
-        let isFirstSnapshot = true; 
-
-        return subscribeFn(...args, async (result) => { 
-            if (result.success) {
-                const freshRecords = await this._mapRawToProcessed(result.data);
-                
-                // 🔥 KRİTİK GÜVENLİK AĞI: Firebase bazen "Partial Cache" hatası yapıp 6000 kayıt yerine 5-10 kayıt gönderir.
-                // Eğer elimizde zaten 100+ kayıt varsa ve Firebase bize aniden bunun yarısından azını gönderirse, YOK SAY!
-                if (this.allRecords.length > 100 && freshRecords.length < (this.allRecords.length * 0.5)) {
-                    console.warn("⚠️ Firebase eksik snapshot gönderdi (Partial Cache), bu güncelleme yoksayılıyor.");
-                    return;
-                }
-
-                if (isFirstSnapshot && this.allRecords.length > 0) {
-                    isFirstSnapshot = false;
-                    
-                    let hasChanges = freshRecords.length !== this.allRecords.length;
-                    
-                    if (!hasChanges) {
-                        for (let i = 0; i < freshRecords.length; i++) {
-                            if (freshRecords[i].updatedAt !== this.allRecords[i].updatedAt || 
-                                freshRecords[i].status !== this.allRecords[i].status) {
-                                hasChanges = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (hasChanges) {
-                        this.allRecords = freshRecords;
-                        this._buildWipoGroups();
-                        onDataReceived(this.allRecords);
-                        EvrekaFastCache.set(cacheKey, freshRecords).catch(() => {});
-                    }
-                    return; 
-                }
-                
-                isFirstSnapshot = false;
-
-                this.allRecords = freshRecords;
-                this._buildWipoGroups();
-                EvrekaFastCache.set(cacheKey, this.allRecords).catch(() => {});
-                
-                onDataReceived(this.allRecords);
-            }
+        // NOT: Supabase Realtime geçişinde burası doldurulacak.
+        // Şimdilik sayfayı kırmamak için sadece bir kez veriyi çekip gönderiyoruz.
+        console.warn("⚠️ Realtime (Canlı Dinleme) Supabase geçişi için askıya alındı.");
+        this.loadRecords({ type }).then(records => {
+            if (onDataReceived) onDataReceived(records);
         });
+        
+        // Unsubscribe (Durdurma) fonksiyonu döner
+        return () => { console.log("Dinleme durduruldu."); };
     }
 
     // OPTİMİZE EDİLDİ: Artık .find() yerine .get() kullanıyor
@@ -337,27 +285,17 @@ export class PortfolioDataManager {
         console.log("🧹 Önbellek temizlendi, veriler yeniden çekilecek.");
     }
 
-    // --- LITIGATION ---
     async loadLitigationData() {
         try {
-            const suitsRef = collection(db, 'suits');
-            const snapshot = await getDocs(suitsRef);
-            this.litigationRows = snapshot.docs.map(d => {
-                const data = d.data();
-                return {
-                    id: d.id,
-                    ...data,
-                    type: 'litigation',
-                    status: data.suitDetails?.suitStatus || 'continue', 
-                    suitType: data.suitType || data.transactionType?.alias || data.transactionType?.name || '-',
-                    caseNo: data.suitDetails?.caseNo || '-',
-                    court: data.suitDetails?.court || '-',
-                    client: data.client?.name || '-',
-                    opposingParty: data.suitDetails?.opposingParty || '-',
-                    openedDate: data.suitDetails?.openingDate ? this._fmtDate(data.suitDetails.openingDate) : '-'
-                };
-            });
-            this.litigationRows.sort((a, b) => this._parseDate(b.openedDate) - this._parseDate(a.openedDate));
+            // YENİ: Firebase collection('suits') yerine servisimizi çağırıyoruz
+            const result = await suitService.getSuits();
+            if (result.success) {
+                this.litigationRows = result.data;
+                // Eski arayüzünüzün beklediği sıralama
+                this.litigationRows.sort((a, b) => this._parseDate(b.openedDate) - this._parseDate(a.openedDate));
+            } else {
+                this.litigationRows = [];
+            }
             return this.litigationRows;
         } catch (e) {
             console.error("Davalar hatası:", e);
