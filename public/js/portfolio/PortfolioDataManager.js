@@ -150,19 +150,18 @@ export class PortfolioDataManager {
         return () => { console.log("Dinleme durduruldu."); };
     }
 
-    // OPTİMİZE EDİLDİ: Artık .find() yerine .get() kullanıyor
     _resolveApplicantName(record) {
         if (Array.isArray(record.applicants) && record.applicants.length > 0) {
             return record.applicants.map(app => {
                 if (app.id) {
-                    // Map üzerinden O(1) erişim (Anında bulur)
                     const person = this.personsMap.get(app.id);
                     if (person) return person.name;
                 }
-                return app.name || '';
+                // 🔥 YENİ: Supabase'den değil Firebase esnek listesinden geliyorsa (companyName veya name)
+                return app.name || app.companyName || app.unvan || '';
             }).filter(Boolean).join(', ');
         }
-        return record.applicantName || '-';
+        return record.applicantName || record.details?.ownerName || record.details?.applicantName || '-';
     }
 
     // OPTİMİZE EDİLDİ: Artık döngü yerine Map kullanıyor
@@ -369,8 +368,17 @@ export class PortfolioDataManager {
             applicationNumber: record.applicationNumber || '-',
             applicantName: record.formattedApplicantName || '-',
             opponent: opponentText || '-',
-            bulletinNo: tx.bulletinNo || record.details?.brandInfo?.opposedMarkBulletinNo || '-',
-            bulletinDate: this._fmtDate(record.details?.brandInfo?.opposedMarkBulletinDate || tx.bulletinDate),
+            bulletinNo: tx.bulletinNo || 
+                        record.details?.bulletinNo || 
+                        record.details?.brandInfo?.opposedMarkBulletinNo || 
+                        (record.details?.bulletins && record.details.bulletins[0]?.bulletinNo) || '-',
+                        
+            bulletinDate: this._fmtDate(
+                        tx.bulletinDate || 
+                        record.details?.bulletinDate || 
+                        record.details?.brandInfo?.opposedMarkBulletinDate || 
+                        (record.details?.bulletins && record.details.bulletins[0]?.bulletinDate)
+                    ),
             epatsDate: this._fmtDate(docs.find(d => d.type === 'epats_document')?.documentDate || tx.epatsDocument?.documentDate),
             statusText: this._formatObjectionStatus(tx.requestResult),
             timestamp: tx.timestamp,
