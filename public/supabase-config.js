@@ -151,7 +151,6 @@ export const commonService = {
 export const ipRecordsService = {
     // A) Tüm Portföyü Getir
     async getRecords() {
-        // İŞTE SQL'İN GÜCÜ: Markaları ve Sahiplerini tek bir sorguyla (JOIN) çekiyoruz!
         const { data, error } = await supabase
             .from('ip_records')
             .select(`
@@ -161,6 +160,7 @@ export const ipRecordsService = {
                     persons ( id, name, person_type )
                 )
             `)
+            .limit(10000) // 🔥 YENİ: 1000 satır sınırını kaldırıp 10.000'e çıkarıyoruz
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -168,9 +168,7 @@ export const ipRecordsService = {
             return { success: false, data: [] };
         }
 
-        // Supabase formatını, UI'ın beklediği eski Firebase formatına çeviriyoruz
         const mappedData = data.map(record => {
-            // Müvekkilleri (Applicants) ilişkili tablodan ayıkla
             const applicantsArray = record.ip_record_persons
                 ? record.ip_record_persons
                     .filter(rel => rel.role === 'applicant' && rel.persons)
@@ -193,17 +191,21 @@ export const ipRecordsService = {
                 type: record.ip_type,
                 status: record.official_status,
                 recordStatus: record.portfolio_status,
-                portfoyStatus: record.portfolio_status, // Eski arayüz 2 isimle de kullanıyor
+                portfoyStatus: record.portfolio_status, 
                 origin: record.origin,
                 country: record.country_code,
                 niceClasses: record.nice_classes || [],
                 wipoIR: record.wipo_ir,
-                aripoIR: record.wipo_ir, // Eski sistemde aynı alanı kullanıyordunuz
+                aripoIR: record.wipo_ir, 
                 transactionHierarchy: record.transaction_hierarchy,
                 brandImageUrl: record.brand_image_url,
                 trademarkImage: record.brand_image_url,
                 goodsAndServicesByClass: record.goods_and_services,
                 applicants: applicantsArray,
+                
+                // 🔥 YENİ: Arayüzün filtreleme için şiddetle ihtiyaç duyduğu alan:
+                recordOwnerType: record.record_owner_type, 
+                
                 createdAt: record.created_at,
                 updatedAt: record.updated_at
             };
@@ -284,5 +286,46 @@ export const suitService = {
         }));
 
         return { success: true, data: mappedData };
+    }
+};
+
+// ==========================================
+// 7. İŞLEMLER (TRANSACTIONS) SERVİSİ
+// ==========================================
+
+export const transactionService = {
+    async getObjectionData() {
+        const PARENT_TYPES = ['7', '19', '20'];
+        
+        // 1. Ana İtirazları (Parent) Çek
+        const { data: parents, error: parentError } = await supabase
+            .from('transactions')
+            .select('*')
+            .in('transaction_type_id', PARENT_TYPES) // Sütun adını düzelttik
+            .limit(10000); // 🔥 YENİ: Sınırı kaldırdık
+            
+        if (parentError) return { success: false, error: parentError.message };
+
+        // 2. İtirazlara bağlı Alt İşlemleri (Child) Çek
+        const { data: children, error: childError } = await supabase
+            .from('transactions')
+            .select('*')
+            .eq('transaction_hierarchy', 'child')
+            .limit(10000); // 🔥 YENİ: Sınırı kaldırdık
+
+        const formatData = (rows) => rows.map(r => ({
+            id: r.id,
+            recordId: r.ip_record_id,
+            parentId: r.parent_id || (r.details && r.details.parentId) || null,
+            type: r.transaction_type_id || (r.details && r.details.type), // Doğru sütundan oku
+            transactionHierarchy: r.transaction_hierarchy,
+            ...r.details 
+        }));
+
+        return { 
+            success: true, 
+            parents: formatData(parents || []), 
+            children: formatData(children || []) 
+        };
     }
 };
