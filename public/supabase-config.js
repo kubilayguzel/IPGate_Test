@@ -609,12 +609,11 @@ export const taskService = {
         return { success: true, data: mappedUsers };
     },
 
-    // --- YENİ: AKILLI İLİŞKİ BİRLEŞTİRİCİ (SMART ENRICHER) - KUSURSUZ VERSİYON ---
+    // --- YENİ: AKILLI İLİŞKİ BİRLEŞTİRİCİ (SMART ENRICHER) - KESİN ÇÖZÜM ---
     async _enrichTasksWithRelations(tasks) {
         const recordIds = [...new Set(tasks.map(t => t.ip_record_id).filter(id => id && id.trim() !== ''))];
         let recordsMap = {};
         
-        // 1. ADIM: Portföy (Marka) ve Dava (Suits) verilerini çek
         let ipData = [];
         let suitData = [];
 
@@ -622,7 +621,6 @@ export const taskService = {
             const resIp = await supabase.from('ip_records').select('id, application_number, brand_name, details').in('id', recordIds);
             if (resIp.data) ipData = resIp.data;
             
-            // Eğer ipData içinde bulunamayan ID'ler varsa onlar dava dosyasıdır
             const foundIpIds = ipData.map(ip => ip.id);
             const missingIds = recordIds.filter(id => !foundIpIds.includes(id));
             
@@ -632,14 +630,12 @@ export const taskService = {
             }
         }
 
-        // 2. ADIM: İsimsiz kaydedilmiş Müvekkil (Person) ID'lerini topla
         let personIdsToFetch = new Set();
         
         ipData.forEach(ip => {
             const applicants = ip.details?.applicants || [];
             if (Array.isArray(applicants)) {
                 applicants.forEach(app => {
-                    // Eğer app obje ise, ID'si varsa ama ismi yoksa ID'yi topla
                     if (app && typeof app === 'object' && app.id && (!app.name || app.name.trim() === '')) {
                         personIdsToFetch.add(app.id);
                     }
@@ -647,7 +643,6 @@ export const taskService = {
             }
         });
 
-        // 3. ADIM: Toplanan Kişi ID'lerini tek seferde (Bulk) Persons tablosundan çek
         let personsMap = {};
         if (personIdsToFetch.size > 0) {
             const { data: persons } = await supabase.from('persons').select('id, name').in('id', Array.from(personIdsToFetch));
@@ -656,7 +651,6 @@ export const taskService = {
             }
         }
 
-        // 4. ADIM: Portföy (IP Records) verilerini haritala ve eksik isimleri PersonsMap'ten doldur
         ipData.forEach(ip => {
             const d = ip.details || {};
             let finalApplicants = [];
@@ -683,7 +677,6 @@ export const taskService = {
             };
         });
 
-        // 5. ADIM: Dava (Suits) verilerini haritala
         suitData.forEach(s => {
             const d = s.details || {};
             let applicantTxt = s.plaintiff || d.client?.name || d.plaintiff || "-";
@@ -695,23 +688,37 @@ export const taskService = {
             };
         });
 
-        // 6. ADIM: Görevler ile Taptaze Haritalanmış verileri birleştir
         return tasks.map(t => {
             const relation = recordsMap[t.ip_record_id] || {};
             const details = t.details || {};
             
-            // Eğer hala applicant yoksa, görev içindeki "relatedParties" yedek alanına bak
             let taskFallbackApplicant = details.iprecordApplicantName || "-";
             if ((!taskFallbackApplicant || taskFallbackApplicant === "-") && Array.isArray(details.relatedParties) && details.relatedParties.length > 0) {
                 taskFallbackApplicant = details.relatedParties.map(p => typeof p === 'object' ? (p.name || p.companyName) : p).filter(Boolean).join(', ');
             }
 
+            // 🔥 KRİTİK DÜZELTME: SQL'deki alt tireli verileri JS'nin beklediği CamelCase formata geri çeviriyoruz!
             return {
-                ...t,
-                // Eski sistemin ihtiyaç duyduğu alanları düzleştiriyoruz
+                id: t.id,
+                title: t.title,
+                description: t.description,
+                taskType: t.task_type,
+                status: t.status,
+                priority: t.priority,
+                dueDate: t.due_date,
+                officialDueDate: t.official_due_date,
+                operationalDueDate: t.operational_due_date,
+                deliveryDate: t.delivery_date,
+                assignedTo_uid: t.assigned_to_user_id,
+                relatedIpRecordId: t.ip_record_id,
+                transactionId: t.transaction_id,
+                opponentId: t.opponent_id,
+                history: t.history || [],
+                createdAt: t.created_at,
+                updatedAt: t.updated_at,
+                ...details,
                 assignedTo_email: details.assignedTo_email || details.assignedToEmail || null,
                 
-                // MÜKEMMEL EŞLEŞTİRME: SQL'den gelen güncel veri öncelikli, yoksa eski yedek veriler
                 iprecordApplicationNo: relation.appNo && relation.appNo !== "-" ? relation.appNo : (details.iprecordApplicationNo || "-"),
                 iprecordTitle: relation.title && relation.title !== "-" ? relation.title : (details.iprecordTitle || details.relatedIpRecordTitle || "-"),
                 iprecordApplicantName: relation.applicant && relation.applicant !== "-" ? relation.applicant : taskFallbackApplicant
