@@ -178,13 +178,12 @@ async function fetchAndCacheLayout(placeholder, currentHTML) {
 }
 
 async function getCachedAuth(authService) {
-    const now = Date.now();
-    if (authCache && (now - lastAuthCheck) < AUTH_CACHE_DURATION) {
-        return authCache;
+    // Sadece localStorage'a bak, Firebase'e gitme!
+    const localData = localStorage.getItem('currentUser');
+    if (localData) {
+        return JSON.parse(localData);
     }
-    authCache = authService.getCurrentUser();
-    lastAuthCheck = now;
-    return authCache;
+    return null;
 }
 
 function updateUserInfo(user) {
