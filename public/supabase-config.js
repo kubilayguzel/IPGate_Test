@@ -160,23 +160,100 @@ export function redirectOnLogout(redirectTo = 'index.html', graceMs = 0) {
 // 1. KİŞİLER (PERSONS) SERVİSİ
 export const personService = {
     async getPersons() {
-        const { data, error } = await supabase.from('persons').select('id, name, person_type').order('name', { ascending: true });
+        const { data, error } = await supabase.from('persons').select('*').order('name', { ascending: true });
         if (error) {
             console.error("Kişiler çekilemedi:", error);
             return { success: false, error: error.message };
         }
-        return { success: true, data: data };
+        
+        // SQL formatını Arayüzün beklediği CamelCase formata çevir
+        const mappedData = data.map(p => ({
+            id: p.id, name: p.name, type: p.person_type, tckn: p.tckn, taxNo: p.tax_no, tpeNo: p.tpe_no,
+            email: p.email, phone: p.phone, address: p.address, countryCode: p.country_code, province: p.province,
+            is_evaluation_required: p.is_evaluation_required, documents: p.documents || [],
+            ...p.details // Geri kalan her şey (JSONB)
+        }));
+        return { success: true, data: mappedData };
     },
-    // Tek bir kişiyi ID ile getir
+
     async getPersonById(id) {
-        const { data, error } = await supabase
-            .from('persons')
-            .select('*')
-            .eq('id', id)
-            .single();
+        const { data, error } = await supabase.from('persons').select('*').eq('id', id).single();
         if (error) return { success: false, error: error.message };
-        return { success: true, data: data };
+        const mappedData = {
+            id: data.id, name: data.name, type: data.person_type, tckn: data.tckn, taxNo: data.tax_no, tpeNo: data.tpe_no,
+            email: data.email, phone: data.phone, address: data.address, countryCode: data.country_code, province: data.province,
+            is_evaluation_required: data.is_evaluation_required, documents: data.documents || [], ...data.details
+        };
+        return { success: true, data: mappedData };
     },
+
+    async addPerson(personData) {
+        const payload = {
+            name: personData.name, person_type: personData.type, tckn: personData.tckn || null, tax_no: personData.taxNo || null,
+            tpe_no: personData.tpeNo || null, email: personData.email || null, phone: personData.phone || null,
+            address: personData.address || null, country_code: personData.countryCode || null, province: personData.province || null,
+            is_evaluation_required: personData.is_evaluation_required || false, documents: personData.documents || [], details: personData
+        };
+        const { data, error } = await supabase.from('persons').insert(payload).select('id').single();
+        if (error) return { success: false, error: error.message };
+        return { success: true, data: { id: data.id } };
+    },
+
+    async updatePerson(id, personData) {
+        const payload = {
+            name: personData.name, person_type: personData.type, tckn: personData.tckn || null, tax_no: personData.taxNo || null,
+            tpe_no: personData.tpeNo || null, email: personData.email || null, phone: personData.phone || null,
+            address: personData.address || null, country_code: personData.countryCode || null, province: personData.province || null,
+            is_evaluation_required: personData.is_evaluation_required || false, documents: personData.documents || [],
+            details: personData, updated_at: new Date().toISOString()
+        };
+        const { error } = await supabase.from('persons').update(payload).eq('id', id);
+        if (error) return { success: false, error: error.message };
+        return { success: true };
+    },
+
+    async deletePerson(id) {
+        const { error } = await supabase.from('persons').delete().eq('id', id);
+        if (error) return { success: false, error: error.message };
+        return { success: true };
+    },
+
+    // --- İLGİLİ KİŞİLER (RELATED PERSONS & TO/CC) SERVİSİ ---
+    async getRelatedPersons(personId) {
+        const { data, error } = await supabase.from('persons_related').select('*').eq('person_id', personId);
+        if (error) return [];
+        return data; 
+    },
+
+    async saveRelatedPersons(personId, draft, loaded, toDelete) {
+        try {
+            // 1. Silinecekler
+            if (toDelete && toDelete.length > 0) {
+                await supabase.from('persons_related').delete().in('id', toDelete);
+            }
+            // 2. Güncellenecekler
+            if (loaded && loaded.length > 0) {
+                for (const r of loaded) {
+                    if (r.id) {
+                        const { id, ...updateData } = r;
+                        await supabase.from('persons_related').update(updateData).eq('id', id);
+                    }
+                }
+            }
+            // 3. Yeni Eklenecekler
+            if (draft && draft.length > 0) {
+                const inserts = draft.map(d => ({
+                    person_id: personId, name: d.name, email: d.email, phone: d.phone,
+                    responsible: d.responsible || {}, notify: d.notify || {}
+                }));
+                await supabase.from('persons_related').insert(inserts);
+            }
+            return { success: true };
+        } catch(e) {
+            console.error("Related persons save error:", e);
+            return { success: false };
+        }
+    }
 };
 
 // 2. İŞLEM TİPLERİ (TRANSACTION TYPES) SERVİSİ
