@@ -598,12 +598,8 @@ export const transactionService = {
 export const taskService = {
     // 1. Kullanıcıları Çekme (Atama Listesi İçin)
     async getAllUsers() {
-        // Şemanızdaki 'users' tablosundan okuyoruz
         const { data, error } = await supabase.from('users').select('id, email, display_name');
-        if (error) {
-            console.error("Kullanıcılar çekilemedi:", error);
-            return { success: false, data: [] };
-        }
+        if (error) return { success: false, data: [] };
         
         const mappedUsers = data.map(u => ({
             id: u.id,
@@ -613,74 +609,147 @@ export const taskService = {
         return { success: true, data: mappedUsers };
     },
 
-    // 2. Tüm Görevleri Çekme (Listeleme İçin)
-    async getTasksForUser(uid) {
-        // Not: Yetkilendirme veya role göre tüm taskları çekiyoruz.
-        // Daha sonra sadece kendisine atananları filtrelemek isterseniz .eq('assigned_to_user_id', uid) eklenebilir.
-        const { data, error } = await supabase
-            .from('tasks')
-            .select('*')
-            .order('created_at', { ascending: false });
+    // --- YENİ: AKILLI İLİŞKİ BİRLEŞTİRİCİ (SMART ENRICHER) - KUSURSUZ VERSİYON ---
+    async _enrichTasksWithRelations(tasks) {
+        const recordIds = [...new Set(tasks.map(t => t.ip_record_id).filter(id => id && id.trim() !== ''))];
+        let recordsMap = {};
+        
+        // 1. ADIM: Portföy (Marka) ve Dava (Suits) verilerini çek
+        let ipData = [];
+        let suitData = [];
 
-        if (error) return { success: false, error: error.message };
+        if (recordIds.length > 0) {
+            const resIp = await supabase.from('ip_records').select('id, application_number, brand_name, details').in('id', recordIds);
+            if (resIp.data) ipData = resIp.data;
+            
+            // Eğer ipData içinde bulunamayan ID'ler varsa onlar dava dosyasıdır
+            const foundIpIds = ipData.map(ip => ip.id);
+            const missingIds = recordIds.filter(id => !foundIpIds.includes(id));
+            
+            if (missingIds.length > 0) {
+                const resSuit = await supabase.from('suits').select('id, file_no, court_name, plaintiff, details').in('id', missingIds);
+                if (resSuit.data) suitData = resSuit.data;
+            }
+        }
 
-        const mappedData = data.map(t => ({
-            id: t.id,
-            title: t.title,
-            description: t.description,
-            taskType: t.task_type,
-            status: t.status,
-            priority: t.priority,
-            dueDate: t.due_date,
-            officialDueDate: t.official_due_date,
-            operationalDueDate: t.operational_due_date,
-            deliveryDate: t.delivery_date,
-            assignedTo_uid: t.assigned_to_user_id,
-            relatedIpRecordId: t.ip_record_id,
-            transactionId: t.transaction_id,
-            opponentId: t.opponent_id,
-            history: t.history || [],
-            createdAt: t.created_at,
-            updatedAt: t.updated_at,
-            // JSONB 'details' alanını yayıyoruz (Eski veriler ve dinamik form verileri için)
-            ...t.details,
-            // 'assignedTo_email' genelde Firebase'de details içine veya root'a yazılıyordu, onu güvenceye alalım:
-            assignedTo_email: t.details?.assignedTo_email || t.details?.assignedToEmail || null
-        }));
+        // 2. ADIM: İsimsiz kaydedilmiş Müvekkil (Person) ID'lerini topla
+        let personIdsToFetch = new Set();
+        
+        ipData.forEach(ip => {
+            const applicants = ip.details?.applicants || [];
+            if (Array.isArray(applicants)) {
+                applicants.forEach(app => {
+                    // Eğer app obje ise, ID'si varsa ama ismi yoksa ID'yi topla
+                    if (app && typeof app === 'object' && app.id && (!app.name || app.name.trim() === '')) {
+                        personIdsToFetch.add(app.id);
+                    }
+                });
+            }
+        });
 
-        return { success: true, data: mappedData };
+        // 3. ADIM: Toplanan Kişi ID'lerini tek seferde (Bulk) Persons tablosundan çek
+        let personsMap = {};
+        if (personIdsToFetch.size > 0) {
+            const { data: persons } = await supabase.from('persons').select('id, name').in('id', Array.from(personIdsToFetch));
+            if (persons) {
+                persons.forEach(p => personsMap[p.id] = p.name);
+            }
+        }
+
+        // 4. ADIM: Portföy (IP Records) verilerini haritala ve eksik isimleri PersonsMap'ten doldur
+        ipData.forEach(ip => {
+            const d = ip.details || {};
+            let finalApplicants = [];
+
+            if (Array.isArray(d.applicants) && d.applicants.length > 0) {
+                d.applicants.forEach(app => {
+                    if (typeof app === 'object') {
+                        if (app.name && app.name.trim() !== '') finalApplicants.push(app.name);
+                        else if (app.id && personsMap[app.id]) finalApplicants.push(personsMap[app.id]);
+                    } else if (typeof app === 'string') {
+                        finalApplicants.push(app);
+                    }
+                });
+            } else if (d.applicantName) {
+                finalApplicants.push(d.applicantName);
+            } else if (d.ownerName) {
+                finalApplicants.push(d.ownerName);
+            }
+
+            recordsMap[ip.id] = {
+                appNo: ip.application_number || d.applicationNumber || "-",
+                title: ip.brand_name || d.brandName || d.brandExampleText || "-",
+                applicant: finalApplicants.length > 0 ? finalApplicants.join(', ') : "-"
+            };
+        });
+
+        // 5. ADIM: Dava (Suits) verilerini haritala
+        suitData.forEach(s => {
+            const d = s.details || {};
+            let applicantTxt = s.plaintiff || d.client?.name || d.plaintiff || "-";
+            
+            recordsMap[s.id] = {
+                appNo: s.file_no || d.caseNo || d.fileNumber || "-",
+                title: s.court_name || d.court || "-",
+                applicant: applicantTxt
+            };
+        });
+
+        // 6. ADIM: Görevler ile Taptaze Haritalanmış verileri birleştir
+        return tasks.map(t => {
+            const relation = recordsMap[t.ip_record_id] || {};
+            const details = t.details || {};
+            
+            // Eğer hala applicant yoksa, görev içindeki "relatedParties" yedek alanına bak
+            let taskFallbackApplicant = details.iprecordApplicantName || "-";
+            if ((!taskFallbackApplicant || taskFallbackApplicant === "-") && Array.isArray(details.relatedParties) && details.relatedParties.length > 0) {
+                taskFallbackApplicant = details.relatedParties.map(p => typeof p === 'object' ? (p.name || p.companyName) : p).filter(Boolean).join(', ');
+            }
+
+            return {
+                ...t,
+                // Eski sistemin ihtiyaç duyduğu alanları düzleştiriyoruz
+                assignedTo_email: details.assignedTo_email || details.assignedToEmail || null,
+                
+                // MÜKEMMEL EŞLEŞTİRME: SQL'den gelen güncel veri öncelikli, yoksa eski yedek veriler
+                iprecordApplicationNo: relation.appNo && relation.appNo !== "-" ? relation.appNo : (details.iprecordApplicationNo || "-"),
+                iprecordTitle: relation.title && relation.title !== "-" ? relation.title : (details.iprecordTitle || details.relatedIpRecordTitle || "-"),
+                iprecordApplicantName: relation.applicant && relation.applicant !== "-" ? relation.applicant : taskFallbackApplicant
+            };
+        });
     },
 
-    // 3. Tekil Görev Detayı (Güncelleme ve Görüntüleme İçin)
+    // 2. Tüm Görevleri Çekme (Akıllı Birleştirici Kullanır)
+    async getTasksForUser(uid) {
+        const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+        if (error) return { success: false, error: error.message };
+        
+        const enrichedData = await this._enrichTasksWithRelations(data);
+        return { success: true, data: enrichedData };
+    },
+
+    // 3. Tetiklenen Görevler İçin (Akıllı Birleştirici Kullanır)
+    async getTasksByStatus(status, uid = null) {
+        let query = supabase.from('tasks').select('*').eq('status', status).order('created_at', { ascending: false });
+        if (uid) query = query.eq('assigned_to_user_id', uid);
+
+        const { data, error } = await query;
+        if (error) return { success: false, error: error.message };
+
+        const enrichedData = await this._enrichTasksWithRelations(data);
+        return { success: true, data: enrichedData };
+    },
+
+    // 4. Tekil Görev Detayı (Akıllı Birleştirici Kullanır)
     async getTaskById(taskId) {
         const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
         if (error) return { success: false, error: error.message };
 
-        const mappedData = {
-            id: data.id,
-            title: data.title,
-            description: data.description,
-            taskType: data.task_type,
-            status: data.status,
-            priority: data.priority,
-            dueDate: data.due_date,
-            officialDueDate: data.official_due_date,
-            operationalDueDate: data.operational_due_date,
-            deliveryDate: data.delivery_date,
-            assignedTo_uid: data.assigned_to_user_id,
-            relatedIpRecordId: data.ip_record_id,
-            transactionId: data.transaction_id,
-            opponentId: data.opponent_id,
-            history: data.history || [],
-            createdAt: data.created_at,
-            updatedAt: data.updated_at,
-            ...data.details,
-            assignedTo_email: data.details?.assignedTo_email || data.details?.assignedToEmail || null
-        };
-        return { success: true, data: mappedData };
+        const enrichedData = await this._enrichTasksWithRelations([data]);
+        return { success: true, data: enrichedData[0] };
     },
 
-    // 4. Görev Oluşturma
+    // 5. Görev Ekleme
     async addTask(taskData) {
         try {
             const payload = {
@@ -696,23 +765,18 @@ export const taskService = {
                 ip_record_id: taskData.relatedIpRecordId ? String(taskData.relatedIpRecordId) : null,
                 transaction_id: taskData.transactionId ? String(taskData.transactionId) : null,
                 history: taskData.history || [],
-                details: taskData // Geri kalan esnek tüm veriler
+                details: taskData 
             };
-
-            // Undefined temizliği
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
-
-            // ID'yi otomatik oluşturması için omit ediyoruz veya isterseniz JS tarafında generate edip basabiliriz
             const { data, error } = await supabase.from('tasks').insert(payload).select('id').single();
             if (error) throw error;
             return { success: true, data: { id: data.id } };
         } catch (error) {
-            console.error("Task add error:", error);
             return { success: false, error: error.message };
         }
     },
 
-    // 5. Görev Güncelleme
+    // 6. Görev Güncelleme
     async updateTask(taskId, updateData) {
         try {
             const payload = {
@@ -724,23 +788,89 @@ export const taskService = {
                 due_date: updateData.dueDate,
                 official_due_date: updateData.officialDueDate,
                 operational_due_date: updateData.operationalDueDate,
-                assigned_to_user_id: updateData.assignedTo_uid,
+                assigned_to_user_id: updateData.assignedTo_uid || updateData.assigned_to_user_id,
                 ip_record_id: updateData.relatedIpRecordId ? String(updateData.relatedIpRecordId) : undefined,
                 transaction_id: updateData.transactionId ? String(updateData.transactionId) : undefined,
                 history: updateData.history,
                 updated_at: new Date().toISOString(),
-                details: updateData // Tüm esnek veri içeriği güncellenir
+                details: updateData
             };
-
-            // SQL'de sorun çıkarmaması için undefined olanları gönderilmeden sil
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
-
             const { error } = await supabase.from('tasks').update(payload).eq('id', String(taskId));
             if (error) throw error;
             return { success: true };
         } catch (error) {
-            console.error("Task update error:", error);
             return { success: false, error: error.message };
+        }
+    }
+};
+
+// ==========================================
+// 9. TAHAKKUK (ACCRUAL) SERVİSİ
+// ==========================================
+export const accrualService = {
+    
+    // 1. Yeni Tahakkuk Ekleme
+    async addAccrual(accrualData) {
+        try {
+            // Ana SQL sütunlarına gidecek veriler ve esnek JSONB (details) verileri
+            const payload = {
+                task_id: String(accrualData.taskId || accrualData.task_id || ''),
+                status: accrualData.status || 'unpaid',
+                evreka_invoice_no: accrualData.evrekaInvoiceNo || accrualData.evreka_invoice_no || null,
+                tpe_invoice_no: accrualData.tpeInvoiceNo || accrualData.tpe_invoice_no || null,
+                created_at: accrualData.createdAt || accrualData.created_at || new Date().toISOString(),
+                details: accrualData.details || accrualData // Geri kalan her şey (Tutar, dosyalar vb.)
+            };
+
+            const { data, error } = await supabase.from('accruals').insert(payload).select('id').single();
+            if (error) throw error;
+            return { success: true, data: { id: data.id } };
+        } catch (error) {
+            console.error("Accrual add error:", error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    // 2. Tahakkuk Güncelleme
+    async updateAccrual(id, updateData) {
+        try {
+            const payload = {
+                task_id: updateData.taskId ? String(updateData.taskId) : undefined,
+                status: updateData.status,
+                evreka_invoice_no: updateData.evrekaInvoiceNo || updateData.evreka_invoice_no,
+                tpe_invoice_no: updateData.tpeInvoiceNo || updateData.tpe_invoice_no,
+                updated_at: new Date().toISOString(),
+                details: updateData.details || updateData
+            };
+
+            // SQL'de hata vermemesi için undefined olanları sil
+            Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
+
+            const { error } = await supabase.from('accruals').update(payload).eq('id', String(id));
+            if (error) throw error;
+            return { success: true };
+        } catch (error) {
+            console.error("Accrual update error:", error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    // 3. Göreve Ait Tahakkukları Getirme
+    async getAccrualsByTaskId(taskId) {
+        try {
+            const { data, error } = await supabase.from('accruals').select('*').eq('task_id', String(taskId));
+            if (error) throw error;
+            
+            const mappedData = data.map(acc => ({
+                id: acc.id,
+                ...acc.details, // Esnek verileri dışa çıkarıyoruz
+                ...acc
+            }));
+            return { success: true, data: mappedData };
+        } catch (error) {
+            console.error("Accrual fetch error:", error);
+            return { success: false, error: error.message, data: [] };
         }
     }
 };
