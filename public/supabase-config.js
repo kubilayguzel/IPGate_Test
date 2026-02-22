@@ -116,7 +116,17 @@ export const personService = {
             return { success: false, error: error.message };
         }
         return { success: true, data: data };
-    }
+    },
+    // Tek bir kişiyi ID ile getir
+    async getPersonById(id) {
+        const { data, error } = await supabase
+            .from('persons')
+            .select('*')
+            .eq('id', id)
+            .single();
+        if (error) return { success: false, error: error.message };
+        return { success: true, data: data };
+    },
 };
 
 // 2. İŞLEM TİPLERİ (TRANSACTION TYPES) SERVİSİ
@@ -169,7 +179,7 @@ export const ipRecordsService = {
         }
 
         const mappedData = data.map(record => {
-            const applicantsArray = record.ip_record_persons
+        let applicantsArray = record.ip_record_persons
                 ? record.ip_record_persons
                     .filter(rel => rel.role === 'applicant' && rel.persons)
                     .map(rel => ({
@@ -178,6 +188,12 @@ export const ipRecordsService = {
                         personType: rel.persons.person_type
                     }))
                 : [];
+
+            // 🔥 YENİ: Eğer Supabase'de ilişkili bir kişi yoksa (Yani 3. Şahıs/Bülten markasıysa)
+            // Firebase migration'ından gelen details içindeki applicants listesini kullan!
+            if (applicantsArray.length === 0 && record.details && Array.isArray(record.details.applicants)) {
+                applicantsArray = record.details.applicants;
+            }
 
             return {
                 id: record.id,
@@ -202,16 +218,94 @@ export const ipRecordsService = {
                 trademarkImage: record.brand_image_url,
                 goodsAndServicesByClass: record.goods_and_services,
                 applicants: applicantsArray,
-                
-                // 🔥 YENİ: Arayüzün filtreleme için şiddetle ihtiyaç duyduğu alan:
                 recordOwnerType: record.record_owner_type, 
-                
+                details: record.details,                
                 createdAt: record.created_at,
                 updatedAt: record.updated_at
             };
         });
 
         return { success: true, data: mappedData, from: 'server' };
+    },
+    // Tek bir markanın detaylarını çeker
+    async getRecordById(id) {
+        const { data: record, error } = await supabase
+            .from('ip_records')
+            .select(`
+                *,
+                ip_record_persons ( role, persons ( id, name, person_type, address ) )
+            `)
+            .eq('id', id)
+            .single();
+
+        if (error) return { success: false, error: error.message };
+
+        // Firebase'den gelen esnek verileri (JSON) dışarı yayıyoruz ki eski arayüz tanısın
+        let detailsObj = record.details || {};
+        
+        let applicantsArray = record.ip_record_persons
+            ? record.ip_record_persons
+                .filter(rel => rel.role === 'applicant' && rel.persons)
+                .map(rel => ({
+                    id: rel.persons.id,
+                    name: rel.persons.name,
+                    personType: rel.persons.person_type
+                }))
+            : [];
+
+        if (applicantsArray.length === 0 && Array.isArray(detailsObj.applicants)) {
+            applicantsArray = detailsObj.applicants;
+        }
+
+        const mappedData = {
+            ...detailsObj, // Geri kalan tüm esnek veriler (Sınıflar, eşyalar vb.)
+            id: record.id,
+            applicationNumber: record.application_number,
+            applicationDate: record.application_date,
+            registrationNumber: record.registration_number,
+            registrationDate: record.registration_date,
+            renewalDate: record.renewal_date,
+            title: record.brand_name || detailsObj.title,
+            brandText: record.brand_name || detailsObj.brandText,
+            type: record.ip_type || detailsObj.type,
+            status: record.official_status || detailsObj.status,
+            portfoyStatus: record.portfolio_status || detailsObj.portfoyStatus, 
+            origin: record.origin || detailsObj.origin,
+            country: record.country_code || detailsObj.country,
+            wipoIR: record.wipo_ir || detailsObj.wipoIR,
+            brandImageUrl: record.brand_image_url || detailsObj.brandImageUrl,
+            applicants: applicantsArray,
+            createdAt: record.created_at,
+            updatedAt: record.updated_at
+        };
+
+        return { success: true, data: mappedData };
+    },
+    // Belirli bir markaya ait tüm işlem geçmişini (Transactions) çeker
+    async getTransactionsForRecord(recordId) {
+        const { data, error } = await supabase
+            .from('transactions')
+            .select('*')
+            .eq('ip_record_id', recordId)
+            .order('created_at', { ascending: true });
+
+        if (error) {
+            console.error("İşlemler çekilemedi:", error.message);
+            return { success: false, error: error.message };
+        }
+
+        // Arayüzün beklediği JSON formatına çevir
+        const mappedTransactions = data.map(tx => ({
+            id: tx.id,
+            type: tx.transaction_type_id || (tx.details && tx.details.type),
+            timestamp: tx.created_at,
+            date: tx.created_at,
+            transactionHierarchy: tx.transaction_hierarchy,
+            parentId: tx.parent_id,
+            ...tx.details // Eski Firebase verileri (Dilekçeler, atanan görevler vb.)
+        }));
+
+        return { success: true, transactions: mappedTransactions };
     },
 
     // B) Sadece Belirli Türdeki (Örn: trademark) Kayıtları Getir
@@ -319,6 +413,7 @@ export const transactionService = {
             parentId: r.parent_id || (r.details && r.details.parentId) || null,
             type: r.transaction_type_id || (r.details && r.details.type), // Doğru sütundan oku
             transactionHierarchy: r.transaction_hierarchy,
+            timestamp: r.created_at,
             ...r.details 
         }));
 
