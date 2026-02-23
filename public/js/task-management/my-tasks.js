@@ -609,7 +609,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (!t) return null;
                 if (t.details && Array.isArray(t.details.documents)) return t.details.documents.find(d => d.type === 'epats_document');
                 if (Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                return (t.details && t.details.epatsDocument) || t.epatsDocument || null;
+                return (t.details && t.details.epatsDocument) || t.epatsDocument || t.epats_document || null;
             };
 
             let epatsDoc = getEpats(this.currentTaskForAccrual);
@@ -684,6 +684,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 created_at: new Date().toISOString(),
                 evreka_invoice_no: formDataNoFiles.evrekaInvoiceNo?.trim() || null,
                 tpe_invoice_no: formDataNoFiles.tpeInvoiceNo?.trim() || null,
+                files: uploadedFiles, // 🔥 YENİ KÖPRÜ: Dosyaları Supabase'in ana 'files' sütununa yaz!
                 details: {
                     taskTitle: this.currentTaskForAccrual.title,
                     ...formDataNoFiles,
@@ -727,7 +728,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (!t) return null;
                     if (t.details && Array.isArray(t.details.documents)) return t.details.documents.find(d => d.type === 'epats_document');
                     if (Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                    return (t.details && t.details.epatsDocument) || t.epatsDocument || null;
+                    return (t.details && t.details.epatsDocument) || t.epatsDocument || t.epats_document || null;
                 };
 
                 let epatsDoc = getEpats(task);
@@ -843,6 +844,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                     const updates = {
                         ...basePayload,
+                        files: mergedFiles,
                         details: {
                             ...existingDetails,
                             ...basePayload.details,
@@ -854,10 +856,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const { error: updErr } = await supabase.from('accruals').update(updates).eq('id', String(targetAccrualId));
                     if (updErr) throw new Error(updErr.message);
 
-                } else {
-                    const newAccrual = {
-                        ...basePayload,
-                        status: 'unpaid'
+                    } else {
+                    const newAccrual = { 
+                        ...basePayload, 
+                        status: 'unpaid',
+                        files: uploadedFiles // 🔥 YENİ KÖPRÜ: Yeni tahakkukta ana sütuna yaz!
                     };
                     newAccrual.details.remainingAmount = basePayload.details.totalAmount;
                     newAccrual.details.files = uploadedFiles;
