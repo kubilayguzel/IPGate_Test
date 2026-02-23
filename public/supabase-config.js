@@ -70,20 +70,28 @@ export const authService = {
             });
             if (error) throw error;
 
-            // Şimdilik test amaçlı rolü user atıyoruz. İleride 'users' tablosundan çekeceğiz.
+            // 🌟 YENİ: Gerçek 'users' tablosundan rol ve yetkileri çekiyoruz
+            let profileData = { role: 'user', is_super_admin: false, display_name: '' };
+            const { data: profile } = await supabase.from('users').select('*').eq('email', data.user.email).single();
+            
+            if (profile) {
+                profileData = profile;
+            }
+
             const userData = { 
                 uid: data.user.id, 
                 email: data.user.email, 
-                displayName: data.user.user_metadata?.display_name || '', 
-                role: 'user', 
-                isSuperAdmin: false 
+                displayName: profileData.display_name || data.user.user_metadata?.display_name || '', 
+                role: profileData.role, 
+                isSuperAdmin: profileData.is_super_admin 
             };
+            
             localStorage.setItem('currentUser', JSON.stringify(userData));
             
             return { success: true, user: userData, message: "Giriş başarılı!" };
         } catch (error) {
             console.error("Giriş hatası:", error);
-            return { success: false, error: "Hatalı e-posta veya şifre: " + error.message };
+            return { success: false, error: "Hatalı e-posta veya şifre." };
         }
     },
 
