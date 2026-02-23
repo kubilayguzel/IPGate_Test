@@ -309,15 +309,42 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 if (btn.classList.contains('view-btn')) {
                     this.uiManager.showViewDetailModal(this.dataManager.allAccruals.find(a => a.id === id));
-                } else if (btn.classList.contains('edit-btn')) {
+} else if (btn.classList.contains('edit-btn')) {
                     this.uiManager.toggleLoading(true);
                     try {
                         const acc = this.dataManager.allAccruals.find(a => a.id === id);
-                        
-                        // Üstteki fonksiyonu tetikler ve veritabanından taze belgeyi alır
                         const task = await this.dataManager.getFreshTaskDetail(acc.taskId);
                         
-                        this.uiManager.initEditModal(acc, this.dataManager.allPersons, task?.epatsDocument);
+                        // 🔥 1. ADIM: "DEDEKTİF" FONKSİYONU - Tüm objeyi tarayıp EPATS'ı bulur!
+                        const findEpats = (obj) => {
+                            if (!obj || typeof obj !== 'object') return null;
+                            
+                            // Eğer bu bir EPATS belgesiyse (içinde url ve name varsa) hemen yakala
+                            if (obj.url && obj.name && (obj.turkpatentEvrakNo || obj.documentDate || obj.name.includes('.pdf'))) {
+                                return obj;
+                            }
+                            
+                            // Değilse alt katmanlara inip aramaya devam et
+                            for (let key in obj) {
+                                let found = findEpats(obj[key]);
+                                if (found) return found;
+                            }
+                            return null;
+                        };
+
+                        // 2. ADIM: Görevin tüm verisini tarayıp belgeyi bulmasını sağla
+                        let epatsDoc = findEpats(task);
+
+                        // Eğer veritabanından String olarak geldiyse Objeye çevir
+                        if (typeof epatsDoc === 'string') {
+                            try { epatsDoc = JSON.parse(epatsDoc); } catch(e) {}
+                        }
+
+                        console.log("=======================================");
+                        console.log("🕵️ DEDEKTİFİN BULDUĞU BELGE:", epatsDoc);
+                        console.log("=======================================");
+
+                        this.uiManager.initEditModal(acc, this.dataManager.allPersons, epatsDoc);
                     } catch (err) {
                         console.error("Düzenle Modal Hatası:", err);
                     } finally {
