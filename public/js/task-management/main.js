@@ -678,7 +678,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (!t) return null;
                     if (t.details && Array.isArray(t.details.documents)) return t.details.documents.find(d => d.type === 'epats_document');
                     if (Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                    return (t.details && t.details.epatsDocument) || t.epatsDocument || null;
+                    return (t.details && t.details.epatsDocument) || t.epatsDocument || t.epats_document || null;
                 };
 
                 let epatsDoc = getEpats(this.currentTaskForAccrual);
@@ -789,7 +789,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (!t) return null;
                     if (t.details && Array.isArray(t.details.documents)) return t.details.documents.find(d => d.type === 'epats_document');
                     if (Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                    return (t.details && t.details.epatsDocument) || t.epatsDocument || null;
+                    return (t.details && t.details.epatsDocument) || t.epatsDocument || t.epats_document || null;
                 };
 
                 let epatsDoc = getEpats(task);
