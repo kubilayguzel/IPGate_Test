@@ -1,6 +1,5 @@
 // public/js/portfolio/TransactionHelper.js
-import { db } from '../../firebase-config.js';
-import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { supabase } from '../../supabase-config.js';
 
 export class TransactionHelper {
 
@@ -18,11 +17,19 @@ export class TransactionHelper {
 
         const p = (async () => {
             try {
-                const taskRef = doc(db, 'tasks', taskId);
-                const taskSnap = await getDoc(taskRef);
-                const data = taskSnap.exists() ? taskSnap.data() : null;
-                this._taskCache.set(taskId, data);
-                return data;
+                // 🔥 YENİ: Firebase getDoc yerine Supabase SQL Sorgusu
+                const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
+                
+                if (error || !data) {
+                    this._taskCache.set(taskId, null);
+                    return null;
+                }
+
+                // Eski Firebase verileri details json'u içindeyse dışarı yayıyoruz
+                const taskData = { id: data.id, ...(data.details || {}), ...data };
+                
+                this._taskCache.set(taskId, taskData);
+                return taskData;
             } catch (e) {
                 console.warn(`Task belge çekme hatası (ID: ${taskId}):`, e);
                 this._taskCache.set(taskId, null);
@@ -150,11 +157,9 @@ export class TransactionHelper {
         }
 
         // 2. Task (Görev) üzerindeki belgeler (Fallback)
-        // Eğer transaction bir Task tarafından tetiklendiyse (triggeringTaskId)
         if (transaction.triggeringTaskId) {
             const taskData = await this.getTaskData(transaction.triggeringTaskId);
             if (taskData) {
-                // ePats Belgesi
                 if (taskData.details?.epatsDocument?.downloadURL) {
                     addDoc({
                         name: taskData.details.epatsDocument.name || 'ePats Belgesi',
@@ -163,7 +168,6 @@ export class TransactionHelper {
                     }, 'task');
                 }
 
-                // Task Documents Array
                 if (Array.isArray(taskData.documents)) {
                     taskData.documents.forEach(d => addDoc(d, 'task'));
                 }
