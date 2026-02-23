@@ -54,19 +54,11 @@ export class TaskUpdateDataManager {
 
     // --- DOSYA İŞLEMLERİ (Supabase Storage) ---
     async uploadFile(file, path) {
-        // Path (yol) main.js'den hazır geliyor (Örn: 'tasks/123/file.pdf' veya 'epats/file.pdf')
-        // Dosya adındaki boşluk veya garip karakterleri temizleyip yeni bir yol oluşturalım:
-        const pathParts = path.split('/');
-        const originalName = pathParts.pop();
-        const cleanFileName = originalName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-        pathParts.push(`${Date.now()}_${cleanFileName}`);
-        
-        const finalPath = pathParts.join('/');
-        
-        const { error } = await supabase.storage.from('task_documents').upload(finalPath, file);
+        // Path (dosya yolu) artık main.js'den tam olarak zaman damgasıyla geliyor.
+        const { error } = await supabase.storage.from('task_documents').upload(path, file);
         if (error) throw error;
         
-        const { data } = supabase.storage.from('task_documents').getPublicUrl(finalPath);
+        const { data } = supabase.storage.from('task_documents').getPublicUrl(path);
         return data.publicUrl;
     }
 
@@ -74,17 +66,22 @@ export class TaskUpdateDataManager {
         if (!path) return;
         
         try {
-            // URL içinden sadece dosya adını çıkar (Supabase Storage yapısına uygun silme için)
-            let fileName = path;
+            // Eğer dosya eski Firebase sisteminden kalmaysa Supabase'de silmeye çalışma
+            if (path.includes('firebasestorage')) {
+                console.warn('Firebase dosyası Storage üzerinden silinemez, sadece veritabanından kaldırılacak.');
+                return;
+            }
+
+            let filePath = path;
             if (path.includes('/storage/v1/object/public/task_documents/')) {
-                fileName = path.split('/storage/v1/object/public/task_documents/')[1];
+                filePath = path.split('/storage/v1/object/public/task_documents/')[1];
             }
             
-            const decodedPath = decodeURIComponent(fileName);
+            const decodedPath = decodeURIComponent(filePath);
             const { error } = await supabase.storage.from('task_documents').remove([decodedPath]);
             
             if (error) throw error;
-            console.log('Dosya Supabase Storage\'dan silindi:', decodedPath);
+            console.log('✅ Dosya Supabase Storage\'dan başarıyla fiziksel olarak silindi:', decodedPath);
         } catch (error) {
             console.error('Dosya silme hatası:', error);
         }
