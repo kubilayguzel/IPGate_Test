@@ -56,7 +56,7 @@ export class AccrualUIManager {
     renderTable(data, lookups, activeTab = 'main') {
         this.currentData = data || [];
 
-        const { tasks, transactionTypes, ipRecords, selectedIds } = lookups;
+        const { tasks, transactionTypes, ipRecordsMap, selectedIds } = lookups;
         const targetBody = activeTab === 'foreign' ? this.foreignTableBody : this.tableBody;
         
         if (targetBody) targetBody.innerHTML = '';
@@ -67,158 +67,165 @@ export class AccrualUIManager {
         if (this.noRecordsMessage) this.noRecordsMessage.style.display = 'none';
 
         const rowsHtml = data.map((acc, index) => {
-            const isSelected = selectedIds.has(acc.id);
-            let sTxt = 'Bilinmiyor', sCls = 'badge-secondary';
-            if (acc.status === 'paid') { sTxt = 'Ödendi'; sCls = 'status-paid'; }
-            else if (acc.status === 'unpaid') { sTxt = 'Ödenmedi'; sCls = 'status-unpaid'; }
-            else if (acc.status === 'partially_paid') { sTxt = 'K.Ödendi'; sCls = 'status-partially-paid'; }
+            try {
+                // KORUMA KALKANI: Hatalı satırları atlayıp tabloyu çökertmez
+                const isSelected = selectedIds.has(acc.id);
+                let sTxt = 'Bilinmiyor', sCls = 'badge-secondary';
+                if (acc.status === 'paid') { sTxt = 'Ödendi'; sCls = 'status-paid'; }
+                else if (acc.status === 'unpaid') { sTxt = 'Ödenmedi'; sCls = 'status-unpaid'; }
+                else if (acc.status === 'partially_paid') { sTxt = 'K.Ödendi'; sCls = 'status-partially-paid'; }
 
-            const dateStr = acc.createdAt ? new Date(acc.createdAt).toLocaleDateString('tr-TR') : '-';
-            
-            const accType = acc.type || 'Hizmet';
-            let typeBadgeClass = 'badge-primary'; 
-            if (accType === 'Masraf') typeBadgeClass = 'badge-warning text-dark';
-            else if (accType === 'Kur Farkı') typeBadgeClass = 'badge-info';
-            else if (accType === 'Resmi Ücret Farkı') typeBadgeClass = 'badge-danger';
-            else if (accType === 'SWIFT Maliyeti') typeBadgeClass = 'badge-secondary';
-            else if (accType === 'Diğer') typeBadgeClass = 'badge-dark';
-            const typeHtml = `<span class="badge ${typeBadgeClass}">${accType}</span>`;
-
-            let taskDisplay = '-', relatedFileDisplay = '-', fieldDisplay = '-', fullSubject = '-';
-            const task = tasks[String(acc.taskId)];
-            
-            if (task) {
-                const typeObj = transactionTypes.find(t => t.id === task.taskType);
-                taskDisplay = typeObj ? (typeObj.alias || typeObj.name) : (task.title || '-');
+                const dateStr = acc.createdAt ? new Date(acc.createdAt).toLocaleDateString('tr-TR') : '-';
                 
-                if (activeTab === 'main' && task.relatedIpRecordId) {
-                    const ipRec = ipRecords.find(r => r.id === task.relatedIpRecordId);
-                    if (ipRec) {
-                        relatedFileDisplay = ipRec.applicationNumber || ipRec.applicationNo || 'Dosya';
-                        fullSubject = ipRec.markName || ipRec.title || ipRec.name || '-';
+                const accType = acc.type || 'Hizmet';
+                let typeBadgeClass = 'badge-primary'; 
+                if (accType === 'Masraf') typeBadgeClass = 'badge-warning text-dark';
+                else if (accType === 'Kur Farkı') typeBadgeClass = 'badge-info';
+                else if (accType === 'Resmi Ücret Farkı') typeBadgeClass = 'badge-danger';
+                else if (accType === 'SWIFT Maliyeti') typeBadgeClass = 'badge-secondary';
+                else if (accType === 'Diğer') typeBadgeClass = 'badge-dark';
+                const typeHtml = `<span class="badge ${typeBadgeClass}">${accType}</span>`;
+
+                let taskDisplay = '-', relatedFileDisplay = '-', fieldDisplay = '-', fullSubject = '-';
+                const task = tasks[String(acc.taskId)];
+                
+                if (task) {
+                    const typeObj = transactionTypes.find(t => String(t.id) === String(task.taskType));
+                    taskDisplay = typeObj ? (typeObj.alias || typeObj.name) : (task.title || '-');
+                    
+                    if (activeTab === 'main' && task.relatedIpRecordId) {
+                        const ipRec = ipRecordsMap[String(task.relatedIpRecordId)];
+                        if (ipRec) {
+                            relatedFileDisplay = ipRec.applicationNumber || '-';
+                            fullSubject = ipRec.markName || '-';
+                        }
                     }
+
+                    if (typeObj && typeObj.ipType) {
+                        const ipTypeMap = { 'trademark': 'Marka', 'patent': 'Patent', 'design': 'Tasarım', 'suit': 'Dava' };
+                        fieldDisplay = ipTypeMap[typeObj.ipType] || typeObj.ipType.toUpperCase();
+                    }
+                } else { 
+                    taskDisplay = acc.taskTitle || '-'; 
+                    fullSubject = acc.subject || '-';
                 }
 
-            if (typeObj && typeObj.ipType) {
-                    const ipTypeMap = { 'trademark': 'Marka', 'patent': 'Patent', 'design': 'Tasarım', 'suit': 'Dava' };
-                    fieldDisplay = ipTypeMap[typeObj.ipType] || typeObj.ipType.toUpperCase();
-                }
-            } else { 
-                taskDisplay = acc.taskTitle || '-'; 
-                fullSubject = acc.subject || '-';
-            }
+                let shortSubject = fullSubject.length > 18 ? fullSubject.substring(0, 18) + '..' : fullSubject;
+                const subjectHtml = `<span title="${fullSubject}" style="cursor:help;">${shortSubject}</span>`;
 
-            let shortSubject = fullSubject.length > 18 ? fullSubject.substring(0, 18) + '..' : fullSubject;
-            const subjectHtml = `<span title="${fullSubject}" style="cursor:help;">${shortSubject}</span>`;
+                let fullPartyName = '-';
+                if (acc.officialFee?.amount > 0 && acc.tpInvoiceParty) fullPartyName = acc.tpInvoiceParty.name || 'Türk Patent';
+                else if (acc.serviceFee?.amount > 0 && acc.serviceInvoiceParty) fullPartyName = acc.serviceInvoiceParty.name || '-';
 
-            let fullPartyName = '-';
-            if (acc.officialFee?.amount > 0 && acc.tpInvoiceParty) fullPartyName = acc.tpInvoiceParty.name || 'Türk Patent';
-            else if (acc.serviceFee?.amount > 0 && acc.serviceInvoiceParty) fullPartyName = acc.serviceInvoiceParty.name || '-';
+                let shortPartyName = fullPartyName.length > 18 ? fullPartyName.substring(0, 18) + '..' : fullPartyName;
+                const partyHtml = `<span title="${fullPartyName}" style="cursor:help;">${shortPartyName}</span>`;
 
-            let shortPartyName = fullPartyName.length > 18 ? fullPartyName.substring(0, 18) + '..' : fullPartyName;
-            const partyHtml = `<span title="${fullPartyName}" style="cursor:help;">${shortPartyName}</span>`;
+                const tfn = acc.tpeInvoiceNo || '-';
+                const efn = acc.evrekaInvoiceNo || '-';
+                const officialStr = acc.officialFee ? this._formatMoney(acc.officialFee.amount, acc.officialFee.currency) : '-';
 
-            const tfn = acc.tpeInvoiceNo || '-';
-            const efn = acc.evrekaInvoiceNo || '-';
-            const officialStr = acc.officialFee ? this._formatMoney(acc.officialFee.amount, acc.officialFee.currency) : '-';
+                const isEditDisabled = acc.status === 'paid';
+                const editBtnClass = isEditDisabled ? 'btn btn-sm btn-light text-muted disabled' : 'btn btn-sm btn-light text-warning edit-btn action-btn';
+                const editBtnStyle = isEditDisabled ? 'cursor: not-allowed; opacity: 0.5;' : 'cursor: pointer;';
+                const editTitle = isEditDisabled ? 'Ödenmiş kayıt düzenlenemez' : 'Düzenle';
 
-            const isEditDisabled = acc.status === 'paid';
-            const editBtnClass = isEditDisabled ? 'btn btn-sm btn-light text-muted disabled' : 'btn btn-sm btn-light text-warning edit-btn action-btn';
-            const editBtnStyle = isEditDisabled ? 'cursor: not-allowed; opacity: 0.5;' : 'cursor: pointer;';
-            const editTitle = isEditDisabled ? 'Ödenmiş kayıt düzenlenemez' : 'Düzenle';
-
-            const actionMenuHtml = `
-                <div class="dropdown">
-                    <button class="btn btn-sm btn-light text-secondary rounded-circle" type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
-                        <i class="fas fa-ellipsis-v" style="pointer-events: none;"></i>
-                    </button>
-                    <div class="dropdown-menu dropdown-menu-right shadow-sm border-0 p-2" style="min-width: auto;">
-                        <div class="d-flex justify-content-center align-items-center" style="gap: 5px;">
-                            <button class="btn btn-sm btn-light text-primary view-btn action-btn" data-id="${acc.id}" title="Görüntüle">
-                                <i class="fas fa-eye" style="pointer-events: none;"></i>
-                            </button>
-                            <button class="${editBtnClass}" data-id="${acc.id}" style="${editBtnStyle}" title="${editTitle}">
-                                <i class="fas fa-edit" style="pointer-events: none;"></i>
-                            </button>
-                            <button class="btn btn-sm btn-light text-danger delete-btn action-btn" data-id="${acc.id}" title="Sil">
-                                <i class="fas fa-trash-alt" style="pointer-events: none;"></i>
-                            </button>
+                const actionMenuHtml = `
+                    <div class="dropdown">
+                        <button class="btn btn-sm btn-light text-secondary rounded-circle" type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
+                            <i class="fas fa-ellipsis-v" style="pointer-events: none;"></i>
+                        </button>
+                        <div class="dropdown-menu dropdown-menu-right shadow-sm border-0 p-2" style="min-width: auto;">
+                            <div class="d-flex justify-content-center align-items-center" style="gap: 5px;">
+                                <button class="btn btn-sm btn-light text-primary view-btn action-btn" data-id="${acc.id}" title="Görüntüle">
+                                    <i class="fas fa-eye" style="pointer-events: none;"></i>
+                                </button>
+                                <button class="${editBtnClass}" data-id="${acc.id}" style="${editBtnStyle}" title="${editTitle}">
+                                    <i class="fas fa-edit" style="pointer-events: none;"></i>
+                                </button>
+                                <button class="btn btn-sm btn-light text-danger delete-btn action-btn" data-id="${acc.id}" title="Sil">
+                                    <i class="fas fa-trash-alt" style="pointer-events: none;"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            `;
+                `;
 
-            if (activeTab === 'main') {
-                const serviceStr = acc.serviceFee ? this._formatMoney(acc.serviceFee.amount, acc.serviceFee.currency) : '-';
-                
-                let remainingHtml = '-';
-                const rem = acc.remainingAmount !== undefined ? acc.remainingAmount : acc.totalAmount;
-                const isFullyPaid = (Array.isArray(rem)) 
-                    ? rem.length === 0 || rem.every(r => parseFloat(r.amount) <= 0.01)
-                    : parseFloat(rem) <= 0.01;
+                if (activeTab === 'main') {
+                    const serviceStr = acc.serviceFee ? this._formatMoney(acc.serviceFee.amount, acc.serviceFee.currency) : '-';
+                    
+                    let remainingHtml = '-';
+                    const rem = acc.remainingAmount !== undefined ? acc.remainingAmount : acc.totalAmount;
+                    const isFullyPaid = (Array.isArray(rem)) 
+                        ? rem.length === 0 || rem.every(r => parseFloat(r.amount) <= 0.01)
+                        : parseFloat(rem) <= 0.01;
 
-                if (!isFullyPaid) remainingHtml = `<span>${this._formatMoney(rem, acc.totalAmountCurrency)}</span>`;
+                    if (!isFullyPaid) remainingHtml = `<span>${this._formatMoney(rem, acc.totalAmountCurrency)}</span>`;
 
-                return `
-                <tr>
-                    <td><input type="checkbox" class="row-checkbox" data-id="${acc.id}" ${isSelected ? 'checked' : ''}></td>
-                    <td>${acc.id}</td>
-                    <td>${dateStr}</td>
-                    <td>${typeHtml}</td> <td><span class="badge badge-info">${fieldDisplay}</span></td>
-                    <td><span class="status-badge ${sCls}">${sTxt}</span></td>
-                    <td>${relatedFileDisplay}</td>
-                    <td><span class="font-weight-bold text-secondary">${subjectHtml}</span></td>
-                    <td><a href="#" class="task-detail-link" data-task-id="${acc.taskId}">${taskDisplay}</a></td>
-                    <td>${partyHtml}</td>
-                    <td><span class="text-muted font-weight-bold">${tfn}</span></td>
-                    <td><span class="text-muted font-weight-bold">${efn}</span></td>
-                    <td>${officialStr}</td>
-                    <td>${serviceStr}</td>
-                    <td>${this._formatMoney(acc.totalAmount, acc.totalAmountCurrency)}</td>
-                    <td>${remainingHtml}</td>
-                    <td class="text-center">${actionMenuHtml}</td>
-                </tr>`;
-            } else {
-                let paymentParty = acc.serviceInvoiceParty?.name || '-';
-                const fStatus = acc.foreignStatus || 'unpaid';
-                let sTxt = 'Ödenmedi', sCls = 'danger';
-                if (fStatus === 'paid') { sTxt = 'Ödendi'; sCls = 'success'; }
-                else if (fStatus === 'partially_paid') { sTxt = 'Kısmen'; sCls = 'warning'; }
-                
-                let remainingHtml = '-';
-                let foreignRem = acc.foreignRemainingAmount;
-                if (foreignRem === undefined) {
-                    if (fStatus !== 'paid') foreignRem = [{ amount: acc.officialFee?.amount || 0, currency: acc.officialFee?.currency || 'EUR' }];
-                    else foreignRem = []; 
-                }
-                const isFullyPaid = (Array.isArray(foreignRem)) 
-                    ? foreignRem.length === 0 || foreignRem.every(r => parseFloat(r.amount) <= 0.01)
-                    : parseFloat(foreignRem) <= 0.01;
-
-                if (!isFullyPaid) {
-                    remainingHtml = `<span class="text-danger">${this._formatMoney(foreignRem, acc.officialFee?.currency || 'EUR')}</span>`;
+                    return `
+                    <tr>
+                        <td><input type="checkbox" class="row-checkbox" data-id="${acc.id}" ${isSelected ? 'checked' : ''}></td>
+                        <td>${acc.id}</td>
+                        <td>${dateStr}</td>
+                        <td>${typeHtml}</td> <td><span class="badge badge-info">${fieldDisplay}</span></td>
+                        <td><span class="status-badge ${sCls}">${sTxt}</span></td>
+                        <td>${relatedFileDisplay}</td>
+                        <td><span class="font-weight-bold text-secondary">${subjectHtml}</span></td>
+                        <td><a href="#" class="task-detail-link" data-task-id="${acc.taskId}">${taskDisplay}</a></td>
+                        <td>${partyHtml}</td>
+                        <td><span class="text-muted font-weight-bold">${tfn}</span></td>
+                        <td><span class="text-muted font-weight-bold">${efn}</span></td>
+                        <td>${officialStr}</td>
+                        <td>${serviceStr}</td>
+                        <td>${this._formatMoney(acc.totalAmount, acc.totalAmountCurrency)}</td>
+                        <td>${remainingHtml}</td>
+                        <td class="text-center">${actionMenuHtml}</td>
+                    </tr>`;
                 } else {
-                    remainingHtml = `<span class="text-success">Tamamlandı</span>`;
+                    let paymentParty = acc.serviceInvoiceParty?.name || '-';
+                    const fStatus = acc.foreignStatus || 'unpaid';
+                    let fsTxt = 'Ödenmedi', fsCls = 'danger';
+                    if (fStatus === 'paid') { fsTxt = 'Ödendi'; fsCls = 'success'; }
+                    else if (fStatus === 'partially_paid') { fsTxt = 'Kısmen'; fsCls = 'warning'; }
+                    
+                    let remainingHtml = '-';
+                    let foreignRem = acc.foreignRemainingAmount;
+                    if (foreignRem === undefined) {
+                        if (fStatus !== 'paid') foreignRem = [{ amount: acc.officialFee?.amount || 0, currency: acc.officialFee?.currency || 'EUR' }];
+                        else foreignRem = []; 
+                    }
+                    const isFullyPaid = (Array.isArray(foreignRem)) 
+                        ? foreignRem.length === 0 || foreignRem.every(r => parseFloat(r.amount) <= 0.01)
+                        : parseFloat(foreignRem) <= 0.01;
+
+                    if (!isFullyPaid) {
+                        remainingHtml = `<span class="text-danger">${this._formatMoney(foreignRem, acc.officialFee?.currency || 'EUR')}</span>`;
+                    } else {
+                        remainingHtml = `<span class="text-success">Tamamlandı</span>`;
+                    }
+
+                    let documentHtml = '-';
+                    if (acc.files && acc.files.length > 0) {
+                        const lastFile = acc.files[acc.files.length - 1];
+                        const link = lastFile.url || lastFile.content;
+                        documentHtml = `<a href="${link}" target="_blank" class="text-secondary" title="${lastFile.name}"><i class="fas fa-file-contract fa-lg hover-primary"></i></a>`;
+                    }
+
+                    return `
+                    <tr>
+                        <td><input type="checkbox" class="row-checkbox" data-id="${acc.id}" ${isSelected ? 'checked' : ''}></td>
+                        <td>${acc.id}</td>
+                        <td><span class="badge badge-${fsCls}">${fsTxt}</span></td>
+                        <td><a href="#" class="task-detail-link" data-task-id="${acc.taskId}">${taskDisplay}</a></td>
+                        <td>${paymentParty}</td>
+                        <td>${officialStr}</td>
+                        <td>${remainingHtml}</td>
+                        <td>${documentHtml}</td>
+                    </tr>`;
                 }
 
-                let documentHtml = '-';
-                if (acc.files && acc.files.length > 0) {
-                    const lastFile = acc.files[acc.files.length - 1];
-                    const link = lastFile.url || lastFile.content;
-                    documentHtml = `<a href="${link}" target="_blank" class="text-secondary" title="${lastFile.name}"><i class="fas fa-file-contract fa-lg hover-primary"></i></a>`;
-                }
-
-                return `
-                <tr>
-                    <td><input type="checkbox" class="row-checkbox" data-id="${acc.id}" ${isSelected ? 'checked' : ''}></td>
-                    <td>${acc.id}</td>
-                    <td><span class="badge badge-${sCls}">${sTxt}</span></td>
-                    <td><a href="#" class="task-detail-link" data-task-id="${acc.taskId}">${taskDisplay}</a></td>
-                    <td>${paymentParty}</td>
-                    <td>${officialStr}</td>
-                    <td>${remainingHtml}</td>
-                    <td>${documentHtml}</td>
-                </tr>`;
+            } catch (err) {
+                console.error(`Satır çizim hatası (ID: ${acc.id}):`, err);
+                return `<tr><td colspan="15" class="text-danger text-center font-weight-bold">⚠️ Hatalı Veri Formatı (ID: ${acc.id})</td></tr>`;
             }
         }).join('');
 
