@@ -5,36 +5,26 @@ import { TaskDetailManager } from '../components/TaskDetailManager.js';
 
 export class AccrualUIManager {
     constructor() {
-        // DOM Elementleri
         this.tableBody = document.getElementById('accrualsTableBody');
         this.foreignTableBody = document.getElementById('foreignTableBody');
         this.noRecordsMessage = document.getElementById('noRecordsMessage');
         this.bulkActions = document.getElementById('bulkActions');
         this.loadingIndicator = document.getElementById('loadingIndicator');
         
-        // Modal Elementleri
         this.editModal = document.getElementById('editAccrualModal');
         this.viewModal = document.getElementById('viewAccrualDetailModal');
         this.paymentModal = document.getElementById('markPaidModal');
         this.taskDetailModal = document.getElementById('taskDetailModal');
 
-        // Alt Bileşenler (Managers)
         this.editFormManager = null;
         this.taskDetailManager = new TaskDetailManager('modalBody');
 
-        // Veri Saklama (Görüntüleme işlemleri için)
         this.currentData = [];
-
-        // Event Dinleyicilerini Başlat
         this._bindInternalEvents();
     }
 
-    /**
-     * Tablo içi butonlara tıklama olaylarını dinler.
-     */
     _bindInternalEvents() {
         const handleTableClick = (e) => {
-            // 1. Görüntüle Butonu
             const viewBtn = e.target.closest('.view-btn');
             if (viewBtn) {
                 e.preventDefault();
@@ -44,16 +34,13 @@ export class AccrualUIManager {
                 return;
             }
 
-            // 2. Düzenle Butonu (Custom Event fırlatır veya main.js yakalar)
             const editBtn = e.target.closest('.edit-btn');
             if (editBtn && !editBtn.classList.contains('disabled')) {
-                // Main.js'in dinlemesi için global event fırlatıyoruz (Yedek mekanizma)
                 const id = editBtn.dataset.id;
                 document.dispatchEvent(new CustomEvent('accrual-edit-request', { detail: { id } }));
                 return;
             }
 
-            // 3. Sil Butonu
             const deleteBtn = e.target.closest('.delete-btn');
             if (deleteBtn) {
                  const id = deleteBtn.dataset.id;
@@ -66,11 +53,7 @@ export class AccrualUIManager {
         if (this.foreignTableBody) this.foreignTableBody.addEventListener('click', handleTableClick);
     }
 
-    /**
-     * Tabloyu çizer.
-     */
     renderTable(data, lookups, activeTab = 'main') {
-        // Veriyi sakla (Modal açarken kullanacağız)
         this.currentData = data || [];
 
         const { tasks, transactionTypes, ipRecords, selectedIds } = lookups;
@@ -92,9 +75,8 @@ export class AccrualUIManager {
 
             const dateStr = acc.createdAt ? new Date(acc.createdAt).toLocaleDateString('tr-TR') : '-';
             
-            // 🔥 YENİ: Tür Rozeti Renk Ayarlamaları
             const accType = acc.type || 'Hizmet';
-            let typeBadgeClass = 'badge-primary'; // Hizmet (Mavi)
+            let typeBadgeClass = 'badge-primary'; 
             if (accType === 'Masraf') typeBadgeClass = 'badge-warning text-dark';
             else if (accType === 'Kur Farkı') typeBadgeClass = 'badge-info';
             else if (accType === 'Resmi Ücret Farkı') typeBadgeClass = 'badge-danger';
@@ -123,11 +105,9 @@ export class AccrualUIManager {
                 }
             } else { 
                 taskDisplay = acc.taskTitle || '-'; 
-                // 🔥 YENİ: Serbest Tahakkuk (işe bağlı değilse) veritabanındaki konuyu al
                 fullSubject = acc.subject || '-';
             }
 
-            // Kısaltmalar
             let shortSubject = fullSubject.length > 18 ? fullSubject.substring(0, 18) + '..' : fullSubject;
             const subjectHtml = `<span title="${fullSubject}" style="cursor:help;">${shortSubject}</span>`;
 
@@ -142,35 +122,24 @@ export class AccrualUIManager {
             const efn = acc.evrekaInvoiceNo || '-';
             const officialStr = acc.officialFee ? this._formatMoney(acc.officialFee.amount, acc.officialFee.currency) : '-';
 
-            // Menü Yapılandırması
             const isEditDisabled = acc.status === 'paid';
-            
-            // Düzenle butonu için sınıflar (Yazı olmadığı için btn-light kullanıyoruz)
-            const editBtnClass = isEditDisabled 
-                ? 'btn btn-sm btn-light text-muted disabled' 
-                : 'btn btn-sm btn-light text-warning edit-btn action-btn';
-            
+            const editBtnClass = isEditDisabled ? 'btn btn-sm btn-light text-muted disabled' : 'btn btn-sm btn-light text-warning edit-btn action-btn';
             const editBtnStyle = isEditDisabled ? 'cursor: not-allowed; opacity: 0.5;' : 'cursor: pointer;';
             const editTitle = isEditDisabled ? 'Ödenmiş kayıt düzenlenemez' : 'Düzenle';
 
-            // GÜNCELLENDİ: Dropdown içinde sadece ikonlar var
             const actionMenuHtml = `
                 <div class="dropdown">
                     <button class="btn btn-sm btn-light text-secondary rounded-circle" type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
                         <i class="fas fa-ellipsis-v" style="pointer-events: none;"></i>
                     </button>
-                    
                     <div class="dropdown-menu dropdown-menu-right shadow-sm border-0 p-2" style="min-width: auto;">
                         <div class="d-flex justify-content-center align-items-center" style="gap: 5px;">
-                            
                             <button class="btn btn-sm btn-light text-primary view-btn action-btn" data-id="${acc.id}" title="Görüntüle">
                                 <i class="fas fa-eye" style="pointer-events: none;"></i>
                             </button>
-
                             <button class="${editBtnClass}" data-id="${acc.id}" style="${editBtnStyle}" title="${editTitle}">
                                 <i class="fas fa-edit" style="pointer-events: none;"></i>
                             </button>
-
                             <button class="btn btn-sm btn-light text-danger delete-btn action-btn" data-id="${acc.id}" title="Sil">
                                 <i class="fas fa-trash-alt" style="pointer-events: none;"></i>
                             </button>
@@ -210,7 +179,6 @@ export class AccrualUIManager {
                     <td class="text-center">${actionMenuHtml}</td>
                 </tr>`;
             } else {
-                // Yurt Dışı Tablosu
                 let paymentParty = acc.serviceInvoiceParty?.name || '-';
                 const fStatus = acc.foreignStatus || 'unpaid';
                 let sTxt = 'Ödenmedi', sCls = 'danger';
@@ -258,9 +226,6 @@ export class AccrualUIManager {
         this.updateBulkActionsVisibility(selectedIds.size > 0);
     }
 
-    /**
-     * Düzenle Modalını Açar (Bu metod Main.js tarafından veya event ile tetiklenir)
-     */
     initEditModal(accrual, personList, epatsDocument = null) {
         if (!accrual) return;
 
@@ -285,9 +250,6 @@ export class AccrualUIManager {
         this.editModal.classList.add('show');
     }
 
-    /**
-     * Detay Modalını Açar (Artık dahili olarak da çağrılabilir)
-     */
     showViewDetailModal(accrual) {
         if (!accrual) return;
 
@@ -302,7 +264,6 @@ export class AccrualUIManager {
         else if(accrual.status === 'unpaid') { statusText = 'Ödenmedi'; statusColor = '#dc3545'; }
         else if(accrual.status === 'partially_paid') { statusText = 'Kısmen Ödendi'; statusColor = '#ffc107'; }
 
-        // Dosyalar HTML
         let filesHtml = '';
         if (accrual.files && accrual.files.length > 0) {
             filesHtml = accrual.files.map(f => {
@@ -323,7 +284,6 @@ export class AccrualUIManager {
             filesHtml = '<div class="col-12 text-center text-muted font-italic p-3">Ekli dosya bulunmamaktadır.</div>';
         }
 
-        // --- YENİ ALANLARIN DETAYDA GÖSTERİMİ ---
         const tfn = accrual.tpeInvoiceNo || '-';
         const efn = accrual.evrekaInvoiceNo || '-';
 
@@ -400,16 +360,15 @@ export class AccrualUIManager {
     showPaymentModal(selectedAccrualsList, activeTab = 'main') {
         document.getElementById('paidAccrualCount').textContent = selectedAccrualsList.length;
         
-        // 🔥 HATA ÇÖZÜMÜ: valueAsDate yerine text formatında tarih atıyoruz ve DatePicker'ı güncelliyoruz.
         const dateInput = document.getElementById('paymentDate');
         const today = new Date();
         const dd = String(today.getDate()).padStart(2, '0');
         const mm = String(today.getMonth() + 1).padStart(2, '0');
         const yyyy = today.getFullYear();
         
-        dateInput.value = `${dd}.${mm}.${yyyy}`; // Metin kutusuna yaz
+        dateInput.value = `${dd}.${mm}.${yyyy}`;
         if (dateInput._flatpickr) {
-            dateInput._flatpickr.setDate(today, true); // Varsa görsel takvimi de güncelle
+            dateInput._flatpickr.setDate(today, true);
         }
 
         document.getElementById('paymentReceiptFileList').innerHTML = '';
@@ -486,16 +445,10 @@ export class AccrualUIManager {
     }
 
     toggleLoading(show) {
-        // 🔥 Merkezi loading (SimpleLoadingController) varsa onu da kullan
         if (window.SimpleLoadingController && typeof window.SimpleLoadingController.show === 'function') {
-            if (show) {
-                window.SimpleLoadingController.show({ text: 'Veriler Yükleniyor...' });
-            } else {
-                window.SimpleLoadingController.hide();
-            }
+            if (show) window.SimpleLoadingController.show({ text: 'Veriler Yükleniyor...' });
+            else window.SimpleLoadingController.hide();
         }
-        
-        // Yerel indicator varsa onu da gizle/göster
         if(this.loadingIndicator) this.loadingIndicator.style.display = show ? 'block' : 'none';
     }
 
