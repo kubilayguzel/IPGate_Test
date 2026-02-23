@@ -86,41 +86,65 @@ export class AccrualDataManager {
     }
 
     async _fetchTasksInBatches() {
-        if (this.allAccruals.length === 0) return;
-        const taskIds = [...new Set(this.allAccruals.map(a => a.taskId ? String(a.taskId) : null).filter(Boolean))];
+        const rawIds = this.allAccruals.map(a => a.taskId);
+        const validIds = [...new Set(rawIds.filter(id => id && id !== 'null' && id !== 'undefined'))];
         this.allTasks = {}; 
         
-        if (taskIds.length > 0) {
-            const chunkSize = 100;
-            const promises = [];
-            for (let i = 0; i < taskIds.length; i += chunkSize) {
-                const chunk = taskIds.slice(i, i + chunkSize);
-                promises.push(this._fetchBatch('tasks', chunk, 'task'));
-            }
-            await Promise.all(promises);
-        }
+        if (validIds.length === 0) return;
+
+        // 🔥 GÜNCELLEME: Olmayan sütunları çağırmamak için güvenli olan select('*') kullanıyoruz
+        const { data, error } = await supabase.from('tasks').select('*').in('id', validIds);
+        if (error) throw new Error("Görevler çekilemedi: " + error.message);
+
+        data.forEach(row => {
+            const d = row.details || {};
+            // EPATS belgesini her ihtimale karşı arıyoruz
+            const epats = row.epats_document || d.epatsDocument || (d.details && d.details.epatsDocument) || null;
+
+            this.allTasks[String(row.id)] = {
+                id: String(row.id),
+                title: String(row.title || d.title || 'İsimsiz İş'),
+                taskType: String(row.task_type || d.taskType || ''),
+                relatedIpRecordId: row.ip_record_id ? String(row.ip_record_id) : null,
+                assignedTo_uid: row.assigned_to_user_id ? String(row.assigned_to_user_id) : null,
+                epatsDocument: epats
+            };
+        });
     }
 
     async _fetchIpRecordsInBatches() {
-        const recordIds = new Set();
-        Object.values(this.allTasks).forEach(task => {
-            if (task.relatedIpRecordId) recordIds.add(String(task.relatedIpRecordId));
-        });
-
-        const uniqueRecordIds = Array.from(recordIds);
+        const rawIds = Object.values(this.allTasks).map(t => t.relatedIpRecordId);
+        const validIds = [...new Set(rawIds.filter(id => id && id !== 'null' && id !== 'undefined'))];
         this.allIpRecords = [];
         this.ipRecordsMap = {};
 
-        if (uniqueRecordIds.length > 0) {
-            const chunkSize = 100;
-            const promises = [];
-            for (let i = 0; i < uniqueRecordIds.length; i += chunkSize) {
-                const chunk = uniqueRecordIds.slice(i, i + chunkSize);
-                promises.push(this._fetchBatch('ip_records', chunk, 'ipRecord'));
-                promises.push(this._fetchBatch('suits', chunk, 'suit'));
-            }
-            await Promise.all(promises);
-        }
+        if (validIds.length === 0) return;
+
+        // 🔥 GÜNCELLEME: ip_records tablosunda 'details' sütunu OLMADIĞI İÇİN çöküyordu. select('*') ile çözüldü.
+        const [ipRes, suitRes] = await Promise.all([
+            supabase.from('ip_records').select('*').in('id', validIds),
+            supabase.from('suits').select('*').in('id', validIds)
+        ]);
+
+        if (ipRes.error) console.error("IP Records çekilemedi:", ipRes.error);
+        if (suitRes.error) console.error("Suits çekilemedi:", suitRes.error);
+
+        const mapRecords = (rows, type) => {
+            if (!rows) return;
+            rows.forEach(row => {
+                const d = row.details || {};
+                const item = {
+                    id: String(row.id),
+                    applicationNumber: String(row.application_number || row.file_no || d.applicationNumber || d.caseNo || '-'),
+                    markName: String(row.brand_name || row.court_name || d.markName || d.title || d.court || '-')
+                };
+                this.allIpRecords.push(item);
+                this.ipRecordsMap[item.id] = item;
+            });
+        };
+
+        mapRecords(ipRes.data, 'ip');
+        mapRecords(suitRes.data, 'suit');
     }
 
     async _fetchBatch(tableName, ids, type) {
@@ -288,28 +312,39 @@ export class AccrualDataManager {
     async getFreshTaskDetail(taskId) {
         if (!taskId) return null;
         try {
-            let task = this.allTasks[String(taskId)];
-            if (!task || (!task.details && !task.relatedTaskId)) {
-                const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
-                if (data && !error) {
-                    const d = data.details || {};
-                    task = { 
-                        id: data.id, 
-                        ...d, 
-                        ...data,
-                        // Taze veride de eşleştirmeleri yapıyoruz
-                        taskType: data.task_type || d.taskType || d.specificTaskType || data.taskType,
-                        relatedIpRecordId: data.ip_record_id || d.relatedIpRecordId || d.relatedRecordId || data.relatedIpRecordId,
-                        assignedTo_uid: data.assigned_to_user_id || d.assignedTo_uid || data.assignedTo_uid,
-                        title: data.title || d.title || data.title,
-                        epatsDocument: data.epatsDocument || d.epatsDocument || d.details?.epatsDocument || data.epatsDocument
-                    };
-                    this.allTasks[String(taskId)] = task; 
+            // 🔥 KESİN ÇÖZÜM: Belleği (Cache) es geç, her zaman veritabanından TAZE veri çek!
+            const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
+            
+            if (data && !error) {
+                const d = data.details || {};
+                
+                // 1. Veritabanındaki JSONB veriyi al
+                let epats = data.epats_document || d.epatsDocument || (d.details && d.details.epatsDocument) || null;
+                
+                // 2. Eğer yanlışlıkla String olarak geldiyse, anında Obje'ye (JSON) çevir
+                if (typeof epats === 'string') {
+                    try { epats = JSON.parse(epats); } catch(e) {}
                 }
+
+                const task = { 
+                    ...data, // Ham veriyi de içine göm
+                    id: String(data.id),
+                    taskType: String(data.task_type || d.taskType || ''),
+                    relatedIpRecordId: String(data.ip_record_id || d.relatedIpRecordId || ''),
+                    assignedTo_uid: String(data.assigned_to_user_id || d.assignedTo_uid || ''),
+                    title: String(data.title || d.title || ''),
+                    
+                    // 3. Tertemiz Obje formatındaki EPATS'ı ekle
+                    epatsDocument: epats
+                };
+                
+                // Belleği de bu taze veriyle güncelle
+                this.allTasks[String(taskId)] = task; 
+                return task;
             }
-            return task;
+            return this.allTasks[String(taskId)] || null;
         } catch (e) {
-            console.warn('Task fetch error:', e);
+            console.error('Task fetch error:', e);
             return null;
         }
     }
