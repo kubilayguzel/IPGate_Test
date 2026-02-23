@@ -5,7 +5,6 @@ import {
     transactionTypeService, supabase, ipRecordsService 
 } from '../../supabase-config.js';
 
-// Native UUID Üretici
 const generateUUID = () => crypto.randomUUID ? crypto.randomUUID() : 'id-' + Math.random().toString(36).substr(2, 16);
 
 export class AccrualDataManager {
@@ -25,7 +24,6 @@ export class AccrualDataManager {
         try {
             const { error } = await supabase.storage.from('task_documents').upload(path, file);
             if (error) throw error;
-            
             const { data } = supabase.storage.from('task_documents').getPublicUrl(path);
             return data.publicUrl;
         } catch (err) {
@@ -39,7 +37,6 @@ export class AccrualDataManager {
             console.time("Veri Yükleme Süresi");
             console.log("📥 Veri çekme işlemi başladı...");
 
-            // 🔥 DÜZELTME: accrualService yerine doğrudan Supabase kullanılıyor
             const accPromise = supabase.from('accruals').select('*').limit(10000).order('created_at', { ascending: false });
 
             const [accRes, usersRes, typesRes] = await Promise.all([
@@ -48,7 +45,6 @@ export class AccrualDataManager {
                 transactionTypeService.getTransactionTypes()
             ]);
 
-            // Supabase verisini (snake_case) UI'ın beklediği formata çeviriyoruz
             this.allAccruals = accRes.data ? accRes.data.map(row => ({
                 ...(row.details || {}),
                 id: row.id,
@@ -63,7 +59,13 @@ export class AccrualDataManager {
             })) : [];
 
             this.allUsers = usersRes?.success ? (usersRes.data || []) : [];
-            this.allTransactionTypes = typesRes?.success ? (typesRes.data || []) : [];
+            
+            // 🔥 DÜZELTME 1: "Alan" bilgisinin gelmesi için ip_type eşleştirmesi
+            this.allTransactionTypes = typesRes?.success ? (typesRes.data || []).map(t => ({
+                ...t,
+                ipType: t.ip_type || t.details?.ipType || t.ipType,
+                isTopLevelSelectable: t.is_top_level_selectable ?? t.details?.isTopLevelSelectable ?? t.isTopLevelSelectable
+            })) : [];
 
             if (!this.allPersons || this.allPersons.length === 0) this.allPersons = []; 
 
@@ -127,10 +129,25 @@ export class AccrualDataManager {
             if (error) throw error;
             
             data.forEach(row => {
-                const item = { id: row.id, ...(row.details || {}), ...row };
+                const d = row.details || {};
+                const item = { id: row.id, ...d, ...row };
+                
                 if (type === 'task') {
+                    // 🔥 DÜZELTME 2: Dosya bağlantısı ve EPATS belgesi için derin arama
+                    item.taskType = row.task_type || d.taskType || d.specificTaskType || item.taskType;
+                    item.relatedIpRecordId = row.ip_record_id || d.relatedIpRecordId || d.relatedRecordId || item.relatedIpRecordId;
+                    item.assignedTo_uid = row.assigned_to_user_id || d.assignedTo_uid || item.assignedTo_uid;
+                    item.title = row.title || d.title || item.title;
+                    
+                    // EPATS dokümanı fix scriptinden dolayı details'in de içinde kalmış olabilir
+                    item.epatsDocument = row.epatsDocument || d.epatsDocument || d.details?.epatsDocument || item.epatsDocument;
+                    
                     this.allTasks[row.id] = item;
                 } else if (type === 'ipRecord' || type === 'suit') {
+                    // 🔥 DÜZELTME 3: Konu ve Dosya No alanları
+                    item.applicationNumber = row.application_number || row.file_no || d.applicationNumber || d.applicationNo || d.caseNo || item.applicationNumber || item.applicationNo;
+                    item.markName = row.title || row.mark_name || row.court_name || d.markName || d.title || d.name || d.court || item.markName || item.title || item.name;
+                    
                     this.allIpRecords.push(item);
                     this.ipRecordsMap[row.id] = item; 
                 }
@@ -275,7 +292,18 @@ export class AccrualDataManager {
             if (!task || (!task.details && !task.relatedTaskId)) {
                 const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
                 if (data && !error) {
-                    task = { id: data.id, ...(data.details || {}), ...data };
+                    const d = data.details || {};
+                    task = { 
+                        id: data.id, 
+                        ...d, 
+                        ...data,
+                        // Taze veride de eşleştirmeleri yapıyoruz
+                        taskType: data.task_type || d.taskType || d.specificTaskType || data.taskType,
+                        relatedIpRecordId: data.ip_record_id || d.relatedIpRecordId || d.relatedRecordId || data.relatedIpRecordId,
+                        assignedTo_uid: data.assigned_to_user_id || d.assignedTo_uid || data.assignedTo_uid,
+                        title: data.title || d.title || data.title,
+                        epatsDocument: data.epatsDocument || d.epatsDocument || d.details?.epatsDocument || data.epatsDocument
+                    };
                     this.allTasks[String(taskId)] = task; 
                 }
             }
@@ -286,7 +314,6 @@ export class AccrualDataManager {
         }
     }
 
-    // --- YENİ: Ortak Güncelleme Fonksiyonu ---
     async _updateAccrualDb(id, updates) {
         const { data: curr } = await supabase.from('accruals').select('details').eq('id', id).single();
         const newDetails = { ...(curr?.details || {}), ...updates };
@@ -306,23 +333,15 @@ export class AccrualDataManager {
 
     async createFreestyleAccrual(formData, fileToUpload) {
         let newFiles = [];
-        
         if (fileToUpload) {
             const cleanFileName = fileToUpload.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
             const path = `accruals/foreign_invoices/${Date.now()}_${cleanFileName}`;
             const url = await this.uploadFileToStorage(fileToUpload, path);
-            newFiles.push({ 
-                name: fileToUpload.name, url, 
-                type: 'foreign_invoice', 
-                documentDesignation: 'Yurtdışı Fatura/Debit', 
-                uploadedAt: new Date().toISOString() 
-            });
+            newFiles.push({ name: fileToUpload.name, url, type: 'foreign_invoice', documentDesignation: 'Yurtdışı Fatura/Debit', uploadedAt: new Date().toISOString() });
         }
 
         const vatMultiplier = 1 + (formData.vatRate / 100);
-        const targetOff = formData.applyVatToOfficialFee 
-            ? formData.officialFee.amount * vatMultiplier 
-            : formData.officialFee.amount;
+        const targetOff = formData.applyVatToOfficialFee ? formData.officialFee.amount * vatMultiplier : formData.officialFee.amount;
         const targetSrv = formData.serviceFee.amount * vatMultiplier;
 
         const remMap = {};
@@ -335,23 +354,12 @@ export class AccrualDataManager {
         if (newRemainingAmount.length === 0) newStatus = 'paid';
 
         const accrualData = {
-            ...formData,
-            id: generateUUID(),
-            taskId: null, 
-            taskTitle: 'Serbest Tahakkuk',
-            status: newStatus,
-            remainingAmount: newRemainingAmount,
-            files: newFiles,
-            createdAt: new Date().toISOString()
+            ...formData, id: generateUUID(), taskId: null, taskTitle: 'Serbest Tahakkuk',
+            status: newStatus, remainingAmount: newRemainingAmount, files: newFiles, createdAt: new Date().toISOString()
         };
 
         const { error } = await supabase.from('accruals').insert({
-            id: accrualData.id,
-            task_id: null,
-            type: accrualData.type || 'Hizmet',
-            status: newStatus,
-            created_at: accrualData.createdAt,
-            details: accrualData
+            id: accrualData.id, task_id: null, type: accrualData.type || 'Hizmet', status: newStatus, created_at: accrualData.createdAt, details: accrualData
         });
 
         if (error) throw error;
@@ -367,19 +375,12 @@ export class AccrualDataManager {
             const cleanFileName = fileToUpload.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
             const path = `accruals/foreign_invoices/${Date.now()}_${cleanFileName}`;
             const url = await this.uploadFileToStorage(fileToUpload, path);
-            newFiles.push({ 
-                name: fileToUpload.name, url, 
-                type: 'foreign_invoice', 
-                documentDesignation: 'Yurtdışı Fatura/Debit', 
-                uploadedAt: new Date().toISOString() 
-            });
+            newFiles.push({ name: fileToUpload.name, url, type: 'foreign_invoice', documentDesignation: 'Yurtdışı Fatura/Debit', uploadedAt: new Date().toISOString() });
         }
         const finalFiles = [...(currentAccrual.files || []), ...newFiles];
 
         const vatMultiplier = 1 + (formData.vatRate / 100);
-        const targetOff = formData.applyVatToOfficialFee 
-            ? formData.officialFee.amount * vatMultiplier 
-            : formData.officialFee.amount;
+        const targetOff = formData.applyVatToOfficialFee ? formData.officialFee.amount * vatMultiplier : formData.officialFee.amount;
         const targetSrv = formData.serviceFee.amount * vatMultiplier;
 
         const paidOff = currentAccrual.paidOfficialAmount || 0;
@@ -398,13 +399,7 @@ export class AccrualDataManager {
         if (newRemainingAmount.length === 0) newStatus = 'paid';
         else if (paidOff > 0 || paidSrv > 0) newStatus = 'partially_paid';
 
-        const updates = {
-            ...formData,
-            remainingAmount: newRemainingAmount,
-            status: newStatus,
-            files: finalFiles,
-        };
-
+        const updates = { ...formData, remainingAmount: newRemainingAmount, status: newStatus, files: finalFiles };
         await this._updateAccrualDb(accrualId, updates);
         await this.fetchAllData(); 
     }
@@ -414,7 +409,6 @@ export class AccrualDataManager {
         const ids = Array.from(selectedIds);
 
         let uploadedFileRecords = [];
-        
         if (receiptFiles && receiptFiles.length > 0) {
             const uploadPromises = receiptFiles.map(async (fileObj) => {
                 if (!fileObj.file) return fileObj;
@@ -422,16 +416,8 @@ export class AccrualDataManager {
                     const cleanFileName = fileObj.file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
                     const path = `accruals/receipts/${Date.now()}_${cleanFileName}`;
                     const downloadURL = await this.uploadFileToStorage(fileObj.file, path);
-                    return {
-                        name: fileObj.name,
-                        url: downloadURL,
-                        type: fileObj.type || 'application/pdf',
-                        uploadedAt: new Date().toISOString()
-                    };
-                } catch (error) {
-                    console.error("Dosya yükleme hatası:", error);
-                    return null;
-                }
+                    return { name: fileObj.name, url: downloadURL, type: fileObj.type || 'application/pdf', uploadedAt: new Date().toISOString() };
+                } catch (error) { console.error("Dosya yükleme hatası:", error); return null; }
             });
             const results = await Promise.all(uploadPromises);
             uploadedFileRecords = results.filter(f => f !== null);
@@ -441,9 +427,7 @@ export class AccrualDataManager {
             const acc = this.allAccruals.find(a => a.id === id);
             if (!acc) return;
 
-            let updates = {
-                files: [...(acc.files || []), ...uploadedFileRecords]
-            };
+            let updates = { files: [...(acc.files || []), ...uploadedFileRecords] };
 
             if (ids.length === 1 && singlePaymentDetails && singlePaymentDetails.isForeignMode) {
                 updates.foreignPaymentDate = date;
@@ -497,7 +481,6 @@ export class AccrualDataManager {
                 updates.paidServiceAmount = (acc.serviceFee?.amount || 0) * vatMultiplier;
                 updates.paymentDate = date;
             }
-
             return this._updateAccrualDb(id, updates);
         });
 
@@ -510,16 +493,13 @@ export class AccrualDataManager {
         const promises = ids.map(async (id) => {
             const acc = this.allAccruals.find(a => a.id === id);
             if (!acc) return;
-
             const updates = { status: newStatus };
-            
             if (newStatus === 'unpaid') {
                 updates.paymentDate = null;
                 updates.paidOfficialAmount = 0;
                 updates.paidServiceAmount = 0;
                 updates.remainingAmount = acc.totalAmount; 
             }
-
             return this._updateAccrualDb(id, updates);
         });
 
