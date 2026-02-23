@@ -277,7 +277,7 @@ export const transactionTypeService = {
 // 3. ORTAK (COMMON) VERİLER SERVİSİ
 export const commonService = {
     async getCountries() {
-        const { data, error } = await supabase.from('common_data').select('data').eq('id', 'countries').single();
+        const { data, error } = await supabase.from('common').select('data').eq('id', 'countries').single();
         if (error || !data) return { success: false, data: [] };
         // Veriyi JSONB olarak kaydetmiştik, aynen çıkarıyoruz
         return { success: true, data: data.data.list || [] };
