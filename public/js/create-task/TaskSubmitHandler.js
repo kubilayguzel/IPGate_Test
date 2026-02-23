@@ -186,11 +186,13 @@ export class TaskSubmitHandler {
                             size: file.size,
                             uploadedAt: new Date().toISOString()
                         };
-
                         if (fileObj.isEpats) {
                             docData.type = 'epats_document';
                             docData.turkpatentEvrakNo = document.getElementById('turkpatentEvrakNo')?.value || null;
                             docData.documentDate = document.getElementById('epatsDocumentDate')?.value || null;
+                            
+                            // 🔥 YENİ KÖPRÜ: EPATS belgesini derinlerden çıkarıp ana objeye yapıştırıyoruz!
+                            taskData.epatsDocument = docData; 
                         } else {
                             docData.type = 'standard_document';
                         }
