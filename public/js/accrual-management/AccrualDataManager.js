@@ -47,7 +47,7 @@ export class AccrualDataManager {
 
             this.allAccruals = accRes.data ? accRes.data.map(row => ({
                 ...(row.details || {}),
-                id: row.id,
+                id: String(row.id),
                 taskId: row.task_id || row.details?.taskId,
                 type: row.type || row.details?.type,
                 status: row.status || row.details?.status,
@@ -55,12 +55,13 @@ export class AccrualDataManager {
                 updatedAt: row.updated_at || row.details?.updatedAt,
                 isForeignTransaction: row.is_foreign_transaction ?? row.details?.isForeignTransaction ?? false,
                 tpeInvoiceNo: row.tpe_invoice_no || row.details?.tpeInvoiceNo,
-                evrekaInvoiceNo: row.evreka_invoice_no || row.details?.evrekaInvoiceNo
+                evrekaInvoiceNo: row.evreka_invoice_no || row.details?.evrekaInvoiceNo,
+                // 🔥 DÜZELTME: Dosyaları Supabase native sütunundan da çek
+                files: row.files || row.details?.files || []
             })) : [];
 
             this.allUsers = usersRes?.success ? (usersRes.data || []) : [];
             
-            // 🔥 DÜZELTME 1: "Alan" bilgisinin gelmesi için ip_type eşleştirmesi
             this.allTransactionTypes = typesRes?.success ? (typesRes.data || []).map(t => ({
                 ...t,
                 ipType: t.ip_type || t.details?.ipType || t.ipType,
@@ -92,13 +93,11 @@ export class AccrualDataManager {
         
         if (validIds.length === 0) return;
 
-        // 🔥 GÜNCELLEME: Olmayan sütunları çağırmamak için güvenli olan select('*') kullanıyoruz
         const { data, error } = await supabase.from('tasks').select('*').in('id', validIds);
         if (error) throw new Error("Görevler çekilemedi: " + error.message);
 
         data.forEach(row => {
             const d = row.details || {};
-            // EPATS belgesini her ihtimale karşı arıyoruz
             const epats = row.epats_document || d.epatsDocument || (d.details && d.details.epatsDocument) || null;
 
             this.allTasks[String(row.id)] = {
@@ -120,7 +119,6 @@ export class AccrualDataManager {
 
         if (validIds.length === 0) return;
 
-        // 🔥 GÜNCELLEME: ip_records tablosunda 'details' sütunu OLMADIĞI İÇİN çöküyordu. select('*') ile çözüldü.
         const [ipRes, suitRes] = await Promise.all([
             supabase.from('ip_records').select('*').in('id', validIds),
             supabase.from('suits').select('*').in('id', validIds)
@@ -154,26 +152,22 @@ export class AccrualDataManager {
             
             data.forEach(row => {
                 const d = row.details || {};
-                const item = { id: row.id, ...d, ...row };
+                const item = { id: String(row.id), ...d, ...row };
                 
                 if (type === 'task') {
-                    // 🔥 DÜZELTME 2: Dosya bağlantısı ve EPATS belgesi için derin arama
                     item.taskType = row.task_type || d.taskType || d.specificTaskType || item.taskType;
                     item.relatedIpRecordId = row.ip_record_id || d.relatedIpRecordId || d.relatedRecordId || item.relatedIpRecordId;
                     item.assignedTo_uid = row.assigned_to_user_id || d.assignedTo_uid || item.assignedTo_uid;
                     item.title = row.title || d.title || item.title;
-                    
-                    // EPATS dokümanı fix scriptinden dolayı details'in de içinde kalmış olabilir
                     item.epatsDocument = row.epatsDocument || d.epatsDocument || d.details?.epatsDocument || item.epatsDocument;
                     
-                    this.allTasks[row.id] = item;
+                    this.allTasks[item.id] = item;
                 } else if (type === 'ipRecord' || type === 'suit') {
-                    // 🔥 DÜZELTME 3: Konu ve Dosya No alanları
                     item.applicationNumber = row.application_number || row.file_no || d.applicationNumber || d.applicationNo || d.caseNo || item.applicationNumber || item.applicationNo;
                     item.markName = row.title || row.mark_name || row.court_name || d.markName || d.title || d.name || d.court || item.markName || item.title || item.name;
                     
                     this.allIpRecords.push(item);
-                    this.ipRecordsMap[row.id] = item; 
+                    this.ipRecordsMap[item.id] = item; 
                 }
             });
         } catch (err) {
@@ -312,33 +306,27 @@ export class AccrualDataManager {
     async getFreshTaskDetail(taskId) {
         if (!taskId) return null;
         try {
-            // 🔥 KESİN ÇÖZÜM: Belleği (Cache) es geç, her zaman veritabanından TAZE veri çek!
             const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
             
             if (data && !error) {
                 const d = data.details || {};
                 
-                // 1. Veritabanındaki JSONB veriyi al
                 let epats = data.epats_document || d.epatsDocument || (d.details && d.details.epatsDocument) || null;
                 
-                // 2. Eğer yanlışlıkla String olarak geldiyse, anında Obje'ye (JSON) çevir
                 if (typeof epats === 'string') {
                     try { epats = JSON.parse(epats); } catch(e) {}
                 }
 
                 const task = { 
-                    ...data, // Ham veriyi de içine göm
+                    ...data, 
                     id: String(data.id),
                     taskType: String(data.task_type || d.taskType || ''),
                     relatedIpRecordId: String(data.ip_record_id || d.relatedIpRecordId || ''),
                     assignedTo_uid: String(data.assigned_to_user_id || d.assignedTo_uid || ''),
                     title: String(data.title || d.title || ''),
-                    
-                    // 3. Tertemiz Obje formatındaki EPATS'ı ekle
                     epatsDocument: epats
                 };
                 
-                // Belleği de bu taze veriyle güncelle
                 this.allTasks[String(taskId)] = task; 
                 return task;
             }
@@ -361,6 +349,9 @@ export class AccrualDataManager {
         if (updates.status) payload.status = updates.status;
         if (updates.foreignStatus) payload.status = updates.foreignStatus; 
         if (updates.paymentDate || updates.foreignPaymentDate) payload.payment_date = updates.paymentDate || updates.foreignPaymentDate;
+        
+        // 🔥 DÜZELTME: Dosyaları sadece details'e değil doğrudan ana sütuna da yazıyoruz
+        if (updates.files) payload.files = updates.files;
 
         const { error } = await supabase.from('accruals').update(payload).eq('id', id);
         if (error) throw error;
@@ -394,7 +385,10 @@ export class AccrualDataManager {
         };
 
         const { error } = await supabase.from('accruals').insert({
-            id: accrualData.id, task_id: null, type: accrualData.type || 'Hizmet', status: newStatus, created_at: accrualData.createdAt, details: accrualData
+            id: accrualData.id, task_id: null, type: accrualData.type || 'Hizmet', 
+            status: newStatus, created_at: accrualData.createdAt, 
+            files: newFiles, // 🔥 DÜZELTME: Yeni oluştururken de dosyayı sütuna yaz
+            details: accrualData
         });
 
         if (error) throw error;
