@@ -540,12 +540,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 else if (btn.classList.contains('edit-btn')) {
                     this.uiManager.toggleLoading(true);
-                    const acc = this.dataManager.allAccruals.find(a => a.id === id);
-                    const task = await this.dataManager.getFreshTaskDetail(acc.taskId);
-                    let epatsDoc = null;
-                    if(task && task.details?.epatsDocument) epatsDoc = task.details.epatsDocument;
-                    this.uiManager.initEditModal(acc, this.dataManager.allPersons, epatsDoc);
-                    this.uiManager.toggleLoading(false);
+                    try {
+                        const acc = this.dataManager.allAccruals.find(a => a.id === id);
+                        const task = await this.dataManager.getFreshTaskDetail(acc.taskId);
+                        
+                        // epatsDoc değişkenini kendimiz belirlemek yerine 
+                        // direkt çekilen 'task' objesini gönderiyoruz.
+                        this.uiManager.initEditModal(acc, this.dataManager.allPersons, task); 
+                    } catch (error) {
+                        console.error("Hata:", error);
+                    } finally {
+                        this.uiManager.toggleLoading(false);
+                    }
                 }
                 else if (btn.classList.contains('delete-btn')) {
                     if (confirm('Bu tahakkuku silmek istediğinize emin misiniz?')) {
