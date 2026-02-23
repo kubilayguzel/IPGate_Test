@@ -4,11 +4,8 @@ import { FormTemplates } from './form-templates.js';
 import { getSelectedNiceClasses } from '../nice-classification.js';
 import { STATUSES } from '../../utils.js';
 
-// 🔥 Veritabanı için Supabase
+// 🔥 Veritabanı ve Storage için Supabase
 import { supabase } from '../../supabase-config.js';
-
-// 🔥 Dosyalar için Firebase Storage
-import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
 const getVal = (id) => document.getElementById(id)?.value?.trim() || null;
 
@@ -195,26 +192,29 @@ export class SuitStrategy extends BaseStrategy {
 
     async save(data) {
         try {
-            console.log('💾 Dava manuel kaydı başlatılıyor (Hibrit: DB Supabase, Dosyalar Firebase)...', data);
+            console.log('💾 Dava manuel kaydı başlatılıyor (Supabase SQL & Storage)...', data);
 
-            // 1. DOKÜMAN YÜKLEME (FIREBASE STORAGE)
+            // 1. DOKÜMAN YÜKLEME (SUPABASE STORAGE)
             const fileInput = document.getElementById('suitDocument');
             let uploadedDocs = [];
 
             if (fileInput && fileInput.files.length > 0) {
-                console.log(`📤 ${fileInput.files.length} belge Firebase Storage'a yükleniyor...`);
-                const storage = getStorage();
+                console.log(`📤 ${fileInput.files.length} belge Supabase Storage'a yükleniyor...`);
                 
                 for (const file of fileInput.files) {
-                    const storagePath = `suit-documents/${Date.now()}_${file.name}`;
-                    const storageRef = ref(storage, storagePath);
+                    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                    const storagePath = `${Date.now()}_${cleanFileName}`;
+                    
                     try {
-                        const snapshot = await uploadBytes(storageRef, file);
-                        const downloadURL = await getDownloadURL(snapshot.ref);
+                        const { error } = await supabase.storage.from('suit_documents').upload(storagePath, file);
+                        if (error) throw error;
+                        
+                        const { data: urlData } = supabase.storage.from('suit_documents').getPublicUrl(storagePath);
+                        
                         uploadedDocs.push({
                             name: file.name,
-                            url: downloadURL,
-                            type: file.type,
+                            url: urlData.publicUrl,
+                            type: file.type || 'document',
                             uploadedAt: new Date().toISOString(),
                             uploadedBy: 'manual_entry'
                         });
@@ -246,7 +246,7 @@ export class SuitStrategy extends BaseStrategy {
 
             // 3. İLK TRANSACTION (SUPABASE SQL)
             const initialTransaction = {
-                ip_record_id: newSuitId, // Dava ID'sini referans olarak ver
+                ip_record_id: newSuitId, 
                 transaction_type_id: data.transactionTypeId,
                 description: "Dava Açıldı",
                 transaction_hierarchy: 'parent',
