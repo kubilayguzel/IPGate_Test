@@ -311,18 +311,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     this.uiManager.showViewDetailModal(this.dataManager.allAccruals.find(a => a.id === id));
                 } else if (btn.classList.contains('edit-btn')) {
                     this.uiManager.toggleLoading(true);
-                    try {
-                        const acc = this.dataManager.allAccruals.find(a => a.id === id);
-                        const task = await this.dataManager.getFreshTaskDetail(acc.taskId);
-                        
-                        // epatsDoc değişkenini kendimiz belirlemek yerine 
-                        // direkt çekilen 'task' objesini gönderiyoruz.
-                        this.uiManager.initEditModal(acc, this.dataManager.allPersons, task); 
-                    } catch (error) {
-                        console.error("Hata:", error);
-                    } finally {
-                        this.uiManager.toggleLoading(false);
-                    }
+                    const acc = this.dataManager.allAccruals.find(a => a.id === id);
+                    const task = await this.dataManager.getFreshTaskDetail(acc.taskId);
+                    
+                    // 🔥 DÜZELTME 4: Epats dokümanını nerede olursa olsun bulur
+                    let epatsDoc = task?.epatsDocument || task?.details?.epatsDocument || task?.details?.details?.epatsDocument || null;
+                    
+                    this.uiManager.initEditModal(acc, this.dataManager.allPersons, epatsDoc);
+                    this.uiManager.toggleLoading(false);
                 } else if (btn.classList.contains('delete-btn')) {
                     if (confirm('Bu tahakkuku silmek istediğinize emin misiniz?')) {
                         this.uiManager.toggleLoading(true);
