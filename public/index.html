@@ -520,10 +520,14 @@ import { authService, supabase } from './supabase-config.js'; // firebase-config
 import { showNotification, showFieldError, clearAllFieldErrors } from './utils.js';
 
 class AuthController {
-    constructor() {
-        this.currentTab = 'signin';
-        this.init();
-    }
+        constructor() {
+            this.container = document.querySelector('.auth-container');
+            this.tabs = document.querySelectorAll('.auth-tab');
+            this.forms = document.querySelectorAll('.auth-form');
+            
+            this.init();
+            this.checkRecovery(); // 🔥 YENİ: Şifre sıfırlama linkinden gelindiyse yakala
+        }
 
     init() {
         this.setupEventListeners();
@@ -645,55 +649,37 @@ class AuthController {
             }
         }
 
-async handleSignUp() {
-    const name = document.getElementById('signup-name').value.trim();
-    const email = document.getElementById('signup-email').value.trim();
-    const password = document.getElementById('signup-password').value;
+        async handleSignUp() {
+            const name = document.getElementById('signup-name').value;
+            const email = document.getElementById('signup-email').value;
+            const password = document.getElementById('signup-password').value;
 
-    if (!this.validateSignUp(name, email, password)) return;
+            if (!this.validateSignUp(name, email, password)) return;
 
-    this.setLoading('signup', true);
-    sessionStorage.setItem('signup_flow', '1');
-    
-    console.log('📝 Kayıt işlemi başladı:', { name, email }); // DEBUG
+            this.setLoading('signup', true);
+            console.log("📝 Kayıt işlemi başladı:", { name, email });
 
-    try {
-        const result = await authService.signUp(email, password, name, 'user');
-        if (result.success) {
-            const user = auth.currentUser;
-            if (user) {
-                console.log('👤 User created, setting displayName:', name); // DEBUG
-                // Ad-soyad bilgisini kaydetmek için updateProfile fonksiyonunu kullanın.
-                await updateProfile(user, { displayName: name });
-                console.log('✅ DisplayName set successfully'); // DEBUG
-
-                        try {
-                            await sendEmailVerification(user);
-
-                            sessionStorage.setItem('toast_verif_sent', '1');
-                            showNotification('Doğrulama e-postası gönderildi. Lütfen e-postanızı doğrulayıp giriş yapın.', 'success', 10000);
-                        } catch (ve) {
-                            console.error('sendEmailVerification error:', ve);
-                            showNotification('Doğrulama e-postası gönderilemedi. Daha sonra tekrar deneyin.', 'error', 10000);
-                        }
-                        await authService.signOut();
-                        this.switchTab('signin');
-                    } else {
-                        showNotification('Hesap oluşturuldu. Lütfen e-postanızı doğrulayın ve giriş yapın.', 'success', 10000);
-                        this.switchTab('signin');
-                    }
+            try {
+                // 🔥 DÜZELTME: 'auth' yerine 'authService' kullanıyoruz
+                const result = await authService.signUp(email, password, name);
+                
+                if (result.success) {
+                    // Kayıt başarılı olduğunda kullanıcıyı karşıla
+                    showNotification('Kayıt başarılı! Lütfen e-postanızı (Spam kutusu dahil) kontrol ederek onaylayın.', 'success', 15000);
+                    
+                    // Sekmeyi giriş yapma sekmesine çevir
+                    this.switchTab('signin');
                 } else {
                     showNotification(result.error || 'Kayıt başarısız.', 'error', 8000);
                 }
             } catch (err) {
                 console.error('Final sign up error catch:', err);
-                showNotification('Kayıt sırasında beklenmeyen bir hata oluştu.', 'error', 8000);
+                showNotification('Kayıt sırasında bir hata oluştu: ' + err.message, 'error', 8000);
             } finally {
                 this.setLoading('signup', false);
-                sessionStorage.removeItem('signup_flow');
             }
         }
-
+        
         async handlePasswordReset() {
             const email = prompt('Şifre sıfırlama için e-posta adresinizi girin:');
             if (!email || !this.isValidEmail(email)) {
@@ -706,6 +692,29 @@ async handleSignUp() {
                 showNotification('Şifre sıfırlama e-postası gönderildi. Gelen kutunuzu kontrol edin.', 'success');
             } else {
                 showNotification('İşlem gerçekleştirilemedi: ' + result.error, 'error', 10000);
+            }
+        }
+
+        async checkRecovery() {
+            const hash = window.location.hash;
+            if (hash && hash.includes('type=recovery')) {
+                // Supabase'in arkada oturumu kurması için ufak bir bekleme süresi
+                setTimeout(async () => {
+                    const newPassword = prompt("Şifreniz sıfırlanıyor.\nLütfen yeni şifrenizi belirleyin (En az 6 karakter):");
+                    if (newPassword && newPassword.length >= 6) {
+                        const { error } = await supabase.auth.updateUser({ password: newPassword });
+                        if (error) {
+                            showNotification('Şifre güncellenemedi: ' + error.message, 'error', 10000);
+                        } else {
+                            showNotification('Şifreniz başarıyla güncellendi! Yeni şifrenizle giriş yapabilirsiniz.', 'success', 10000);
+                            await authService.signOut(); // Sistemi sıfırla ki baştan temiz giriş yapsın
+                        }
+                    } else {
+                        showNotification('Şifreniz 6 karakterden kısa olamaz veya iptal edildi. Lütfen linke tekrar tıklayın.', 'error', 10000);
+                    }
+                    // Adres çubuğundaki karmakarışık tokeni silip temizle
+                    window.history.replaceState(null, null, window.location.pathname);
+                }, 1000);
             }
         }
         
