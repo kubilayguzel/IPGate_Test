@@ -52,7 +52,7 @@ export class TaskDataManager {
 
     async getCities() {
         try {
-            const { data, error } = await supabase.from('common_data').select('data').eq('id', 'cities_TR').single();
+            const { data, error } = await supabase.from('common').select('data').eq('id', 'cities_TR').single();
             if (data && data.data && data.data.list) {
                 const rawList = data.data.list;
                 if (rawList.length > 0 && typeof rawList[0] === 'string') {
@@ -134,9 +134,26 @@ export class TaskDataManager {
     async getAssignmentRule(taskTypeId) {
         if (!taskTypeId) return null;
         try {
-            const { data, error } = await supabase.from('common_data').select('data').eq('id', `task_rule_${taskTypeId}`).single();
-            return data ? data.data : null;
-        } catch (e) { return null; }
+            // Artık common_data yerine doğrudan kendi tablosuna (task_assignments) gidiyoruz
+            const { data, error } = await supabase
+                .from('task_assignments')
+                .select('*')
+                .eq('id', String(taskTypeId))
+                .single();
+                
+            if (error || !data) return null;
+
+            // Arayüzün (main.js) beklediği camelCase formata çevirerek döndürüyoruz
+            return {
+                transactionTypeId: data.id,
+                assignmentType: data.assignment_type,
+                assigneeIds: data.assignee_ids,
+                allowManualOverride: data.allow_manual_override
+            };
+        } catch (e) {
+            console.error('Assignment rule error:', e);
+            return null;
+        }
     }
 
     async uploadFileToStorage(file, path) {
