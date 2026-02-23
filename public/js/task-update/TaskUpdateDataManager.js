@@ -54,13 +54,19 @@ export class TaskUpdateDataManager {
 
     // --- DOSYA İŞLEMLERİ (Supabase Storage) ---
     async uploadFile(file, path) {
-        const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-        const fullPath = `${Date.now()}_${cleanFileName}`;
+        // Path (yol) main.js'den hazır geliyor (Örn: 'tasks/123/file.pdf' veya 'epats/file.pdf')
+        // Dosya adındaki boşluk veya garip karakterleri temizleyip yeni bir yol oluşturalım:
+        const pathParts = path.split('/');
+        const originalName = pathParts.pop();
+        const cleanFileName = originalName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        pathParts.push(`${Date.now()}_${cleanFileName}`);
         
-        const { error } = await supabase.storage.from('task_documents').upload(fullPath, file);
+        const finalPath = pathParts.join('/');
+        
+        const { error } = await supabase.storage.from('task_documents').upload(finalPath, file);
         if (error) throw error;
         
-        const { data } = supabase.storage.from('task_documents').getPublicUrl(fullPath);
+        const { data } = supabase.storage.from('task_documents').getPublicUrl(finalPath);
         return data.publicUrl;
     }
 
