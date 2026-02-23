@@ -1,11 +1,10 @@
-import { ipRecordsService, personService, taskService, transactionTypeService, commonService, supabase } from '../../supabase-config.js';
+import { ipRecordsService, personService, taskService, transactionTypeService, supabase, commonService } from '../../supabase-config.js';
 
 export class TaskDataManager {
     constructor() {
         this.bulletinDataCache = {};
     }
 
-    // --- BAŞLANGIÇ VERİLERİNİ ÇEKME ---
     async loadInitialData() {
         try {
             const [ipRecords, persons, users, transactionTypes, countries] = await Promise.all([
@@ -16,12 +15,21 @@ export class TaskDataManager {
                 this.getCountries()
             ]);
 
+            // 🔥 ÇÖZÜM BURASI: SQL'den gelen alt_tireli verileri JS'nin beklediği camelCase formata çeviriyoruz.
+            // Bu sayede arayüzdeki "Diğer Marka İşlemleri" listesi tıkır tıkır dolacaktır.
+            let formattedTransactionTypes = this._normalizeData(transactionTypes).map(t => ({
+                ...t,
+                ipType: t.ip_type || t.ipType,
+                isTopLevelSelectable: t.is_top_level_selectable ?? t.isTopLevelSelectable ?? true,
+                applicableToMainType: t.applicable_to_main_type || t.applicableToMainType || []
+            }));
+
             return {
                 allIpRecords: this._normalizeData(ipRecords),
                 allPersons: this._normalizeData(persons),
                 allUsers: this._normalizeData(users),
-                allTransactionTypes: this._normalizeData(transactionTypes),
-                allCountries: countries // Doğrudan normalize edilmiş geliyor
+                allTransactionTypes: formattedTransactionTypes, // Düzenlenmiş listeyi gönderdik
+                allCountries: this._normalizeData(countries)
             };
         } catch (error) {
             console.error("Veri yükleme hatası:", error);
@@ -32,61 +40,42 @@ export class TaskDataManager {
     async fetchAllIpRecords() {
         try {
             return await ipRecordsService.getRecords();
-        } catch (e) {
-            console.error("IP Records fetch error:", e);
-            return [];
-        }
+        } catch (e) { return []; }
     }
 
     async getCountries() {
         try {
             const res = await commonService.getCountries();
             return res.success ? res.data : [];
-        } catch (error) {
-            console.error("Ülke listesi hatası:", error);
-            return [];
-        }
+        } catch (error) { return []; }
     }
 
     async getCities() {
         try {
-            console.log('🔍 getCities() çağrıldı');
             const { data, error } = await supabase.from('common_data').select('data').eq('id', 'cities_TR').single();
-            
             if (data && data.data && data.data.list) {
                 const rawList = data.data.list;
-                console.log(`✅ cities_TR dokümanından ${rawList.length} şehir çekildi`);
-                
                 if (rawList.length > 0 && typeof rawList[0] === 'string') {
                     return rawList.map(cityName => ({ name: cityName }));
                 }
                 return rawList;
             }
             return [];
-        } catch (error) {
-            console.error("❌ getCities hatası:", error);
-            return [];
-        }
+        } catch (error) { return []; }
     }
 
-    // --- ARAMA İŞLEMLERİ ---
     async searchBulletinRecords(term) {
         if (!term || term.length < 2) return [];
-        
         try {
-            // Supabase ilike ile büyük/küçük harf duyarsız arama
-            const { data, error } = await supabase
-                .from('bulletin_records')
-                .select('*')
-                .or(`brand_name.ilike.%${term}%,application_number.ilike.%${term}%`)
-                .limit(50);
-
+            const { data, error } = await supabase.from('bulletin_records').select('*').or(`brand_name.ilike.%${term}%,application_number.ilike.%${term}%`).limit(50);
             if (error) throw error;
-            return data;
-        } catch (err) {
-            console.error('Bulletin arama hatası:', err);
-            return [];
-        }
+            return data.map(d => ({
+                id: d.id,
+                ...d,
+                markName: d.brand_name,
+                applicationNo: d.application_number
+            }));
+        } catch (err) { return []; }
     }
 
     async searchSuits(searchText, allowedTypeIds = []) {
@@ -94,8 +83,6 @@ export class TaskDataManager {
 
         try {
             let query = supabase.from('suits').select('*');
-
-            // JSON içinden de arama yapabilmek için kapsamlı bir OR sorgusu
             query = query.or(`file_no.ilike.%${searchText}%,court_name.ilike.%${searchText}%,plaintiff.ilike.%${searchText}%,defendant.ilike.%${searchText}%`);
 
             const { data, error } = await query.limit(50);
@@ -103,20 +90,26 @@ export class TaskDataManager {
 
             return data.map(doc => {
                 const details = doc.details || {};
+                
+                let validMatch = true;
+                if (allowedTypeIds && allowedTypeIds.length > 0 && allowedTypeIds.length <= 10) {
+                    if (!allowedTypeIds.includes(String(details.transactionTypeId))) validMatch = false;
+                }
+                
+                if(!validMatch) return null;
+
                 return {
                     id: doc.id,
                     ...doc,
+                    ...details,
                     displayFileNumber: doc.file_no || details.caseNo || doc.fileNumber || '-', 
                     displayCourt: doc.court_name || details.court || doc.court || 'Mahkeme Yok',
                     displayClient: doc.plaintiff || details.client?.name || doc.client || '-', 
                     opposingParty: doc.defendant || details.opposingParty || doc.opposingParty || '-',
                     _source: 'suit' 
                 };
-            });
-        } catch (error) {
-            console.error('Dava arama hatası:', error);
-            return [];
-        }
+            }).filter(Boolean);
+        } catch (error) { return []; }
     }
 
     async fetchAndStoreBulletinData(bulletinId) {
@@ -135,36 +128,25 @@ export class TaskDataManager {
             };
             this.bulletinDataCache[bulletinId] = cacheObj;
             return cacheObj;
-        } catch (e) {
-            console.error('Bulletin fetch error:', e);
-            return null;
-        }
+        } catch (e) { return null; }
     }
 
     async getAssignmentRule(taskTypeId) {
         if (!taskTypeId) return null;
         try {
-            // Eski 'taskAssignments' yapısı yerine şimdilik common_data kullanılıyor
             const { data, error } = await supabase.from('common_data').select('data').eq('id', `task_rule_${taskTypeId}`).single();
             return data ? data.data : null;
-        } catch (e) {
-            console.error('Assignment rule error:', e);
-            return null;
-        }
+        } catch (e) { return null; }
     }
 
-    // --- DOSYA VE RESİM İŞLEMLERİ (Supabase Storage) ---
     async uploadFileToStorage(file, path) {
-        if (!file) return null;
+        if (!file || !path) return null;
         try {
-            // URL dostu temiz dosya adı oluştur
-            const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-            const fullPath = `${Date.now()}_${cleanFileName}`;
-
-            const { error } = await supabase.storage.from('task_documents').upload(fullPath, file);
+            // TaskSubmitHandler'da path zaten zaman damgasıyla geliyor, direkt kullanıyoruz
+            const { error } = await supabase.storage.from('task_documents').upload(path, file);
             if (error) throw error;
             
-            const { data } = supabase.storage.from('task_documents').getPublicUrl(fullPath);
+            const { data } = supabase.storage.from('task_documents').getPublicUrl(path);
             return data.publicUrl;
         } catch (error) {
             console.error("Dosya yükleme hatası:", error);
@@ -175,8 +157,10 @@ export class TaskDataManager {
     async resolveImageUrl(path) {
         if (!path) return '';
         if (typeof path === 'string' && path.startsWith('http')) return path;
-        const { data } = supabase.storage.from('task_documents').getPublicUrl(path);
-        return data ? data.publicUrl : '';
+        try {
+            const { data } = supabase.storage.from('brand_images').getPublicUrl(path);
+            return data ? data.publicUrl : '';
+        } catch { return ''; }
     }
 
     _normalizeData(result) {
@@ -186,34 +170,19 @@ export class TaskDataManager {
                (Array.isArray(result) ? result : []);
     }
 
-    // --- TRANSAKSİYONLARI ÇEKME ---
     async getRecordTransactions(recordId, collectionName = 'ipRecords') {
         if (!recordId) return { success: false, message: 'Kayıt ID yok.' };
-
-        console.log(`[TaskDataManager] ${recordId} için transactions çekiliyor...`);
-
         try {
-            // SQL'de transactions tablosu her ikisi için de (dava ve marka) tek bir yerdedir.
-            const { data, error } = await supabase
-                .from('transactions')
-                .select('*')
-                .eq('ip_record_id', recordId)
-                .order('created_at', { ascending: false });
-
+            const { data, error } = await supabase.from('transactions').select('*').eq('ip_record_id', String(recordId)).order('created_at', { ascending: false });
             if (error) throw error;
 
             const mappedData = data.map(t => ({
                 id: t.id,
                 ...t.details,
-                type: String(t.transaction_type_id || (t.details && t.details.type) || ''),
-                creationDate: t.created_at
+                type: String(t.transaction_type_id || t.details?.type || '') 
             }));
 
             return { success: true, data: mappedData };
-
-        } catch (error) {
-            console.error("[TaskDataManager] Transaksiyonlar çekilemedi:", error);
-            return { success: false, error: error };
-        }
+        } catch (error) { return { success: false, error: error }; }
     }
 }
