@@ -1067,14 +1067,29 @@ async loadData() {
                         } catch (e) { console.warn('Parent task fetch error:', e); }
                     }
                 }
-
                 // 🔥 YENİ: Denormalize alanların hesaplanması
                 let ipAppNo = this.matchedRecord.applicationNumber || this.matchedRecord.applicationNo || "-";
                 let ipTitle = this.matchedRecord.title || this.matchedRecord.markName || "-";
-                let ipAppName = this.matchedRecord.resolvedNames || "-";
-                
-                // resolvedNames boşsa (veya tire ise) fallback olarak standart yerlere bak:
-                if (ipAppName === "-") {
+
+                // Müvekkil Kolonu Değer Tespiti (Düzeltilmiş Mantık)
+                let ipAppName = "-";
+
+                if (this.matchedRecord.recordOwnerType === 'third_party') {
+                    // 1. Üçüncü taraf ise öncelikle sistemdeki 'client' (müvekkil) bilgisini al
+                    if (this.matchedRecord.client && this.matchedRecord.client.name) {
+                        ipAppName = this.matchedRecord.client.name;
+                    } 
+                    // 2. Client alanı boşsa, iş akışından gelen isme bak
+                    else if (relatedPartyData && relatedPartyData.name) {
+                        ipAppName = relatedPartyData.name;
+                    }
+                } else {
+                    // 3. Kendi portföyümüz ise dosyanın asıl sahiplerini kullan
+                    ipAppName = this.matchedRecord.resolvedNames || "-";
+                }
+
+                // Fallback: Hala bir isim bulunamadıysa standart yerlere bak
+                if (ipAppName === "-" || !ipAppName) {
                     if (Array.isArray(this.matchedRecord.applicants) && this.matchedRecord.applicants.length > 0) {
                         ipAppName = this.matchedRecord.applicants[0].name || "-";
                     } else if (this.matchedRecord.client && this.matchedRecord.client.name) {
@@ -1127,6 +1142,7 @@ async loadData() {
                     const txRef = doc(collection(db, 'ipRecords', this.matchedRecord.id, 'transactions'), childTransactionId);
                     await updateDoc(txRef, { taskId: String(createdTaskId) }); // 🔥 SADECE taskId
                 }
+
             }
 
             if (createdTaskId && childTypeObj.taskTriggered) {
