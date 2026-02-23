@@ -206,12 +206,12 @@
         </main>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module">
-        import { authService, ipRecordsService, accrualService, auth } from './firebase-config.js';
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script type="module">
+        // 🔥 YENİ: Supabase kütüphaneleri ve oturum yöneticisi eklendi
+        import { waitForAuthUser, ipRecordsService, accrualService } from './supabase-config.js';
         import { showNotification } from './utils.js';
         import { loadSharedLayout } from './js/layout-loader.js';
-        import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
         class DashboardController {
             constructor() {
@@ -221,9 +221,8 @@
                 this.unpaidTrendChart = null;
             }
 
-            async init() {
-                this.currentUser = authService.getCurrentUser();
-                if (!this.currentUser) return; 
+            async init(user) {
+                this.currentUser = user;
                 await this.loadDashboardData();
             }
 
@@ -257,7 +256,10 @@
             
             updateStats(records = []) {
                 const counts = { patent: 0, trademark: 0, copyright: 0, design: 0 };
-                records.forEach(r => { if(counts[r.type] !== undefined) counts[r.type]++; });
+                records.forEach(r => { 
+                    const type = String(r.type || r.ip_type || '').toLowerCase();
+                    if(counts[type] !== undefined) counts[type]++; 
+                });
                 document.getElementById('patentCount').textContent = counts.patent;
                 document.getElementById('trademarkCount').textContent = counts.trademark;
                 document.getElementById('copyrightCount').textContent = counts.copyright;
@@ -267,19 +269,27 @@
             updateActivities(records = []) {
                 const list = document.getElementById('activitiesList');
                 list.innerHTML = '';
-                const recent = records.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
+                
+                const recent = records.sort((a,b) => {
+                    const dateA = a.created_at || a.createdAt || 0;
+                    const dateB = b.created_at || b.createdAt || 0;
+                    return new Date(dateB) - new Date(dateA);
+                }).slice(0, 5);
+                
                 if(recent.length === 0) {
                     list.innerHTML = '<p>Henüz aktivite yok.</p>';
                     return;
                 }
                 const icons = {patent:'📋',trademark:'🏷️',copyright:'©',design:'🎨'}; 
                 recent.forEach(record => {
+                    const rType = String(record.type || record.ip_type || '').toLowerCase();
+                    const rDate = record.created_at || record.createdAt;
                     const item = document.createElement('div');
                     item.className = 'activity-item';
-                    item.innerHTML = `<div class="activity-icon ${record.type}">${icons[record.type] || '📄'}</div>
+                    item.innerHTML = `<div class="activity-icon ${rType}">${icons[rType] || '📄'}</div>
                                 <div class="activity-content">
-                                <div class="activity-title">${record.title || 'Başlıksız Kayıt'}</div>
-                                <div class="activity-time">${new Date(record.createdAt).toLocaleDateString('tr-TR')}</div>
+                                <div class="activity-title">${record.title || record.brand_name || 'Başlıksız Kayıt'}</div>
+                                <div class="activity-time">${rDate ? new Date(rDate).toLocaleDateString('tr-TR') : '-'}</div>
                                 </div>`;
                     list.appendChild(item);
                 });
@@ -290,48 +300,30 @@
                 const monthlyData = {};
                 
                 records.forEach(record => {
-                    let rawDate = record.applicationDate;
+                    let rawDate = record.applicationDate || record.application_date;
                     
-                    // Veri boş veya tire ise direkt atla
                     if (rawDate && rawDate !== '-' && rawDate !== '') {
                         let dateObj = null;
-
                         try {
-                            // 1. Firebase Timestamp Objeleriyse
-                            if (typeof rawDate.toDate === 'function') {
-                                dateObj = rawDate.toDate();
-                            } 
-                            // 2. Zaten Javascript Date objesiyse
-                            else if (rawDate instanceof Date) {
-                                dateObj = rawDate;
-                            } 
-                            // 3. Metin Formatındaysa
+                            if (typeof rawDate.toDate === 'function') dateObj = rawDate.toDate();
+                            else if (rawDate instanceof Date) dateObj = rawDate;
                             else if (typeof rawDate === 'string') {
                                 if (rawDate.includes('.')) {
-                                    // Türkiye formatı: "25.10.2023" -> Yıl, Ay(0-11), Gün
                                     const parts = rawDate.split('.');
-                                    if (parts.length === 3) {
-                                        dateObj = new Date(parts[2], parts[1] - 1, parts[0]);
-                                    }
+                                    if (parts.length === 3) dateObj = new Date(parts[2], parts[1] - 1, parts[0]);
                                 } else {
-                                    // Standart ISO veya İngilizce format
                                     dateObj = new Date(rawDate);
                                 }
-                            } 
-                            // 4. Unix Timestamp (Sayı) ise
-                            else if (typeof rawDate === 'number') {
+                            } else if (typeof rawDate === 'number') {
                                 dateObj = new Date(rawDate);
                             }
 
-                            // Tarih başarıyla oluşturulduysa ve "Invalid Date" değilse işleme al
                             if (dateObj && !isNaN(dateObj.getTime())) {
-                                const month = dateObj.toISOString().slice(0, 7); // YYYY-MM
+                                const month = dateObj.toISOString().slice(0, 7); 
                                 if(!monthlyData[month]) monthlyData[month] = 0;
                                 monthlyData[month]++;
                             }
-                        } catch (e) {
-                            console.warn("Grafik için geçersiz tarih atlandı:", rawDate);
-                        }
+                        } catch (e) {}
                     }
                 });
 
@@ -354,7 +346,6 @@
                 });
             }
 
-
             processFinancialData(accruals = []) {
                 const today = new Date();
                 const eightWeeksAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 56);
@@ -369,48 +360,34 @@
                 const unpaidByClient = {};
 
                 accruals.forEach(accrual => {
-                    // Cari taraf ismini belirle (Service Invoice Party yoksa TP Invoice Party kullan)
                     const clientName = accrual.serviceInvoiceParty?.name || accrual.tpInvoiceParty?.name || 'Bilinmeyen Taraf';
                     
                     let actualPaid = 0;
                     let totalTarget = 0;
                     let actualUnpaid = 0;
 
-                    // 1. HEDEF VE ÖDENEN TUTARLARI HESAPLA (AccrualDataManager Mantığı)
                     if (accrual.isForeignTransaction || accrual.foreignStatus) {
-                        // A. Yurtdışı İşlemleri
                         totalTarget = (accrual.officialFee?.amount || 0) + (accrual.serviceFee?.amount || 0);
-                        if (totalTarget === 0) totalTarget = accrual.totalAmount || 0; // Eski kayıtlar için destek
-                        
+                        if (totalTarget === 0) totalTarget = accrual.totalAmount || 0; 
                         actualPaid = (accrual.foreignPaidOfficialAmount || 0) + (accrual.foreignPaidServiceAmount || 0);
-                        
-                        // Eski verilerde manuel status paid yapılmış ama miktar girilmemişse:
                         if (accrual.foreignStatus === 'paid' && actualPaid === 0) actualPaid = totalTarget;
-
                     } else {
-                        // B. Yurtiçi İşlemleri
                         const vatMultiplier = 1 + ((accrual.vatRate || 0) / 100);
                         const offTarget = accrual.applyVatToOfficialFee ? (accrual.officialFee?.amount || 0) * vatMultiplier : (accrual.officialFee?.amount || 0);
                         const srvTarget = (accrual.serviceFee?.amount || 0) * vatMultiplier;
                         
                         totalTarget = offTarget + srvTarget;
-                        if (totalTarget === 0) totalTarget = accrual.totalAmount || 0; // Eski kayıtlar için destek
-                        
+                        if (totalTarget === 0) totalTarget = accrual.totalAmount || 0; 
                         actualPaid = (accrual.paidOfficialAmount || 0) + (accrual.paidServiceAmount || 0);
-                        
-                        // Eski verilerde manuel status paid yapılmış ama miktar girilmemişse:
                         if (accrual.status === 'paid' && actualPaid === 0) actualPaid = totalTarget;
                     }
 
-                    // Kalan Borcu Hesapla
                     actualUnpaid = Math.max(0, totalTarget - actualPaid);
 
-                    // 2. TAHSİLATLARI (GELİRLERİ) İŞLE
                     if (actualPaid > 0) {
-                        // Ödeme tarihi varsa onu, yoksa güncellenme tarihini baz al
                         const paymentDate = accrual.paymentDate || accrual.foreignPaymentDate 
                             ? new Date(accrual.paymentDate || accrual.foreignPaymentDate) 
-                            : new Date(accrual.updatedAt || accrual.createdAt);
+                            : new Date(accrual.updatedAt || accrual.updated_at || accrual.createdAt || accrual.created_at);
 
                         if (paymentDate >= eightWeeksAgo) {
                             totalIncomeAmount += actualPaid;
@@ -420,9 +397,8 @@
                         }
                     }
 
-                    // 3. ÖDENMEYEN ALACAKLARI (BORÇLARI) İŞLE
                     if (actualUnpaid > 0) {
-                        const createdAt = accrual.createdAt ? new Date(accrual.createdAt) : new Date();
+                        const createdAt = (accrual.createdAt || accrual.created_at) ? new Date(accrual.createdAt || accrual.created_at) : new Date();
                         
                         if (createdAt >= eightWeeksAgo) {
                             totalUnpaidAmount += actualUnpaid;
@@ -433,11 +409,9 @@
                     }
                 });
 
-                // Ekrana Yazdır
                 document.getElementById('totalIncome').textContent = new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(totalIncomeAmount);
                 document.getElementById('totalUnpaid').textContent = new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(totalUnpaidAmount);
 
-                // Grafikleri ve Listeleri Çiz
                 this.renderFinancialTrendCharts(weeklyIncome, weeklyUnpaid, eightWeeksAgo);
                 this.renderTopClients(incomeByClient, 'topIncomeClients');
                 this.renderTopClients(unpaidByClient, 'topUnpaidClients');
@@ -471,58 +445,23 @@
 
                 this.incomeTrendChart = new Chart(incomeCtx, {
                     type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Haftalık Tahsilat',
-                            data: incomeData,
-                            backgroundColor: '#4ecdc4',
-                            borderColor: '#218838',
-                            borderWidth: 1
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: { y: { beginAtZero: true } },
-                        plugins: { legend: { display: false } }
-                    }
+                    data: { labels: labels, datasets: [{ label: 'Haftalık Tahsilat', data: incomeData, backgroundColor: '#4ecdc4', borderColor: '#218838', borderWidth: 1 }] },
+                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { display: false } } }
                 });
 
                 this.unpaidTrendChart = new Chart(unpaidCtx, {
                     type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Haftalık Ödenmeyen Alacak',
-                            data: unpaidData,
-                            backgroundColor: '#ff6b6b',
-                            borderColor: '#c82333',
-                            borderWidth: 1
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: { y: { beginAtZero: true } },
-                        plugins: { legend: { display: false } }
-                    }
+                    data: { labels: labels, datasets: [{ label: 'Haftalık Ödenmeyen Alacak', data: unpaidData, backgroundColor: '#ff6b6b', borderColor: '#c82333', borderWidth: 1 }] },
+                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { display: false } } }
                 });
             }
 
             renderTopClients(clientData, elementId) {
                 const listElement = document.getElementById(elementId);
                 listElement.innerHTML = '';
+                const sortedClients = Object.entries(clientData).sort(([, a], [, b]) => b - a).slice(0, 5);
 
-                const sortedClients = Object.entries(clientData)
-                    .sort(([, amountA], [, amountB]) => amountB - amountA)
-                    .slice(0, 5);
-
-                if (sortedClients.length === 0) {
-                    listElement.innerHTML = '<li>Veri Yok</li>';
-                    return;
-                }
-
+                if (sortedClients.length === 0) { listElement.innerHTML = '<li>Veri Yok</li>'; return; }
                 sortedClients.forEach(([clientName, amount]) => {
                     const listItem = document.createElement('li');
                     listItem.innerHTML = `<span class="client-name">${clientName}</span><span class="client-amount">${new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(amount)}</span>`;
@@ -531,36 +470,19 @@
             }
         }
 
-        // TEK VE TEMİZ DOMContentLoaded BLOĞU
+        // 🔥 YENİ: SUPABASE STANDARTLARINDA GÜVENLİ VE TEK DOMContentLoaded BLOĞU
         document.addEventListener('DOMContentLoaded', async function() {
-            try {
-                await loadSharedLayout({ activeMenuLink: 'dashboard.html' });
-            } catch (error) {
-                console.error("Layout yüklenirken hata:", error);
-            }
+            try { await loadSharedLayout({ activeMenuLink: 'dashboard.html' }); } 
+            catch (error) { console.error("Layout yüklenirken hata:", error); }
 
-            let started = false;
-            const boot = async () => {
-                if (started) return;
-                started = true;
-                const dashboard = new DashboardController();
-                window.dashboard = dashboard;
-                await dashboard.init();
-            };
+            // Supabase Oturum Kontrolü (Yoksa anında index'e atar)
+            const user = await waitForAuthUser({ requireAuth: true, redirectTo: 'index.html', graceMs: 500 });
+            if (!user) return; 
 
-            // Kullanıcı zaten girişliyse anında başlat
-            if (auth.currentUser) {
-                boot();
-            }
-
-            // Auth durumunu dinle; yoksa login'e yönlendir
-            onAuthStateChanged(auth, (user) => {
-                if (user) {
-                    boot();
-                } else {
-                    window.location.replace('index.html');
-                }
-            });
+            // Her şey yolundaysa Dashboard'u başlat
+            const dashboard = new DashboardController();
+            window.dashboard = dashboard;
+            await dashboard.init(user);
         });
     </script>
 </body>
