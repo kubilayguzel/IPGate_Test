@@ -1,19 +1,12 @@
 // js/data-entry/data-entry.js
 
-// 1. Üst Modüller
 import { initializeNiceClassification, getSelectedNiceClasses, setSelectedNiceClasses } from '../nice-classification.js';
 import { loadSharedLayout } from '../layout-loader.js';
 import { PersonModalManager } from '../components/PersonModalManager.js';
-
-// 2. Servisler (Veritabanı için Supabase)
 import { personService, ipRecordsService, transactionTypeService, commonService, supabase, waitForAuthUser, redirectOnLogout } from '../../supabase-config.js';
 import { STATUSES, ORIGIN_TYPES } from '../../utils.js';
 
-// 🔥 3. Firebase Storage (Dosyalar için Firebase'de kalıyoruz)
-import { storage } from '../../firebase-config.js'; 
-import { ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
-
-// 4. Yerel Modüller
+// Yerel Modüller
 import { FormTemplates } from './form-templates.js';
 import { TrademarkStrategy, PatentStrategy, DesignStrategy, SuitStrategy } from './strategies.js';
 
@@ -53,14 +46,14 @@ class DataEntryModule {
     }
 
     async init() {
-        console.log('🚀 Data Entry Module (Hibrit) başlatılıyor...');
+        console.log('🚀 Data Entry Module (Supabase) başlatılıyor...');
         try {
             await waitForAuthUser();
             await this.loadAllData();
             
             this.currentIpType = this.ipTypeSelect.value || 'trademark';
             this.populateOriginDropdown('originSelect', 'TÜRKPATENT', this.currentIpType);
-            this.handleOriginChange(document.getElementById('originSelect').value);
+            this.handleOriginChange(document.getElementById('originSelect')?.value);
 
             this.setupEventListeners();
             this.setupModalCloseButtons();
@@ -98,6 +91,10 @@ class DataEntryModule {
                 const recordResult = await ipRecordsService.getRecordById(this.editingRecordId);
                 if (recordResult.success) {
                     this.populateFormFields(recordResult.data);
+                } else {
+                    // Belki bir dava dosyasıdır
+                    const { data: suitData } = await supabase.from('suits').select('*').eq('id', this.editingRecordId).single();
+                    if (suitData) this.populateFormFields({ id: suitData.id, ...suitData.details, ...suitData });
                 }
             } catch (error) {
                 console.error('Kayıt yükleme hatası:', error);
@@ -312,7 +309,6 @@ class DataEntryModule {
         if (window.EvrekaDatePicker) window.EvrekaDatePicker.refresh(this.dynamicFormContainer);
     }
 
-    // --- SAVE LOGIC ---
     async handleSavePortfolio() {
         const ipType = this.ipTypeSelect.value;
         const strategy = this.strategies[ipType];
@@ -347,7 +343,7 @@ class DataEntryModule {
         const error = strategy.validate(recordData, this);
         if (error) return alert(error);
 
-        recordData.recordOwnerType = this.recordOwnerTypeSelect.value;
+        recordData.recordOwnerType = this.recordOwnerTypeSelect?.value || 'self';
         if (!this.editingRecordId) recordData.createdAt = new Date().toISOString(); 
         recordData.updatedAt = new Date().toISOString(); 
 
@@ -366,11 +362,8 @@ class DataEntryModule {
 
             if (ipType === 'trademark' && this.uploadedBrandImage instanceof File) {
                 this.saveBtn.textContent = 'Resim Yükleniyor...';
-                const fileName = `${Date.now()}_${this.uploadedBrandImage.name}`;
-                const storagePath = `brand-images/${fileName}`;
-                
-                // 🔥 FIREBASE STORAGE'A YÜKLEME
-                const downloadURL = await this.uploadFileToStorage(this.uploadedBrandImage, storagePath);
+                // 🔥 SUPABASE STORAGE
+                const downloadURL = await this.uploadFileToStorage(this.uploadedBrandImage);
                 if (downloadURL) recordData.brandImageUrl = downloadURL;
             } else if (typeof this.uploadedBrandImage === 'string') {
                 recordData.brandImageUrl = this.uploadedBrandImage;
@@ -514,16 +507,16 @@ class DataEntryModule {
     async addTransactionForNewRecord(recordId, ipType, hierarchy = 'parent') {
         const TX_IDS = { trademark: '2', patent: '5', design: '8' };
         try {
-            await ipRecordsService.addTransactionToRecord(String(recordId), {
-                type: String(TX_IDS[ipType] || '2'),
-                transactionTypeId: String(TX_IDS[ipType] || '2'),
+            await supabase.from('transactions').insert({
+                ip_record_id: String(recordId),
+                transaction_type_id: String(TX_IDS[ipType] || '2'),
                 description: hierarchy === 'child' ? 'Ülke başvurusu işlemi.' : 'Başvuru işlemi.',
-                transactionHierarchy: hierarchy 
+                transaction_hierarchy: hierarchy,
+                created_at: new Date().toISOString()
             });
         } catch (error) { console.error(`Transaction hatası:`, error); }
     }
 
-    // --- HELPERS ---
     populateOriginDropdown(dropdownId, selectedValue = 'TÜRKPATENT', ipType) {
         const dropdown = document.getElementById(dropdownId);
         if (!dropdown) return;
@@ -688,13 +681,22 @@ class DataEntryModule {
         else list.innerHTML = this.selectedCountries.map(c => `<div class="selected-item d-flex justify-content-between"><span>${c.name} (${c.code})</span><button class="remove-selected-item-btn" data-code="${c.code}">&times;</button></div>`).join('');
     }
 
-    // 🔥 FIREBASE STORAGE DOSYA YÜKLEME FONKSİYONU
-    async uploadFileToStorage(file, path) {
-        if (!file || !path) return null;
+    // 🔥 SUPABASE STORAGE DOSYA YÜKLEME FONKSİYONU
+    async uploadFileToStorage(file) {
+        if (!file) return null;
         try {
-            const res = await uploadBytes(ref(storage, path), file);
-            return await getDownloadURL(res.ref);
-        } catch (error) { console.error("Upload hatası:", error); return null; }
+            const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            const finalPath = `${Date.now()}_${cleanFileName}`;
+            
+            const { error } = await supabase.storage.from('brand_images').upload(finalPath, file);
+            if (error) throw error;
+            
+            const { data } = supabase.storage.from('brand_images').getPublicUrl(finalPath);
+            return data.publicUrl;
+        } catch (error) { 
+            console.error("Upload hatası:", error); 
+            return null; 
+        }
     }
 
     setupBrandExampleUploader() {
