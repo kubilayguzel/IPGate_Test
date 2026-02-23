@@ -779,6 +779,7 @@ export const taskService = {
                 assigned_to_user_id: taskData.assignedTo_uid || null,
                 ip_record_id: taskData.relatedIpRecordId ? String(taskData.relatedIpRecordId) : null,
                 transaction_id: taskData.transactionId ? String(taskData.transactionId) : null,
+                epats_document: taskData.epatsDocument || null, 
                 history: taskData.history || [],
                 details: taskData 
             };
