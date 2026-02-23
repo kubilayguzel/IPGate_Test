@@ -12,7 +12,7 @@ export class PersonDataManager {
     async getProvinces(countryCode) {
         if (!/^(TR|TUR)$/i.test(countryCode)) return [];
         // Türkiye illerini Supabase common_data'dan çekiyoruz
-        const { data, error } = await supabase.from('common_data').select('data').in('id', ['provinces_TR', 'cities_TR', 'turkey_provinces']);
+        const { data, error } = await supabase.from('common').select('data').in('id', ['provinces_TR', 'cities_TR', 'turkey_provinces']);
         if (data && data.length > 0) {
             for(const row of data) {
                 if(row.data.list) return row.data.list;
