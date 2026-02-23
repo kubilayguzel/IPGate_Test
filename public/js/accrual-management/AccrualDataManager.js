@@ -1,78 +1,76 @@
 // public/js/accrual-management/AccrualDataManager.js
 
 import { 
-    authService, accrualService, taskService, personService, 
-    generateUUID, db, transactionTypeService 
-} from '../../firebase-config.js';
+    authService, taskService, personService, 
+    transactionTypeService, supabase, ipRecordsService 
+} from '../../supabase-config.js';
 
-import { 
-    doc, getDoc, collection, getDocs, query, where, writeBatch, documentId
-} from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
-
-import { 
-    getStorage, ref, uploadBytes, getDownloadURL 
-} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
+// Native UUID Üretici
+const generateUUID = () => crypto.randomUUID ? crypto.randomUUID() : 'id-' + Math.random().toString(36).substr(2, 16);
 
 export class AccrualDataManager {
     constructor() {
-        this.storage = getStorage();
-        
-        // Veri Havuzu
         this.allAccruals = [];
-        this.allTasks = {};         // ID bazlı erişim: { "taskID": { ... } }
-        this.allIpRecords = [];     // Array olarak tutuyoruz (Filtreleme için)
-        this.ipRecordsMap = {};     // ID bazlı hızlı erişim için: { "recordID": { ... } }
+        this.allTasks = {};         
+        this.allIpRecords = [];     
+        this.ipRecordsMap = {};     
         this.allPersons = [];
         this.allUsers = [];
         this.allTransactionTypes = [];
-        
-        // Filtrelenmiş ve İşlenmiş Veri
         this.processedData = [];
     }
 
-    /**
-     * Tüm verileri optimize edilmiş şekilde yükler.
-     */
+    async uploadFileToStorage(file, path) {
+        if (!file) return null;
+        try {
+            const { error } = await supabase.storage.from('task_documents').upload(path, file);
+            if (error) throw error;
+            
+            const { data } = supabase.storage.from('task_documents').getPublicUrl(path);
+            return data.publicUrl;
+        } catch (err) {
+            console.error("Dosya yükleme hatası:", err);
+            return null;
+        }
+    }
+
     async fetchAllData() {
         try {
             console.time("Veri Yükleme Süresi");
             console.log("📥 Veri çekme işlemi başladı...");
 
-            // 1. ANA VERİLERİ ÇEK (Performans İyileştirmesi)
-            // Kişiler (Persons) listesi sadece düzenleme modunda lazımdır, 
-            // sayfa ilk açılışta 1000'lerce kişiyi indirip RAM'i ve süreyi şişirmesini engelliyoruz.
+            // 🔥 DÜZELTME: accrualService yerine doğrudan Supabase kullanılıyor
+            const accPromise = supabase.from('accruals').select('*').limit(10000).order('created_at', { ascending: false });
+
             const [accRes, usersRes, typesRes] = await Promise.all([
-                accrualService.getAccruals(),
+                accPromise,
                 taskService.getAllUsers(),
                 transactionTypeService.getTransactionTypes()
             ]);
 
-            this.allAccruals = accRes?.success ? (accRes.data || []) : [];
+            // Supabase verisini (snake_case) UI'ın beklediği formata çeviriyoruz
+            this.allAccruals = accRes.data ? accRes.data.map(row => ({
+                ...(row.details || {}),
+                id: row.id,
+                taskId: row.task_id || row.details?.taskId,
+                type: row.type || row.details?.type,
+                status: row.status || row.details?.status,
+                createdAt: row.created_at ? new Date(row.created_at) : new Date(0),
+                updatedAt: row.updated_at || row.details?.updatedAt,
+                isForeignTransaction: row.is_foreign_transaction ?? row.details?.isForeignTransaction ?? false,
+                tpeInvoiceNo: row.tpe_invoice_no || row.details?.tpeInvoiceNo,
+                evrekaInvoiceNo: row.evreka_invoice_no || row.details?.evrekaInvoiceNo
+            })) : [];
+
             this.allUsers = usersRes?.success ? (usersRes.data || []) : [];
             this.allTransactionTypes = typesRes?.success ? (typesRes.data || []) : [];
 
-            // Eğer daha önceden çekilmediyse veya boşsa kişi listesini çekme (Sonraya bırak)
-            if (!this.allPersons || this.allPersons.length === 0) {
-                 this.allPersons = []; 
-            }
+            if (!this.allPersons || this.allPersons.length === 0) this.allPersons = []; 
 
-            // Tarihleri Date objesine çevir
-            this.allAccruals.forEach(a => { 
-                a.createdAt = a.createdAt ? new Date(a.createdAt) : new Date(0); 
-            });
-
-            // 2. İLİŞKİLİ TASK'LERİ BATCH HALİNDE ÇEK
-            // Sadece tahakkuklarda kullanılan Task'leri çekiyoruz.
             await this._fetchTasksInBatches();
-
-            // 3. İLİŞKİLİ IP KAYITLARINI BATCH HALİNDE ÇEK (YENİ OPTİMİZASYON)
-            // Sadece çekilen Task'lerde geçen IP Record ID'lerini çekiyoruz.
             await this._fetchIpRecordsInBatches();
 
-            // 4. ARAMA METİNLERİNİ OLUŞTUR
             this._buildSearchStrings();
-
-            // Veriyi processedData'ya aktar
             this.processedData = [...this.allAccruals];
             
             console.timeEnd("Veri Yükleme Süresi");
@@ -85,43 +83,26 @@ export class AccrualDataManager {
         }
     }
 
-    /**
-     * Firestore limitlerine takılmamak için Task ID'lerini 30'arlı gruplar halinde çeker.
-     */
     async _fetchTasksInBatches() {
         if (this.allAccruals.length === 0) return;
-
-        // Benzersiz Task ID'lerini topla
         const taskIds = [...new Set(this.allAccruals.map(a => a.taskId ? String(a.taskId) : null).filter(Boolean))];
+        this.allTasks = {}; 
         
-        this.allTasks = {}; // Sıfırla
-
         if (taskIds.length > 0) {
-            const chunkSize = 30; // Firestore 'in' sorgusu limiti
+            const chunkSize = 100;
             const promises = [];
-
             for (let i = 0; i < taskIds.length; i += chunkSize) {
                 const chunk = taskIds.slice(i, i + chunkSize);
-                // Paralel sorgu başlat
-                promises.push(this._fetchBatch(collection(db, 'tasks'), chunk, 'task'));
+                promises.push(this._fetchBatch('tasks', chunk, 'task'));
             }
-            
             await Promise.all(promises);
         }
     }
 
-    /**
-     * YENİ: Sadece ilgili IP kayıtlarını (Dosyaları) çeker.
-     * Tüm veritabanını indirmeyi engeller.
-     */
     async _fetchIpRecordsInBatches() {
-        // Çekilmiş olan Task'lerin içindeki relatedIpRecordId'leri topla
         const recordIds = new Set();
-        
         Object.values(this.allTasks).forEach(task => {
-            if (task.relatedIpRecordId) {
-                recordIds.add(String(task.relatedIpRecordId));
-            }
+            if (task.relatedIpRecordId) recordIds.add(String(task.relatedIpRecordId));
         });
 
         const uniqueRecordIds = Array.from(recordIds);
@@ -129,35 +110,29 @@ export class AccrualDataManager {
         this.ipRecordsMap = {};
 
         if (uniqueRecordIds.length > 0) {
-            const chunkSize = 30;
+            const chunkSize = 100;
             const promises = [];
-
             for (let i = 0; i < uniqueRecordIds.length; i += chunkSize) {
                 const chunk = uniqueRecordIds.slice(i, i + chunkSize);
-                promises.push(this._fetchBatch(collection(db, 'ipRecords'), chunk, 'ipRecord'));
+                promises.push(this._fetchBatch('ip_records', chunk, 'ipRecord'));
+                promises.push(this._fetchBatch('suits', chunk, 'suit'));
             }
-
             await Promise.all(promises);
         }
     }
 
-    /**
-     * Helper: Firestore'dan ID listesine göre batch veri çeker
-     */
-    async _fetchBatch(collectionRef, ids, type) {
+    async _fetchBatch(tableName, ids, type) {
         try {
-            // documentId() kullanımı __name__ ile aynıdır, daha okunaklıdır
-            const q = query(collectionRef, where(documentId(), 'in', ids));
-            const snapshot = await getDocs(q);
+            const { data, error } = await supabase.from(tableName).select('*').in('id', ids);
+            if (error) throw error;
             
-            snapshot.forEach(doc => {
-                const data = { id: doc.id, ...doc.data() };
-                
+            data.forEach(row => {
+                const item = { id: row.id, ...(row.details || {}), ...row };
                 if (type === 'task') {
-                    this.allTasks[doc.id] = data;
-                } else if (type === 'ipRecord') {
-                    this.allIpRecords.push(data);
-                    this.ipRecordsMap[doc.id] = data; // Hızlı erişim için map de tut
+                    this.allTasks[row.id] = item;
+                } else if (type === 'ipRecord' || type === 'suit') {
+                    this.allIpRecords.push(item);
+                    this.ipRecordsMap[row.id] = item; 
                 }
             });
         } catch (err) {
@@ -165,9 +140,6 @@ export class AccrualDataManager {
         }
     }
 
-    /**
-     * Her bir tahakkuk için aranabilir metin (searchString) oluşturur.
-     */
     _buildSearchStrings() {
         this.allAccruals.forEach(acc => {
             let searchTerms = [
@@ -181,15 +153,11 @@ export class AccrualDataManager {
 
             const task = this.allTasks[String(acc.taskId)];
             if (task) {
-                searchTerms.push(task.title); // İş Başlığı
-                
-                // İş Tipi (Alias)
+                searchTerms.push(task.title); 
                 const typeObj = this.allTransactionTypes.find(t => t.id === task.taskType);
                 if(typeObj) searchTerms.push(typeObj.alias || typeObj.name);
 
-                // Dosya Numarası (App Number)
                 if (task.relatedIpRecordId) {
-                    // Map üzerinden hızlı erişim (Array find yerine)
                     const ipRec = this.ipRecordsMap[task.relatedIpRecordId]; 
                     if(ipRec) searchTerms.push(ipRec.applicationNumber);
                 }
@@ -201,67 +169,36 @@ export class AccrualDataManager {
         });
     }
 
-    /**
-     * Gelişmiş Filtreleme ve Sıralama
-     */
     filterAndSort(criteria, sort) {
-        // main.js'den gelen yapı: criteria = { tab, filters }
         const { tab, filters } = criteria;
-        
-        // Veri yoksa boş dön
-        if (!this.allAccruals || this.allAccruals.length === 0) {
-            return [];
-        }
+        if (!this.allAccruals || this.allAccruals.length === 0) return [];
 
-        // Veri kaynağını belirle
         let data = this.allAccruals;
 
-        // --- 1. SEKME (TAB) AYRIMI ---
         if (tab === 'foreign') {
-            // YURT DIŞI TABI: Sadece "isForeignTransaction" alanı TRUE olanlar
             data = data.filter(item => item.isForeignTransaction === true);
-        } else {
-            // ANA TAB: Tümü (veya isterseniz sadece yurt içi olanlar için alt satırı açabilirsiniz)
-            // data = data.filter(item => item.isForeignTransaction !== true); 
         }
 
-        // --- 2. KÜMÜLATİF FİLTRELER ---
         if (filters) {
-            // A. TARİH FİLTRESİ
             if (filters.startDate) {
                 const start = new Date(filters.startDate).getTime();
-                data = data.filter(item => {
-                    const itemDate = item.createdAt ? new Date(item.createdAt).getTime() : 0;
-                    return itemDate >= start;
-                });
+                data = data.filter(item => { const itemDate = item.createdAt ? new Date(item.createdAt).getTime() : 0; return itemDate >= start; });
             }
             if (filters.endDate) {
                 const end = new Date(filters.endDate);
-                end.setHours(23, 59, 59, 999); // Günün sonuna kadar
+                end.setHours(23, 59, 59, 999); 
                 const endTime = end.getTime();
-                data = data.filter(item => {
-                    const itemDate = item.createdAt ? new Date(item.createdAt).getTime() : 0;
-                    return itemDate <= endTime;
-                });
+                data = data.filter(item => { const itemDate = item.createdAt ? new Date(item.createdAt).getTime() : 0; return itemDate <= endTime; });
             }
-
-            // B. DURUM (Status)
             if (filters.status && filters.status !== 'all') {
-                if (tab === 'foreign') {
-                    // Yurt dışı için foreignStatus kontrolü
-                    data = data.filter(item => (item.foreignStatus || 'unpaid') === filters.status);
-                } else {
-                    data = data.filter(item => item.status === filters.status);
-                }
+                if (tab === 'foreign') data = data.filter(item => (item.foreignStatus || 'unpaid') === filters.status);
+                else data = data.filter(item => item.status === filters.status);
             }
-
-            // C. ALAN (Field - Marka, Patent vb.)
             if (filters.field) {
                 const searchVal = filters.field.toLowerCase();
                 data = data.filter(item => {
                     const task = this.allTasks[String(item.taskId)];
                     const typeObj = task ? this.allTransactionTypes.find(t => t.id === task.taskType) : null;
-                    
                     let itemField = '';
                     if (typeObj && typeObj.ipType) {
                         const ipTypeMap = { 'trademark': 'Marka', 'patent': 'Patent', 'design': 'Tasarım', 'suit': 'Dava' };
@@ -270,8 +207,6 @@ export class AccrualDataManager {
                     return itemField.toLowerCase().includes(searchVal);
                 });
             }
-
-            // D. TARAF (Party)
             if (filters.party) {
                 const searchVal = filters.party.toLowerCase();
                 data = data.filter(item => {
@@ -281,8 +216,6 @@ export class AccrualDataManager {
                     return p1.includes(searchVal) || p2.includes(searchVal) || p3.includes(searchVal);
                 });
             }
-
-            // E. İLGİLİ DOSYA NO
             if (filters.fileNo) {
                 const searchVal = filters.fileNo.toLowerCase();
                 data = data.filter(item => {
@@ -295,8 +228,6 @@ export class AccrualDataManager {
                     return false;
                 });
             }
-
-            // F. KONU
             if (filters.subject) {
                 const searchVal = filters.subject.toLowerCase();
                 data = data.filter(item => {
@@ -309,8 +240,6 @@ export class AccrualDataManager {
                     return false;
                 });
             }
-
-            // G. İLGİLİ İŞ
             if (filters.task) {
                 const searchVal = filters.task.toLowerCase();
                 data = data.filter(item => {
@@ -325,49 +254,28 @@ export class AccrualDataManager {
             }
         }
 
-        // --- 3. SIRALAMA ---
         if (sort && sort.column) {
             data.sort((a, b) => {
-                let valA = a[sort.column];
-                let valB = b[sort.column];
-
-                if (sort.column === 'taskTitle') {
-                    valA = a.taskTitle || ''; valB = b.taskTitle || '';
-                } 
-                else if (sort.column === 'subject') {
-                     valA = String(valA || ''); valB = String(valB || '');
-                }
+                let valA = a[sort.column]; let valB = b[sort.column];
+                if (sort.column === 'taskTitle') { valA = a.taskTitle || ''; valB = b.taskTitle || ''; } 
+                else if (sort.column === 'subject') { valA = String(valA || ''); valB = String(valB || ''); }
 
                 if (valA < valB) return sort.direction === 'asc' ? -1 : 1;
                 if (valA > valB) return sort.direction === 'asc' ? 1 : -1;
                 return 0;
             });
         }
-
         return data;
     }
 
-    // Excel Export Helper Metodu (Data Manager içine ekleyin)
-    async exportToExcelManual(data, tab) {
-         // Burada ExcelJS işlemleri yapılabilir. 
-         // Ancak proje yapısında bu işlemler genelde main.js içinde UI logic ile karışık.
-         // Eğer main.js'deki exportToExcel'i kullanacaksanız bu metoda gerek yok.
-         // Main.js'deki yapı dataManager.filterAndSort'tan dönen veriyi kullandığı için otomatik çalışacaktır.
-    }
-
-    /**
-     * Edit Modal'ı açarken Task detayının taze olduğundan emin olur.
-     */
     async getFreshTaskDetail(taskId) {
         if (!taskId) return null;
-        
         try {
             let task = this.allTasks[String(taskId)];
-            // Eğer task zaten hafızada varsa ve detayları doluysa tekrar çekme
             if (!task || (!task.details && !task.relatedTaskId)) {
-                const snap = await getDoc(doc(db, 'tasks', String(taskId)));
-                if (snap.exists()) {
-                    task = { id: snap.id, ...snap.data() };
+                const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
+                if (data && !error) {
+                    task = { id: data.id, ...(data.details || {}), ...data };
                     this.allTasks[String(taskId)] = task; 
                 }
             }
@@ -378,18 +286,31 @@ export class AccrualDataManager {
         }
     }
 
+    // --- YENİ: Ortak Güncelleme Fonksiyonu ---
+    async _updateAccrualDb(id, updates) {
+        const { data: curr } = await supabase.from('accruals').select('details').eq('id', id).single();
+        const newDetails = { ...(curr?.details || {}), ...updates };
+        
+        const payload = {
+            details: newDetails,
+            updated_at: new Date().toISOString()
+        };
 
-    /**
-     * 🔥 YENİ: Serbest (İşe veya Dosyaya Bağlı Olmayan) Tahakkuk Oluşturur.
-     */
+        if (updates.status) payload.status = updates.status;
+        if (updates.foreignStatus) payload.status = updates.foreignStatus; 
+        if (updates.paymentDate || updates.foreignPaymentDate) payload.payment_date = updates.paymentDate || updates.foreignPaymentDate;
+
+        const { error } = await supabase.from('accruals').update(payload).eq('id', id);
+        if (error) throw error;
+    }
+
     async createFreestyleAccrual(formData, fileToUpload) {
         let newFiles = [];
         
-        // Dosya Yükleme İşlemi
         if (fileToUpload) {
-            const storageRef = ref(this.storage, `accruals/foreign_invoices/${Date.now()}_${fileToUpload.name}`);
-            const snapshot = await uploadBytes(storageRef, fileToUpload);
-            const url = await getDownloadURL(snapshot.ref);
+            const cleanFileName = fileToUpload.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            const path = `accruals/foreign_invoices/${Date.now()}_${cleanFileName}`;
+            const url = await this.uploadFileToStorage(fileToUpload, path);
             newFiles.push({ 
                 name: fileToUpload.name, url, 
                 type: 'foreign_invoice', 
@@ -416,36 +337,36 @@ export class AccrualDataManager {
         const accrualData = {
             ...formData,
             id: generateUUID(),
-            taskId: null,           // 👈 Bağımsız olduğunu belirten kritik alan
+            taskId: null, 
             taskTitle: 'Serbest Tahakkuk',
             status: newStatus,
             remainingAmount: newRemainingAmount,
             files: newFiles,
             createdAt: new Date().toISOString()
         };
-        delete accrualData.files; 
-        accrualData.files = newFiles;
 
-        // Firebase'e Ekle
-        const { accrualService } = await import('../../firebase-config.js');
-        await accrualService.addAccrual(accrualData); // 🔥 createAccrual yerine addAccrual yapıldı
-        
-        // Listeyi tazele
+        const { error } = await supabase.from('accruals').insert({
+            id: accrualData.id,
+            task_id: null,
+            type: accrualData.type || 'Hizmet',
+            status: newStatus,
+            created_at: accrualData.createdAt,
+            details: accrualData
+        });
+
+        if (error) throw error;
         await this.fetchAllData(); 
     }
 
-    /**
-     * Tahakkuk Güncelleme
-     */
     async updateAccrual(accrualId, formData, fileToUpload) {
         const currentAccrual = this.allAccruals.find(a => a.id === accrualId);
         if (!currentAccrual) throw new Error("Tahakkuk bulunamadı.");
 
         let newFiles = [];
         if (fileToUpload) {
-            const storageRef = ref(this.storage, `accruals/foreign_invoices/${Date.now()}_${fileToUpload.name}`);
-            const snapshot = await uploadBytes(storageRef, fileToUpload);
-            const url = await getDownloadURL(snapshot.ref);
+            const cleanFileName = fileToUpload.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            const path = `accruals/foreign_invoices/${Date.now()}_${cleanFileName}`;
+            const url = await this.uploadFileToStorage(fileToUpload, path);
             newFiles.push({ 
                 name: fileToUpload.name, url, 
                 type: 'foreign_invoice', 
@@ -483,16 +404,11 @@ export class AccrualDataManager {
             status: newStatus,
             files: finalFiles,
         };
-        delete updates.files; 
-        updates.files = finalFiles;
 
-        await accrualService.updateAccrual(accrualId, updates);
+        await this._updateAccrualDb(accrualId, updates);
         await this.fetchAllData(); 
     }
 
-    /**
-     * Ödeme Kaydetme
-     */
     async savePayment(selectedIds, paymentData) {
         const { date, receiptFiles, singlePaymentDetails } = paymentData;
         const ids = Array.from(selectedIds);
@@ -503,9 +419,9 @@ export class AccrualDataManager {
             const uploadPromises = receiptFiles.map(async (fileObj) => {
                 if (!fileObj.file) return fileObj;
                 try {
-                    const storageRef = ref(this.storage, `receipts/${Date.now()}_${fileObj.file.name}`);
-                    const snapshot = await uploadBytes(storageRef, fileObj.file);
-                    const downloadURL = await getDownloadURL(snapshot.ref);
+                    const cleanFileName = fileObj.file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                    const path = `accruals/receipts/${Date.now()}_${cleanFileName}`;
+                    const downloadURL = await this.uploadFileToStorage(fileObj.file, path);
                     return {
                         name: fileObj.name,
                         url: downloadURL,
@@ -579,18 +495,16 @@ export class AccrualDataManager {
                 const vatMultiplier = 1 + ((acc.vatRate || 0) / 100);
                 updates.paidOfficialAmount = acc.applyVatToOfficialFee ? (acc.officialFee?.amount || 0) * vatMultiplier : (acc.officialFee?.amount || 0);
                 updates.paidServiceAmount = (acc.serviceFee?.amount || 0) * vatMultiplier;
+                updates.paymentDate = date;
             }
 
-            return accrualService.updateAccrual(id, updates);
+            return this._updateAccrualDb(id, updates);
         });
 
         await Promise.all(promises);
         await this.fetchAllData();
     }
 
-    /**
-     * Toplu Durum Güncelleme
-     */
     async batchUpdateStatus(selectedIds, newStatus) {
         const ids = Array.from(selectedIds);
         const promises = ids.map(async (id) => {
@@ -606,7 +520,7 @@ export class AccrualDataManager {
                 updates.remainingAmount = acc.totalAmount; 
             }
 
-            return accrualService.updateAccrual(id, updates);
+            return this._updateAccrualDb(id, updates);
         });
 
         await Promise.all(promises);
@@ -614,7 +528,7 @@ export class AccrualDataManager {
     }
 
     async deleteAccrual(id) {
-        await accrualService.deleteAccrual(id);
+        await supabase.from('accruals').delete().eq('id', id);
         await this.fetchAllData();
     }
 }
