@@ -122,8 +122,19 @@ class TaskUpdateController {
         }
 
         this.selectedIpRecordId = this.taskData.relatedIpRecordId || null;
+        
+        // 🔥 ÇÖZÜM 1: İLGİLİ TARAF (MÜVEKKİL) OKUMA MANTIĞI GÜÇLENDİRİLDİ
         let ownerId = this.taskData.taskOwner || this.taskData.details?.taskOwner;
+        
+        // Eğer ownerId yoksa, eski esnek yapıdaki relatedParties dizisine bak
+        if (!ownerId && this.taskData.details?.relatedParties?.length > 0) {
+            const rp = this.taskData.details.relatedParties[0];
+            ownerId = typeof rp === 'object' ? rp.id : rp;
+        }
+
         if (Array.isArray(ownerId)) ownerId = ownerId[0];
+        if (ownerId && typeof ownerId === 'object') ownerId = ownerId.id;
+        
         this.selectedPersonId = ownerId || null;
 
         this.uiManager.fillForm(this.taskData, this.masterData.users);
@@ -346,11 +357,15 @@ class TaskUpdateController {
         if (!files.length) return;
         for (const file of files) {
             const id = generateUUID();
-            const path = `tasks/${this.taskId}/${id}_${file.name}`;
+            // 🔥 ÇÖZÜM 2: Dosya adını temizle ve zaman damgasını burada baştan ekle
+            const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            const finalPath = `tasks/${this.taskId}/${Date.now()}_${id}_${cleanFileName}`;
+            
             try {
-                const url = await this.dataManager.uploadFile(file, path);
+                // finalPath veritabanına storagePath olarak tam kaydedilecek
+                const url = await this.dataManager.uploadFile(file, finalPath);
                 this.currentDocuments.push({
-                    id, name: file.name, url, storagePath: path, size: file.size, 
+                    id, name: file.name, url, storagePath: finalPath, size: file.size, 
                     uploadedAt: new Date().toISOString()
                 });
             } catch (e) { console.error(e); }
@@ -399,12 +414,14 @@ class TaskUpdateController {
         }
 
         const id = generateUUID();
-        const path = `epats/${id}_${file.name}`;
+        // 🔥 ÇÖZÜM 2 (Devamı): EPATS için de temiz yol üretimi
+        const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const finalPath = `epats/${Date.now()}_${id}_${cleanFileName}`;
         
         try {
-            const url = await this.dataManager.uploadFile(file, path);
+            const url = await this.dataManager.uploadFile(file, finalPath);
             const epatsDoc = {
-                id, name: file.name, url, downloadURL: url, storagePath: path, size: file.size,
+                id, name: file.name, url, downloadURL: url, storagePath: finalPath, size: file.size,
                 uploadedAt: new Date().toISOString(), type: 'epats_document' 
             };
 
