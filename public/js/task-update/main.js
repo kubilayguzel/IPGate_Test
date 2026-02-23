@@ -1,27 +1,24 @@
-import { authService, auth, generateUUID } from '../../firebase-config.js';
+import { authService } from '../../supabase-config.js';
 import { loadSharedLayout, ensurePersonModal } from '../layout-loader.js';
-import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-
-import { Timestamp, arrayUnion} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"; 
 import { showNotification } from '../../utils.js';
 
 // --- PDF.js Kütüphanesi Düzeltmesi ---
 import * as pdfjsLibProxy from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/+esm';
-
-// Kütüphane bazen 'default' özelliği içinde geliyor, bunu kontrol ediyoruz:
 const pdfjsLib = pdfjsLibProxy.GlobalWorkerOptions ? pdfjsLibProxy : pdfjsLibProxy.default;
-
-// Worker Kaynağını Ayarla
 if (pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
 } else {
-    console.error("HATA: PDF.js kütüphanesi düzgün yüklenemedi. GlobalWorkerOptions bulunamadı.");
+    console.error("HATA: PDF.js kütüphanesi düzgün yüklenemedi.");
 }
 
 import { TaskUpdateDataManager } from './TaskUpdateDataManager.js';
 import { TaskUpdateUIManager } from './TaskUpdateUIManager.js';
 import { AccrualFormManager } from '../components/AccrualFormManager.js';
 
+// 🔥 YENİ: Firebase generateUUID yerine native UUID oluşturucu
+function generateUUID() {
+    return crypto.randomUUID ? crypto.randomUUID() : 'id-' + Math.random().toString(36).substr(2, 16);
+}
 
 class TaskUpdateController {
     constructor() {
@@ -50,24 +47,26 @@ class TaskUpdateController {
         this.taskId = new URLSearchParams(window.location.search).get('id');
         if (!this.taskId) return window.location.href = 'task-management.html';
 
-        onAuthStateChanged(auth, async (user) => {
-            if (!user) return window.location.href = 'index.html';
+        // 🔥 SUPABASE AUTH KONTROLÜ (Firebase onAuthStateChanged yerine)
+        const user = authService.getCurrentUser();
+        if (!user) {
+            console.warn("Oturum bulunamadı, logine yönlendiriliyorsunuz.");
+            return window.location.href = 'index.html';
+        }
             
-            try {
-                this.masterData = await this.dataManager.loadAllInitialData();
-                await this.refreshTaskData();
-                this.setupEvents();
-                this.setupAccrualModal();
-            } catch (e) {
-                console.error('Başlatma hatası:', e);
-                alert('Sayfa yüklenemedi: ' + e.message);
-            }
-        });
+        try {
+            this.masterData = await this.dataManager.loadAllInitialData();
+            await this.refreshTaskData();
+            this.setupEvents();
+            this.setupAccrualModal();
+        } catch (e) {
+            console.error('Başlatma hatası:', e);
+            alert('Sayfa yüklenemedi: ' + e.message);
+        }
+        
         this.uiManager.ensureRenewalDataModal();
         this.setupRenewalModalEvents();
     }
-
-    // public/js/task-update/main.js içindeki metodun güncel hali
 
     async extractEpatsInfoFromFile(file) {
         try {
@@ -84,42 +83,29 @@ class TaskUpdateController {
                 fullText += strings.join(' ') + '\n';
             }
 
-            // PDF'teki gereksiz alt satırları ve boşlukları tek bir boşluğa indirgiyoruz
             const normalizedText = fullText.replace(/\s+/g, ' '); 
 
-            // 1. Evrak No Yakalayıcı (Araya giren virgül, tırnak vb. karakterleri tolere eder)
             let evrakNo = null;
             const evrakNoRegex = /(?<!İtirazın\s)Evrak\s+(?:No|Numarası)[\s:.\-,"']*([a-zA-Z0-9\-]+)/i;
             const evrakNoMatch = normalizedText.match(evrakNoRegex);
-            
-            if (evrakNoMatch) {
-                // Eğer numaranın sonunda fazladan tire kalmışsa temizle (Örn: 2026GE-12345- -> 2026GE-12345)
-                evrakNo = evrakNoMatch[1].trim().replace(/-$/, '');
-            }
+            if (evrakNoMatch) evrakNo = evrakNoMatch[1].trim().replace(/-$/, '');
 
-            // 2. Evrak Tarihi Yakalayıcı (Araya giren virgül ve tırnak işaretlerini artık atlayacak)
             let documentDate = null;
             const dateRegex = /(?:Tarih|Evrak\s+Tarihi)[\s:.\-,"']*(\d{1,2}[./]\d{1,2}[./]\d{4})/i;
             const dateMatch = normalizedText.match(dateRegex);
-            
-            if (dateMatch) {
-                documentDate = this.parseDate(dateMatch[1]);
-            }
+            if (dateMatch) documentDate = this.parseDate(dateMatch[1]);
 
             return { evrakNo, documentDate };
-
         } catch (e) {
             console.error("PDF okuma hatası:", e);
             return null;
         }
     }
 
-    // Yardımcı: DD.MM.YYYY formatını YYYY-MM-DD (HTML input formatı) yapar
     parseDate(dateStr) {
         if (!dateStr) return null;
         const parts = dateStr.replace(/\//g, '.').split('.');
         if (parts.length === 3) {
-            // parts[2]=Yıl, parts[1]=Ay, parts[0]=Gün
             return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
         }
         return null;
@@ -129,21 +115,18 @@ class TaskUpdateController {
         this.taskData = await this.dataManager.getTaskById(this.taskId);
         this.currentDocuments = this.taskData.documents || [];
         
-        // ESKİ KAYITLARI YENİ YAPIYA OTOMATİK TAŞIMA (Geriye Dönük Uyumluluk)
         if (this.taskData.details?.epatsDocument && !this.currentDocuments.some(d => d.type === 'epats_document')) {
             const legacyEpats = this.taskData.details.epatsDocument;
-            legacyEpats.type = 'epats_document'; // Tipini belirle
-            this.currentDocuments.push(legacyEpats); // Ana diziye kat
+            legacyEpats.type = 'epats_document'; 
+            this.currentDocuments.push(legacyEpats); 
         }
 
         this.selectedIpRecordId = this.taskData.relatedIpRecordId || null;
-        let ownerId = this.taskData.taskOwner;
+        let ownerId = this.taskData.taskOwner || this.taskData.details?.taskOwner;
         if (Array.isArray(ownerId)) ownerId = ownerId[0];
         this.selectedPersonId = ownerId || null;
 
         this.uiManager.fillForm(this.taskData, this.masterData.users);
-        
-        // Tek bir diziyle tüm arayüzü çiz
         this.uiManager.renderDocuments(this.currentDocuments);
         this.renderAccruals();
         
@@ -165,8 +148,6 @@ class TaskUpdateController {
         const isLocked = lockedTypes.includes(String(this.taskData.taskType));
         
         if (isLocked) {
-            console.log('🔒 Başvuru işlemi tespit edildi, ilgili alanlar kilitleniyor.');
-            
             const ipSearchInput = document.getElementById('relatedIpRecordSearch');
             const ipRemoveBtn = document.querySelector('#selectedIpRecordDisplay #removeIpRecordBtn');
             
@@ -175,9 +156,7 @@ class TaskUpdateController {
                 ipSearchInput.placeholder = "Bu iş tipi için varlık değiştirilemez.";
                 ipSearchInput.style.backgroundColor = "#e9ecef"; 
             }
-            if (ipRemoveBtn) {
-                ipRemoveBtn.style.display = 'none'; 
-            }
+            if (ipRemoveBtn) ipRemoveBtn.style.display = 'none'; 
             
             const partySearchInput = document.getElementById('relatedPartySearch');
             const partyRemoveBtn = document.querySelector('#selectedRelatedPartyDisplay #removeRelatedPartyBtn');
@@ -187,9 +166,7 @@ class TaskUpdateController {
                 partySearchInput.placeholder = "Bu iş tipi için taraf değiştirilemez.";
                 partySearchInput.style.backgroundColor = "#e9ecef";
             }
-            if (partyRemoveBtn) {
-                partyRemoveBtn.style.display = 'none';
-            }
+            if (partyRemoveBtn) partyRemoveBtn.style.display = 'none';
         }
     }
     
@@ -213,7 +190,6 @@ class TaskUpdateController {
         document.getElementById('epatsFileUploadArea').addEventListener('click', () => document.getElementById('epatsFileInput').click());
         document.getElementById('epatsFileInput').addEventListener('change', (e) => this.uploadEpatsDocument(e.target.files[0]));
 
-        // EPATS drag & drop
         const epatsDropZone = document.getElementById('epatsFileUploadArea');
         const epatsInput = document.getElementById('epatsFileInput');
         if (epatsDropZone) {
@@ -225,10 +201,7 @@ class TaskUpdateController {
             epatsDropZone.addEventListener('drop', (ev) => {
                 const files = ev.dataTransfer?.files;
                 if (!files || !files.length) return;
-
-                if (files.length > 1) {
-                    showNotification('Sadece tek PDF yükleyebilirsiniz. İlk dosya seçildi.', 'warning');
-                }
+                if (files.length > 1) showNotification('Sadece tek PDF yükleyebilirsiniz. İlk dosya seçildi.', 'warning');
 
                 const file = files[0];
                 const isPdf = (file.type === 'application/pdf') || (file.name && file.name.toLowerCase().endsWith('.pdf'));
@@ -236,17 +209,13 @@ class TaskUpdateController {
                     showNotification('Lütfen PDF dosyası yükleyin.', 'warning');
                     return;
                 }
-
-                // Aynı dosya tekrar seçilebilsin diye input'u temizle
                 if (epatsInput) epatsInput.value = '';
                 this.uploadEpatsDocument(file);
             });
         }
 
         document.getElementById('epatsFileListContainer').addEventListener('click', (e) => {
-            if (e.target.closest('#removeEpatsFileBtn')) {
-                this.removeEpatsDocument();
-            }
+            if (e.target.closest('#removeEpatsFileBtn')) this.removeEpatsDocument();
         });
 
         document.getElementById('relatedIpRecordSearch').addEventListener('input', (e) => {
@@ -286,14 +255,11 @@ class TaskUpdateController {
                 }
                 
                 this.tempApplicationData = { appNo, appDate };
-                
                 document.getElementById('displayModalAppNo').value = appNo;
                 document.getElementById('displayModalAppDate').value = appDate;
                 
                 const infoArea = document.getElementById('updatedApplicationInfoArea');
-                if (infoArea) {
-                    infoArea.style.display = 'block';
-                }
+                if (infoArea) infoArea.style.display = 'block';
 
                 const displayNo = document.getElementById('displayAppNumber');
                 if(displayNo) displayNo.textContent = appNo;
@@ -324,7 +290,7 @@ class TaskUpdateController {
         if (!record) return;
 
         const isTurkpatent = (record.origin || '').toUpperCase() === 'TÜRKPATENT';
-        const currentRenewalDate = record.renewalDate;
+        const currentRenewalDate = record.renewalDate || record.renewal_date;
         
         const modalDateInput = document.getElementById('modalRenewalDate');
         const warningArea = document.getElementById('renewalWarningArea');
@@ -334,10 +300,7 @@ class TaskUpdateController {
         warningArea.style.display = 'none';
 
         if (isTurkpatent && currentRenewalDate) {
-            let dateObj = (typeof currentRenewalDate === 'object' && currentRenewalDate.toDate) 
-                ? currentRenewalDate.toDate() 
-                : new Date(currentRenewalDate);
-
+            let dateObj = new Date(currentRenewalDate);
             if (!isNaN(dateObj.getTime())) {
                 const nextRenewalDate = new Date(dateObj);
                 nextRenewalDate.setFullYear(nextRenewalDate.getFullYear() + 10);
@@ -383,7 +346,7 @@ class TaskUpdateController {
         if (!files.length) return;
         for (const file of files) {
             const id = generateUUID();
-            const path = `task_documents/${this.taskId}/${id}_${file.name}`;
+            const path = `tasks/${this.taskId}/${id}_${file.name}`;
             try {
                 const url = await this.dataManager.uploadFile(file, path);
                 this.currentDocuments.push({
@@ -415,7 +378,6 @@ class TaskUpdateController {
 
         if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
             showNotification('PDF taranıyor, evrak bilgileri okunuyor...', 'info');
-            
             this.extractEpatsInfoFromFile(file).then(info => {
                 if (info) {
                     const noInput = document.getElementById('turkpatentEvrakNo');
@@ -428,37 +390,28 @@ class TaskUpdateController {
                     }
                     if (info.documentDate && dateInput && !dateInput.value) {
                         dateInput.value = info.documentDate;
-                        
-                        // 🔥 ÇÖZÜM: Date Picker (Flatpickr) Görselini Güncelleme
-                        if (dateInput._flatpickr) {
-                            dateInput._flatpickr.setDate(info.documentDate, true);
-                        }
-                        
+                        if (dateInput._flatpickr) dateInput._flatpickr.setDate(info.documentDate, true);
                         msg.push('Tarih');
                     }
-
-                    if (msg.length > 0) {
-                        showNotification(`✅ PDF'ten otomatik dolduruldu: ${msg.join(', ')}`, 'success');
-                    }
+                    if (msg.length > 0) showNotification(`✅ PDF'ten otomatik dolduruldu: ${msg.join(', ')}`, 'success');
                 }
             });
         }
 
         const id = generateUUID();
-        const path = `epats_documents/${id}_${file.name}`;
+        const path = `epats/${id}_${file.name}`;
         
         try {
             const url = await this.dataManager.uploadFile(file, path);
             const epatsDoc = {
                 id, name: file.name, url, downloadURL: url, storagePath: path, size: file.size,
-                uploadedAt: new Date().toISOString(), type: 'epats_document' // 🔥 TEK DİZİ İÇİN KİMLİK
+                uploadedAt: new Date().toISOString(), type: 'epats_document' 
             };
 
-            // Varsa eskisini sil, yenisini ekle
             this.currentDocuments = this.currentDocuments.filter(d => d.type !== 'epats_document');
             this.currentDocuments.push(epatsDoc);
 
-            this.uiManager.renderDocuments(this.currentDocuments); // Arayüzü güncelle
+            this.uiManager.renderDocuments(this.currentDocuments); 
 
             const statusSelect = document.getElementById('taskStatus');
             if(statusSelect) statusSelect.value = 'completed'; 
@@ -482,7 +435,6 @@ class TaskUpdateController {
             try { await this.dataManager.deleteFileFromStorage(epatsDoc.storagePath); } catch (e) { }
         }
         
-        // Diziden temizle
         this.currentDocuments = this.currentDocuments.filter(d => d.type !== 'epats_document');
         
         if (this.taskData?.details) {
@@ -491,14 +443,13 @@ class TaskUpdateController {
         }
 
         document.getElementById('taskStatus').value = this.statusBeforeEpatsUpload || 'open';
-        this.uiManager.renderDocuments(this.currentDocuments); // Arayüzü temizle
+        this.uiManager.renderDocuments(this.currentDocuments); 
         await this.saveTaskChanges(); 
     }
 
     isApplicationTask(taskType) {
         if (!taskType) return false;
-        const applicationTypeIds = ['2'];
-        return applicationTypeIds.includes(String(taskType));
+        return ['2'].includes(String(taskType));
     }
 
     setupAccrualModal() {
@@ -575,12 +526,12 @@ class TaskUpdateController {
         container.innerHTML = `
             <div class="row w-100 m-0">
                 ${accruals.map(a => {
-                    const dateStr = a.date ? new Date(a.date).toLocaleDateString('tr-TR') : '-';
+                    const dateStr = a.created_at ? new Date(a.created_at).toLocaleDateString('tr-TR') : '-';
                     const itemsSummary = a.items && a.items.length > 0 
                         ? a.items.map(i => i.description).join(', ') 
                         : 'Detay girilmemiş';
 
-                    const amountStr = this.formatCurrency(a.totalAmount);
+                    const amountStr = this.formatCurrency(a.totalAmount || a.official_fee_amount);
 
                     const statusHtml = a.status === 'paid' 
                         ? '<span class="badge badge-success ml-2">Ödendi</span>' 
@@ -627,10 +578,7 @@ class TaskUpdateController {
         return amountData;
     }
 
-    // --- KAYDETME VE YÖNLENDİRME ---
-
     async saveTaskChanges() {
-        // 1. EPATS Validasyonu ve Veri Ekleme (Dizi içindeki objeye yazıyoruz)
         const epatsDocIndex = this.currentDocuments.findIndex(d => d.type === 'epats_document');
         if (epatsDocIndex !== -1) {
             const evrakNo = document.getElementById('turkpatentEvrakNo').value;
@@ -643,7 +591,6 @@ class TaskUpdateController {
             this.currentDocuments[epatsDocIndex].documentDate = evrakDate;
         }
 
-        // 2. Temel Veriler
         const updateData = {
             status: document.getElementById('taskStatus').value,
             title: document.getElementById('taskTitle').value,
@@ -653,33 +600,35 @@ class TaskUpdateController {
             details: this.taskData.details || {},
             relatedIpRecordId: this.selectedIpRecordId,
             taskOwner: this.selectedPersonId,
-            documents: this.currentDocuments // 🔥 TEK KAYNAK BURASI!
+            documents: this.currentDocuments 
         };
 
-        // Eski dağınık veriyi temizleyelim (Temizlik)
         if (updateData.details.epatsDocument) delete updateData.details.epatsDocument;
 
-        // Tarih işlemleri...
+        // 🔥 YENİ: Firebase Timestamp yerine ISO string formatı (SQL Uyumlu)
         const officialDateVal = document.getElementById('taskDueDate').value;
         const operationalDateVal = document.getElementById('deliveryDate').value;
-        if (officialDateVal) updateData.officialDueDate = Timestamp.fromDate(new Date(officialDateVal));
-        else updateData.officialDueDate = null;
+        
+        updateData.officialDueDate = officialDateVal ? new Date(officialDateVal).toISOString() : null;
+        
         if (operationalDateVal) {
-            updateData.dueDate = Timestamp.fromDate(new Date(operationalDateVal));
-            updateData.operationalDueDate = Timestamp.fromDate(new Date(operationalDateVal));
+            updateData.dueDate = new Date(operationalDateVal).toISOString();
+            updateData.operationalDueDate = new Date(operationalDateVal).toISOString();
             updateData.deliveryDate = operationalDateVal;
-        } else { updateData.dueDate = null; updateData.deliveryDate = null; }
+        } else { 
+            updateData.dueDate = null; 
+            updateData.deliveryDate = null; 
+            updateData.operationalDueDate = null; 
+        }
         
         if (epatsDocIndex !== -1) updateData.details.statusBeforeEpatsUpload = this.statusBeforeEpatsUpload;
 
-        // 3. Task Güncelleme İsteği
         const res = await this.dataManager.updateTask(this.taskId, updateData);
         
         if (res.success) {
             const recordId = this.selectedIpRecordId;
             const taskType = String(this.taskData.taskType);
 
-            // 🔥 %100 KUSURSUZ TRANSACTION SENKRONİZASYONU
             if (recordId) {
                 try {
                     let targetTransactionId = this.taskData.transactionId;
@@ -687,16 +636,13 @@ class TaskUpdateController {
                         targetTransactionId = await this.dataManager.findTransactionIdByTaskId(recordId, this.taskId);
                     }
                     if (targetTransactionId) {
-                        // Sadece TEK BİR DİZİYİ eşitle. Eklenen eklenir, silinen silinir.
                         await this.dataManager.updateTransaction(recordId, targetTransactionId, {
                             documents: this.currentDocuments 
                         });
-                        console.log(`✅ İşlem (Transaction) belgeleri 1:1 senkronize edildi.`);
                     }
                 } catch (err) { console.error("❌ Senkronizasyon hatası:", err); }
             }
             
-            // Sahip Değişimi Mantığı
             const ownerChangeTypes = ['3', '5', '18'];
             if (ownerChangeTypes.includes(taskType) && this.selectedPersonId && recordId) {
                 try {
@@ -709,7 +655,6 @@ class TaskUpdateController {
                         
                         await this.dataManager.updateIpRecord(recordId, { applicants: newApplicants });
                         
-                        // Transaction ID varsa orayı da güncelle
                         let transIdForOwner = this.taskData.transactionId;
                         if (!transIdForOwner) {
                              transIdForOwner = await this.dataManager.findTransactionIdByTaskId(recordId, this.taskId);
@@ -723,19 +668,19 @@ class TaskUpdateController {
                 } catch (err) { console.error("Sahip güncelleme hatası:", err); }
             }
 
-            // Başvuru Bilgileri Güncelleme
             if (this.tempApplicationData && recordId) {
                 await this.dataManager.updateIpRecord(recordId, {
                     applicationNumber: this.tempApplicationData.appNo,
                     applicationDate: this.tempApplicationData.appDate
                 });
             }
-            // Yenileme Tarihi Güncelleme
             if (this.tempRenewalData && recordId) {
                 await this.dataManager.updateIpRecord(recordId, { renewalDate: this.tempRenewalData });
             }
             
             showNotification('Değişiklikler başarıyla kaydedildi.', 'success');
+            // Sekmeler arası güncelleme tetiklemesi
+            localStorage.setItem('crossTabUpdatedTaskId', String(this.taskId));
             setTimeout(() => { window.location.href = 'task-management.html'; }, 1000); 
         } else {
             showNotification('Güncelleme sırasında bir hata oluştu: ' + res.error, 'error');
