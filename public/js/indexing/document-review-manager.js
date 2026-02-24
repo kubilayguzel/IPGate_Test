@@ -749,18 +749,28 @@ export class DocumentReviewManager {
             const txResult = await ipRecordsService.addTransactionToRecord(this.matchedRecord.id, transactionData);
             const childTransactionId = txResult.id;
 
-            // 🔥 GÜNCELLENMİŞ TAŞIMA KODU
+            // 🔥 GÜNCELLENMİŞ TAŞIMA KODU (Yol Temizleyici Eklendi)
             let finalPdfUrl = this.pdfData.fileUrl || this.pdfData.download_url;
-            let finalPdfPath = this.pdfData.file_path || (this.pdfData.details && this.pdfData.details.file_path);
+            let finalPdfPath = this.pdfData.file_path || (this.pdfData.details && this.pdfData.details.file_path) || finalPdfUrl;
 
-            if (finalPdfPath && !finalPdfPath.startsWith('indexed_pdfs/')) {
-                // Eğer path içinde bucket adı (task_documents/) varsa onu temizle
-                let sourcePath = finalPdfPath.replace('task_documents/', ''); 
+            if (finalPdfPath && !finalPdfPath.includes('indexed_pdfs/')) {
+                let sourcePath = finalPdfPath;
+                
+                // Eğer yol tam bir URL ise (http ile başlıyorsa) sadece kovanın (bucket) içindeki kısmı ayıklayalım
+                if (sourcePath.startsWith('http')) {
+                    const urlParts = sourcePath.split('/unindexed_pdfs/');
+                    if (urlParts.length > 1) {
+                        sourcePath = urlParts[1]; // Sadece userid/dosyaismi.pdf kısmını alıyoruz
+                    }
+                }
+                
+                // Olası fazladan klasör isimlerini temizle
+                sourcePath = sourcePath.replace('task_documents/', '').replace('unindexed_pdfs/', '');
                 
                 const cleanName = (this.pdfData.fileName || 'evrak.pdf').replace(/[^a-zA-Z0-9.\-_]/g, '_');
                 const targetPath = `indexed_pdfs/${this.matchedRecord.id}/${Date.now()}_${cleanName}`;
                 
-                // Kaynak yolu temizlenmiş haliyle tekrar dene
+                // Kaynak yolu tam temizlenmiş haliyle gönder
                 const { error: moveError } = await supabase.storage.from(STORAGE_BUCKET).move(sourcePath, targetPath);
                 
                 if (!moveError) {
