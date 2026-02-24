@@ -947,7 +947,43 @@ export class DocumentReviewManager {
 
                 for (const tType of tasksToCreate) {
                     let taskDesc = notes || `Otomatik oluşturulan görev.`;
-                    if (tType === "66") taskDesc = "Müvekkil değerlendirme ayarı açık olduğu için ek olarak tetiklendi.";
+                    
+                    // 1. Varsayılan (Standart) Ayarlar (Eski sisteme sadık)
+                    let taskStatus = 'awaiting_client_approval';
+                    let currentAssignedUser = { uid: SELCAN_UID, email: SELCAN_EMAIL }; // Sabit Selcan Hanım
+
+                    // 2. İSTİSNA: Eğer tetiklenen iş Type 66 (Değerlendirme) ise kuralı değiştir
+                    if (String(tType) === "66") {
+                        taskDesc = "Müvekkil değerlendirme ayarı açık olduğu için ek olarak tetiklendi.";
+                        taskStatus = 'open'; // İstisna: Açık statüsünde oluşsun
+                        
+                        try {
+                            // Supabase'den task_assignments (Görev Atamaları) tablosundaki gerçek kuralı çek
+                            const { data: assignmentRule } = await supabase
+                                .from('task_assignments')
+                                .select('assignee_ids')
+                                .eq('id', '66')
+                                .single();
+
+                            if (assignmentRule && assignmentRule.assignee_ids && assignmentRule.assignee_ids.length > 0) {
+                                const targetUid = assignmentRule.assignee_ids[0]; // İlk atanan kişi (Örn: Ali'nin UID'si)
+                                
+                                // Hedef kullanıcının e-posta adresini users tablosundan çek
+                                const { data: userData } = await supabase
+                                    .from('users')
+                                    .select('email')
+                                    .eq('id', targetUid)
+                                    .single();
+                                    
+                                currentAssignedUser = {
+                                    uid: targetUid,
+                                    email: userData ? userData.email : 'bilinmiyor@evreka.com'
+                                };
+                            }
+                        } catch (err) {
+                            console.warn("Type 66 atama kuralı alınamadı, varsayılana dönülüyor:", err);
+                        }
+                    }
 
                     const taskData = {
                         title: `${childTypeObj.alias || childTypeObj.name} - ${this.matchedRecord.title}`,
@@ -966,10 +1002,10 @@ export class DocumentReviewManager {
                         officialDueDate: officialDueDate.toISOString(),
                         createdAt: new Date().toISOString(),
                         updatedAt: new Date().toISOString(),
-                        status: 'awaiting_client_approval',
+                        status: taskStatus, // 🔥 Dinamik Statü (66 için open, diğerleri için awaiting_client_approval)
                         priority: 'medium',
-                        assignedTo_uid: assignedUser.uid,
-                        assignedTo_email: assignedUser.email,
+                        assignedTo_uid: currentAssignedUser.uid, // 🔥 Dinamik Atama (66 için Ali, diğerleri için Selcan)
+                        assignedTo_email: currentAssignedUser.email, 
                         createdBy: { uid: this.currentUser.uid, email: this.currentUser.email },
                         taskOwner: taskOwner.length > 0 ? taskOwner : null,
                         details: { relatedParty: relatedPartyData },
@@ -998,7 +1034,7 @@ export class DocumentReviewManager {
                         if (targetHierarchy === 'child') triggeredTransactionData.parentId = finalParentId;
                         await ipRecordsService.addTransactionToRecord(this.matchedRecord.id, triggeredTransactionData);
                     }
-                } 
+                }
             }
 
             if (finalParentId && childTypeId) {
@@ -1021,6 +1057,35 @@ export class DocumentReviewManager {
                     matched_record_id: this.matchedRecord.id
                 }
             }).eq('id', String(this.pdfId));
+
+            // --- MEVCUT KOD: Supabase PDF Statüsü Güncelleme ---
+                await supabase.from(UNINDEXED_PDFS_COLLECTION).update({
+                    status: 'indexed',
+                    download_url: finalPdfUrl,
+                    details: {
+                        ...(this.pdfData.details || {}),
+                        file_path: finalPdfPath,
+                        indexed_at: new Date().toISOString(),
+                        final_transaction_id: childTransactionId,
+                        matched_record_id: this.matchedRecord.id
+                    }
+                }).eq('id', String(this.pdfId));
+
+                // --- MÜVEKKİL BİLDİRİMİNİ TETİKLE ---
+                try {
+                    // childTypeId: İndekslenen dosyanın tipi (Örn: 45, 27)
+                    // recordId: Bağlı olduğu IP kaydı
+                    const { data: funcData, error: funcError } = await supabase.functions.invoke('send-indexing-notification', {
+                        body: {
+                            recordId: this.matchedRecord.id,
+                            childTypeId: childTypeId 
+                        }
+                    });
+                    console.log("🔔 Bildirim sonucu:", funcData);
+                } catch (err) {
+                    console.error("⚠️ Bildirim hatası:", err);
+                }
+                // --- TETİKLEYİCİ SONU ---
 
             showNotification('İşlem başarıyla tamamlandı!', 'success');
             setTimeout(() => window.location.href = 'bulk-indexing-page.html', 1500);
