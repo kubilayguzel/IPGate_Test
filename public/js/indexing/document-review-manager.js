@@ -1071,21 +1071,23 @@ export class DocumentReviewManager {
                     }
                 }).eq('id', String(this.pdfId));
 
-                // --- MÜVEKKİL BİLDİRİMİNİ TETİKLE ---
-                try {
-                    // childTypeId: İndekslenen dosyanın tipi (Örn: 45, 27)
-                    // recordId: Bağlı olduğu IP kaydı
-                    const { data: funcData, error: funcError } = await supabase.functions.invoke('send-indexing-notification', {
-                        body: {
-                            recordId: this.matchedRecord.id,
-                            childTypeId: childTypeId 
-                        }
-                    });
-                    console.log("🔔 Bildirim sonucu:", funcData);
-                } catch (err) {
-                    console.error("⚠️ Bildirim hatası:", err);
-                }
-                // --- TETİKLEYİCİ SONU ---
+            // --- MÜVEKKİL BİLDİRİMİNİ TETİKLE (SUPABASE EDGE FUNCTION) ---
+            try {
+                console.log(`📤 Bildirim Taslağı Oluşturuluyor. Record: ${this.matchedRecord.id}, Type: ${childTypeId}`);
+
+                const { data: funcData, error: funcError } = await supabase.functions.invoke('send-indexing-notification', {
+                    body: {
+                        recordId: this.matchedRecord.id, // IP Kaydının ID'si
+                        childTypeId: childTypeId // İşlem Tipi ID'si (Şablon eşleştirmesi için)
+                    }
+                });
+
+                if (funcError) throw funcError;
+                console.log("🔔 Bildirim Taslağı başarıyla veritabanına eklendi:", funcData);
+            } catch (notifyErr) {
+                console.error("⚠️ Bildirim oluşturulurken hata oluştu:", notifyErr);
+            }
+            // --- TETİKLEYİCİ SONU ---
 
             showNotification('İşlem başarıyla tamamlandı!', 'success');
             setTimeout(() => window.location.href = 'bulk-indexing-page.html', 1500);
