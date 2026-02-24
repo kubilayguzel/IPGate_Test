@@ -267,16 +267,20 @@ export const personService = {
 // 2. İŞLEM TİPLERİ (TRANSACTION TYPES) SERVİSİ
 export const transactionTypeService = {
     async getTransactionTypes() {
-        const { data, error } = await supabase.from('transaction_types').select('id, name, alias, ip_type');
+        // 🔥 YENİ: Sadece isimleri değil, 'details' içindeki tüm kuralları (*) çekiyoruz
+        const { data, error } = await supabase.from('transaction_types').select('*');
         if (error) return { success: false, data: [] };
         
-        // Arayüzün beklediği format
+        // Arayüzün beklediği format (details içindeki indexFile, duePeriod vb. dışarı çıkarılıyor)
         const mappedData = data.map(t => ({
             id: t.id,
             name: t.name,
             alias: t.alias,
             applicableToMainType: t.ip_type ? [t.ip_type] : [],
-            code: t.id // Eğer eski sistem code arıyorsa diye fallback
+            hierarchy: t.hierarchy,
+            isTopLevelSelectable: t.is_top_level_selectable,
+            code: t.id, // Eğer eski sistem code arıyorsa diye fallback
+            ...t.details // 🔥 KRİTİK NOKTA: Alt işlemleri belirleyen indexFile kuralı burada açılıyor
         }));
         return { success: true, data: mappedData };
     }
@@ -410,8 +414,8 @@ export const ipRecordsService = {
         return { success: true, data: mappedData };
     },
 
-    // C) İşlem Geçmişini Çeker
-    async getTransactionsForRecord(recordId) {
+    // C) İşlem Geçmişini Çeker (YENİ VE GÜVENLİ FORMAT)
+    async getRecordTransactions(recordId) {
         const { data, error } = await supabase
             .from('transactions')
             .select('*')
@@ -424,7 +428,15 @@ export const ipRecordsService = {
             id: tx.id, type: tx.transaction_type_id || (tx.details && tx.details.type), timestamp: tx.created_at,
             date: tx.created_at, transactionHierarchy: tx.transaction_hierarchy, parentId: tx.parent_id, ...tx.details 
         }));
-        return { success: true, transactions: mappedTransactions };
+        
+        // Arayüzün beklediği "data" formatında döndürüyoruz
+        return { success: true, data: mappedTransactions };
+    },
+
+    // Eski kullanımlar (legacy) için geriye dönük uyumluluk köprüsü
+    async getTransactionsForRecord(recordId) {
+        const res = await this.getRecordTransactions(recordId);
+        return { success: res.success, transactions: res.data, error: res.error };
     },
 
     async getRecordsByType(type) {
@@ -511,7 +523,28 @@ export const ipRecordsService = {
             if (error) throw error;
             return { success: true, id: data.id };
         } catch (error) { return { success: false, error: error.message }; }
+    },
+    // --- EKSİK OLAN ARAMA FONKSİYONU EKLENDİ ---
+    async searchRecords(queryText) {
+        if (!queryText || queryText.length < 3) return { success: true, data: [] };
+        const lowerQuery = queryText.toLowerCase();
+        
+        // Önbellekten veya sunucudan (çok hızlı bir şekilde) tüm portföyü çek
+        const recordsResult = await this.getRecords();
+        if (!recordsResult.success) return { success: false, data: [] };
+
+        // Hafızada süper hızlı filtreleme yap
+        const filtered = recordsResult.data.filter(r => 
+            (r.title && r.title.toLowerCase().includes(lowerQuery)) || 
+            (r.applicationNumber && String(r.applicationNumber).toLowerCase().includes(lowerQuery)) ||
+            (r.registrationNumber && String(r.registrationNumber).toLowerCase().includes(lowerQuery)) ||
+            (r.wipoIR && String(r.wipoIR).toLowerCase().includes(lowerQuery))
+        );
+
+        // En alakalı ilk 20 sonucu döndür
+        return { success: true, data: filtered.slice(0, 20) };
     }
+
 };
 
 // 5. İZLEME (MONITORING) SERVİSİ
@@ -767,7 +800,11 @@ export const taskService = {
     // 5. Görev Ekleme
     async addTask(taskData) {
         try {
+            // 🔥 Sayaçtan gerçek ID'yi alıyoruz
+            const nextId = await this._getNextTaskId();
+
             const payload = {
+                id: nextId, // 🔥 Rastgele UUID yerine sayaçtan gelen ID
                 title: taskData.title,
                 description: taskData.description || null,
                 task_type: String(taskData.taskType),
@@ -783,13 +820,20 @@ export const taskService = {
                 history: taskData.history || [],
                 details: taskData 
             };
+            
+            // undefined olanları temizle
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
+            
             const { data, error } = await supabase.from('tasks').insert(payload).select('id').single();
             if (error) throw error;
             return { success: true, data: { id: data.id } };
         } catch (error) {
+            console.error("Task add error:", error);
             return { success: false, error: error.message };
         }
+    },
+    async createTask(taskData) {
+        return await this.addTask(taskData);
     },
 
     // 6. Görev Güncelleme
@@ -818,7 +862,43 @@ export const taskService = {
         } catch (error) {
             return { success: false, error: error.message };
         }
-    }
+    },
+
+    async _getNextTaskId() {
+        try {
+            // 1. Önce RPC denemesi yap (Eğer varsa en hızlısı budur)
+            const { data: rpcData, error: rpcError } = await supabase.rpc('increment_counter', { counter_name: 'tasks' });
+            
+            if (!rpcError && rpcData) return String(rpcData);
+
+            // 2. RPC yoksa veya hata verdiyse: tasks tablosundaki EN BÜYÜK NUMARAYI BUL
+            // ID text olsa bile sayısal sıralama için bu yöntem en güvenlisidir
+            const { data: lastTasks, error: fetchError } = await supabase
+                .from('tasks')
+                .select('id')
+                .order('id', { ascending: false })
+                .limit(1);
+
+            let nextNum = 1;
+
+            if (!fetchError && lastTasks && lastTasks.length > 0) {
+                // Mevcut en büyük ID'yi sayıya çevir ve 1 ekle
+                const lastId = parseInt(lastTasks[0].id);
+                if (!isNaN(lastId)) {
+                    nextNum = lastId + 1;
+                }
+            }
+
+            // 3. Bulunan numarayı counters tablosuna da işle (senkronizasyon için)
+            await supabase.from('counters').upsert({ id: 'tasks', count: nextNum }, { onConflict: 'id' });
+
+            return String(nextNum);
+        } catch (e) {
+            console.error("Sayaç oluşturma hatası:", e);
+            // Çok kritik bir hata olursa benzersizliği garanti etmek için timestamp ekle
+            return String(Date.now()).slice(-6); 
+        }
+    },
 };
 
 // ==========================================
