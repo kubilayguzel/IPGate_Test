@@ -749,16 +749,19 @@ export class DocumentReviewManager {
             const txResult = await ipRecordsService.addTransactionToRecord(this.matchedRecord.id, transactionData);
             const childTransactionId = txResult.id;
 
-            // 🔥 YENİ: DOSYAYI STORAGE'DA 'indexed_pdfs' KLASÖRÜNE TAŞIMA İŞLEMİ
-            let finalPdfUrl = this.pdfData.fileUrl || this.pdfData.downloadURL;
+            // 🔥 GÜNCELLENMİŞ TAŞIMA KODU
+            let finalPdfUrl = this.pdfData.fileUrl || this.pdfData.download_url;
             let finalPdfPath = this.pdfData.file_path || (this.pdfData.details && this.pdfData.details.file_path);
 
             if (finalPdfPath && !finalPdfPath.startsWith('indexed_pdfs/')) {
+                // Eğer path içinde bucket adı (task_documents/) varsa onu temizle
+                let sourcePath = finalPdfPath.replace('task_documents/', ''); 
+                
                 const cleanName = (this.pdfData.fileName || 'evrak.pdf').replace(/[^a-zA-Z0-9.\-_]/g, '_');
                 const targetPath = `indexed_pdfs/${this.matchedRecord.id}/${Date.now()}_${cleanName}`;
                 
-                // Supabase Storage klasör taşıma
-                const { error: moveError } = await supabase.storage.from(STORAGE_BUCKET).move(finalPdfPath, targetPath);
+                // Kaynak yolu temizlenmiş haliyle tekrar dene
+                const { error: moveError } = await supabase.storage.from(STORAGE_BUCKET).move(sourcePath, targetPath);
                 
                 if (!moveError) {
                     finalPdfPath = targetPath;
@@ -766,7 +769,7 @@ export class DocumentReviewManager {
                     finalPdfUrl = urlData.publicUrl;
                     console.log("✅ Dosya başarıyla 'indexed_pdfs' klasörüne taşındı.");
                 } else {
-                    console.warn("⚠️ Dosya taşınamadı, eski yoluyla devam ediliyor:", moveError);
+                    console.warn("⚠️ Dosya taşınamadı:", moveError.message);
                 }
             }
 
