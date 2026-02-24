@@ -1075,10 +1075,19 @@ export class DocumentReviewManager {
             try {
                 console.log(`📤 Bildirim Taslağı Oluşturuluyor. Record: ${this.matchedRecord.id}, Type: ${childTypeId}`);
 
+                // UI'dan tarih verilerini al (zaten handleSave içinde yukarılarda hesaplanıyor)
+                const tebligTarihiStr = document.getElementById('detectedDate').value; 
+                const sonItirazTarihiStr = document.getElementById('calculatedDeadlineDisplay')?.value || '';
+
                 const { data: funcData, error: funcError } = await supabase.functions.invoke('send-indexing-notification', {
                     body: {
-                        recordId: this.matchedRecord.id, // IP Kaydının ID'si
-                        childTypeId: childTypeId // İşlem Tipi ID'si (Şablon eşleştirmesi için)
+                        recordId: this.matchedRecord.id, 
+                        childTypeId: childTypeId,
+                        
+                        // 🔥 YENİ EKLENEN KISIM: Tarihleri ve belge IDsini fonksiyona gönderiyoruz
+                        tebligTarihi: tebligTarihiStr,
+                        sonItirazTarihi: sonItirazTarihiStr,
+                        pdfId: this.pdfId 
                     }
                 });
 
