@@ -1,7 +1,6 @@
 // public/js/indexing/portfolio-update-manager.js
 
-import { db, ipRecordsService } from '../../firebase-config.js';
-import { doc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+import { supabase, ipRecordsService } from '../../supabase-config.js';
 import { showNotification, debounce, STATUSES } from '../../utils.js';
 import { getSelectedNiceClasses, setSelectedNiceClasses, initializeNiceClassification } from '../nice-classification.js';
 
@@ -575,7 +574,8 @@ export class PortfolioUpdateManager {
                 }
             });
 
-            await updateDoc(doc(db, 'ipRecords', this.state.selectedRecordId), updates);
+            const { error } = await supabase.from('ip_records').update({ details: updates, updated_at: new Date().toISOString() }).eq('id', String(this.state.selectedRecordId));
+            if (error) throw error;
             showNotification('Tüm değişiklikler (Tescil & Nice) başarıyla kaydedildi!', 'success');
 
         } catch (error) {
