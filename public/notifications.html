@@ -268,6 +268,18 @@
       if (loader) loader.style.display = show ? 'block' : 'none';
     }
 
+    // --- JSON PARSER (HAYAT KURTARAN DÜZELTME) ---
+    function parseRow(row) {
+        if (!row) return row;
+        const jsonFields = ['details', 'applicants', 'client', 'missing_fields'];
+        jsonFields.forEach(field => {
+            if (typeof row[field] === 'string') {
+                try { row[field] = JSON.parse(row[field]); } catch(e) {}
+            }
+        });
+        return row;
+    }
+
     function formatDate(dateStr) {
       if (!dateStr) return '-';
       return new Date(dateStr).toLocaleString('tr-TR');
@@ -283,14 +295,35 @@
     async function fetchFromDb(table, id) {
       if (!id) return null;
       const { data } = await supabase.from(table).select('*').eq('id', id).single();
-      return data;
+      return parseRow(data); // <-- Düzeltildi
     }
 
     function getToCc(notification) {
-      // Artık CC'ler details içinden değil, doğrudan cc_list kolonundan geliyor
+      // Artık parseRow sayesinde details objesi %100 düzgün!
       const to = notification.recipient ? notification.recipient.split(',').map(s => s.trim()).filter(Boolean) : [];
-      const cc = notification.cc_list ? notification.cc_list.split(',').map(s => s.trim()).filter(Boolean) : [];
+      let cc = [];
+      if (notification.cc_list) cc = notification.cc_list.split(',').map(s => s.trim()).filter(Boolean);
+      else if (notification.details?.cc_list) cc = Array.isArray(notification.details.cc_list) ? notification.details.cc_list : [];
+      
       return { toList: to, ccList: cc };
+    }
+
+    async function getAttachmentPreviews(notification) {
+      const previews = [];
+      const safeName = (name, defaultName = "ek.pdf") => String(name || defaultName).replace(/[^\w.\-]+/g, "_").slice(0, 100);
+
+      const docId = notification.source_document_id || notification.sourceDocumentId || notification.details?.sourceDocumentId;
+      if (docId) {
+        try {
+          const d = await fetchFromDb("unindexed_pdfs", docId);
+          if (d) {
+            const fileUrl  = d.file_url || d.fileUrl || d.downloadURL || null;
+            const fileName = d.file_name || d.fileName || "belge.pdf";
+            if (fileUrl) previews.push({ fileName: safeName(fileName, "document.pdf"), fileUrl });
+          }
+        } catch (e) {}
+      }
+      return previews;
     }
 
     async function resolveRowData(notification) {
@@ -632,7 +665,7 @@
       toggleLoading(true);
       const { data } = await supabase.from('mail_notifications').select('*').order('created_at', { ascending: false });
       if (data) {
-        allNotifications = data;
+        allNotifications = data.map(parseRow); // <-- Düzeltildi
         if (!pagination) {
           pagination = new Pagination({
             containerId: "paginationContainer", itemsPerPage: 20, maxVisiblePages: 7,
