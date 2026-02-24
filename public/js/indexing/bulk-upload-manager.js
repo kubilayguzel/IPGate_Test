@@ -1052,11 +1052,6 @@ export class BulkIndexingModule {
 
         console.log(`📊 Arayüz Güncellemesi: ${matchedFiles.length} Eşleşen, ${unmatchedFiles.length} Eşleşmeyen, ${indexedFiles.length} İndekslenen.`);
 
-        // 🔥 HTML'DEKİ GERÇEK KUTU ID'LERİNE BASIYORUZ
-        this.renderFileList('matchedNotificationsList', matchedFiles);
-        this.renderFileList('unmatchedNotificationsList', unmatchedFiles);
-        this.renderFileList('indexedNotificationsList', indexedFiles);
-
         // 🔥 HTML'DEKİ GERÇEK BADGE (SAYAÇ) ID'LERİNİ GÜNCELLİYORUZ
         this.setBadge('matchedTabBadge', matchedFiles.length);
         this.setBadge('unmatchedTabBadge', unmatchedFiles.length);
