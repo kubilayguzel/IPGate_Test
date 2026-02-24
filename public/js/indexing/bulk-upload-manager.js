@@ -141,9 +141,11 @@ export class BulkIndexingModule {
         }
 
         document.addEventListener('click', (e) => {
-            if (e.target.classList.contains('file-tab-btn')) {
-                const targetPane = e.target.getAttribute('data-target');
-                if (targetPane) this.switchFileTab(targetPane);
+            // 🔥 YENİ: HTML'deki asıl buton class'ı olan 'notification-tab-btn' eklendi (yakın element tıklamaları da kapsandı)
+            const tabBtn = e.target.closest('.notification-tab-btn') || e.target.closest('.file-tab-btn');
+            if (tabBtn) {
+                const targetPane = tabBtn.getAttribute('data-target');
+                if (targetPane) this.switchFileTab(targetPane, tabBtn);
             }
         });
     }
@@ -917,16 +919,17 @@ export class BulkIndexingModule {
                 user_id: this.currentUser.uid,
                 user_email: this.currentUser.email,
                 status: 'pending',
-                source: 'manual', 
                 dosya_no: extractedAppNumber || null,
-                matched_record_id: matchedRecordId,
+                // 🔥 source: 'manual' buradan GİTTİ!
                 
-                // 🔥 HATA VEREN SÜTUNLAR DA JSON İÇİNE GİZLENDİ
+                // 🔥 Sütunu olmayan tüm veriler JSON kalkanı içinde:
                 details: {
+                    source: 'manual', // BURAYA GELDİ
                     file_path: storagePath,
                     file_size: file.size,
                     is_etebs: false,
                     extracted_app_number: extractedAppNumber || null,
+                    matched_record_id: matchedRecordId, 
                     matched_record_display: matchedRecordDisplay,
                     record_owner_type: recordOwnerType
                 }
@@ -942,12 +945,12 @@ export class BulkIndexingModule {
         }
     }
 
-    // 🔥 SUPABASE REALTIME DİNLEYİCİSİ
     setupRealtimeListener() {
         if (!this.currentUser) return;
         console.log("📡 Supabase PDF dinleyicisi kuruluyor...");
 
         const fetchFiles = async () => {
+            console.log("📥 Supabase'den dosyalar çekiliyor...");
             const { data, error } = await supabase
                 .from(UNINDEXED_PDFS_COLLECTION)
                 .select('*')
@@ -955,15 +958,16 @@ export class BulkIndexingModule {
                 .order('created_at', { ascending: false });
 
             if (error) {
-                console.error("PDF'ler çekilemedi:", error);
+                console.error("❌ PDF'ler çekilemedi! Supabase Hatası:", error);
                 return;
             }
+            
+            console.log(`✅ Supabase'den toplam ${data ? data.length : 0} adet dosya çekildi.`, data);
             this.processFetchedFiles(data || []);
         };
 
         fetchFiles(); // İlk açılışta çek
 
-        // Gerçek zamanlı değişiklikleri dinle
         this.unsubscribe = supabase.channel('unindexed_pdfs_changes')
             .on('postgres_changes', { 
                 event: '*', 
@@ -999,7 +1003,7 @@ export class BulkIndexingModule {
                 recordOwnerType: dDetails.record_owner_type || doc.record_owner_type,
                 
                 status: doc.status,
-                source: doc.source,
+                source: dDetails.source || doc.source,
                 uploadedAt: doc.created_at ? new Date(doc.created_at) : new Date()
             };
 
@@ -1013,11 +1017,12 @@ export class BulkIndexingModule {
                     fileObj.matchedRecordDisplay = this.matcher.getDisplayLabel(matchResult.record) + ` - ${matchResult.record.title}`;
                     fileObj.recordOwnerType = matchResult.record.recordOwnerType || 'self';
                     
-                    // 🔥 Güncelleme yaparken de details içine yazıyoruz
+                    // 🔥 Güncelleme yaparken de SADECE details sütununa yazıyoruz
                     supabase.from(UNINDEXED_PDFS_COLLECTION).update({
-                        matched_record_id: fileObj.matchedRecordId,
+                        // matched_record_id kök dizinden silindi
                         details: {
                             ...dDetails, // Eski JSON verilerini ezmemek için kopyalıyoruz
+                            matched_record_id: fileObj.matchedRecordId, // BURAYA GELDİ
                             matched_record_display: fileObj.matchedRecordDisplay,
                             record_owner_type: fileObj.recordOwnerType
                         }
@@ -1032,19 +1037,31 @@ export class BulkIndexingModule {
     }
 
     updateUI() {
+        // Silinmemiş tüm dosyaları al
         const allFiles = this.uploadedFiles.filter(f => f.status !== 'removed');
         
-        const matchedFiles = allFiles.filter(f => (f.matchedRecordId || f.autoMatched) && f.status !== 'indexed');
-        const unmatchedFiles = allFiles.filter(f => (!f.matchedRecordId && !f.autoMatched) && f.status !== 'indexed');
+        // 1. Durumu 'pending' (Bekleyen) olanları ayır
+        const pendingFiles = allFiles.filter(f => f.status === 'pending');
+        
+        // 2. Bekleyenleri kendi içinde 'Eşleşen' ve 'Eşleşmeyen' olarak ikiye böl
+        const matchedFiles = pendingFiles.filter(f => f.matchedRecordId || f.autoMatched);
+        const unmatchedFiles = pendingFiles.filter(f => !f.matchedRecordId && !f.autoMatched);
+        
+        // 3. Durumu 'indexed' (İndekslenen) olanları ayır
         const indexedFiles = allFiles.filter(f => f.status === 'indexed');
 
-        this.renderFileList('allFilesList', allFiles.filter(f => f.status !== 'indexed'));
-        this.renderFileList('unmatchedFilesList', unmatchedFiles);
-        this.renderFileList('indexedFilesList', indexedFiles);
+        console.log(`📊 Arayüz Güncellemesi: ${matchedFiles.length} Eşleşen, ${unmatchedFiles.length} Eşleşmeyen, ${indexedFiles.length} İndekslenen.`);
 
-        this.setBadge('allCount', matchedFiles.length + unmatchedFiles.length);
-        this.setBadge('unmatchedCount', unmatchedFiles.length);
-        this.setBadge('indexedCount', indexedFiles.length);
+        // 🔥 HTML'DEKİ GERÇEK KUTU ID'LERİNE BASIYORUZ
+        this.renderFileList('matchedNotificationsList', matchedFiles);
+        this.renderFileList('unmatchedNotificationsList', unmatchedFiles);
+        this.renderFileList('indexedNotificationsList', indexedFiles);
+
+        // 🔥 HTML'DEKİ GERÇEK BADGE (SAYAÇ) ID'LERİNİ GÜNCELLİYORUZ
+        this.setBadge('matchedTabBadge', matchedFiles.length);
+        this.setBadge('unmatchedTabBadge', unmatchedFiles.length);
+        // HTML'de indexed için badge varsa diye önlem:
+        this.setBadge('indexedTabBadge', indexedFiles.length); 
     }
 
     setBadge(id, count) {
@@ -1095,18 +1112,32 @@ export class BulkIndexingModule {
         `).join('');
     }
 
-    switchFileTab(targetPane) {
-        document.querySelectorAll('.file-tab-btn').forEach(btn => {
-            if(btn.dataset.target === targetPane) btn.classList.add('active');
-            else btn.classList.remove('active');
-        });
-
-        document.querySelectorAll('.file-tab-pane').forEach(pane => {
-            pane.classList.remove('active');
+    switchFileTab(targetPane, clickedBtn) {
+        // Tüm butonlardan 'active' sınıfını temizle
+        document.querySelectorAll('.notification-tab-btn, .file-tab-btn').forEach(btn => {
+            btn.classList.remove('active');
         });
         
+        // Tıklanan butonu aktif yap
+        if (clickedBtn) {
+            clickedBtn.classList.add('active');
+        } else {
+            const btn = document.querySelector(`[data-target="${targetPane}"]`);
+            if (btn) btn.classList.add('active');
+        }
+
+        // Tüm HTML pane (kutu) içeriklerini gizle
+        document.querySelectorAll('.notification-tab-pane, .file-tab-pane').forEach(pane => {
+            pane.classList.remove('active');
+            pane.style.display = 'none'; // Güvenlik için CSS dışında manuel gizleme
+        });
+        
+        // Sadece hedef sekmeyi göster
         const activePane = document.getElementById(targetPane);
-        if(activePane) activePane.classList.add('active');
+        if(activePane) {
+            activePane.classList.add('active');
+            activePane.style.display = 'block'; 
+        }
     }
 
     // 🔥 SUPABASE SİLME İŞLEMİ
