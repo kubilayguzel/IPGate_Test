@@ -864,34 +864,44 @@ export const taskService = {
         }
     },
 
-    // --- SAYAÇTAN YENİ ID ALMA (%100 KESİN ÇÖZÜM) ---
+    // --- SAYAÇTAN YENİ ID ALMA (SADECE lastId KULLANIR) ---
     async _getNextTaskId() {
         try {
-            // 1. RPC denemesi yap (Varsa en hızlısı)
-            const { data: rpcData, error: rpcError } = await supabase.rpc('increment_counter', { counter_name: 'tasks' });
-            if (!rpcError && rpcData) return String(rpcData);
+            // 1. counters tablosundan 'tasks' için 'lastId' değerini çek
+            const { data: counterData, error: fetchError } = await supabase
+                .from('counters')
+                .select('lastId') // 🔥 Doğru sütun adı: lastId
+                .eq('id', 'tasks')
+                .single();
 
-            // 2. RPC yoksa: counters tablosundan en son sayıyı al
-            const { data: counterData } = await supabase.from('counters').select('count').eq('id', 'tasks').single();
-            let nextNum = (counterData?.count || 0) + 1;
+            // Eğer tabloda henüz hiç görev sayacı yoksa (veya lastId boşsa) sıfır kabul edip 1'den başla
+            let nextNum = (counterData?.lastId || 0) + 1;
 
-            // 3. 🔥 DÖNGÜ: Bu ID gerçekten boş mu diye tek tek kontrol et
+            // 2. 🔥 ÇAKIŞMA ÖNLEYİCİ DÖNGÜ (Her ihtimale karşı bu numara gerçekten boş mu kontrolü)
             let isFree = false;
             while (!isFree) {
-                const { data: existingTask } = await supabase.from('tasks').select('id').eq('id', String(nextNum)).single();
+                const { data: existingTask } = await supabase
+                    .from('tasks')
+                    .select('id')
+                    .eq('id', String(nextNum))
+                    .single();
+                    
                 if (!existingTask) {
                     isFree = true; // Boş numarayı bulduk!
                 } else {
-                    nextNum++; // Doluysa bir sonrakini dene
+                    nextNum++; // Eğer veritabanında bu numara varsa, 1 artırıp tekrar dene
                 }
             }
 
-            // 4. Bulunan boş numarayı sayaca kaydet
-            await supabase.from('counters').upsert({ id: 'tasks', count: nextNum }, { onConflict: 'id' });
+            // 3. Bulunan ve garanti olan yeni numarayı counters tablosundaki lastId alanına yaz
+            await supabase
+                .from('counters')
+                .upsert({ id: 'tasks', lastId: nextNum }, { onConflict: 'id' });
 
             return String(nextNum);
         } catch (e) {
             console.error("Sayaç oluşturma hatası:", e);
+            // Sunucu/Bağlantı hatası anında uygulamanın çökmemesi için can yeleği (Zaman damgası)
             return String(Date.now()).slice(-6); 
         }
     },
