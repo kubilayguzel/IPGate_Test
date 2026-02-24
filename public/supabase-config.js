@@ -864,38 +864,34 @@ export const taskService = {
         }
     },
 
+    // --- SAYAÇTAN YENİ ID ALMA (%100 KESİN ÇÖZÜM) ---
     async _getNextTaskId() {
         try {
-            // 1. Önce RPC denemesi yap (Eğer varsa en hızlısı budur)
+            // 1. RPC denemesi yap (Varsa en hızlısı)
             const { data: rpcData, error: rpcError } = await supabase.rpc('increment_counter', { counter_name: 'tasks' });
-            
             if (!rpcError && rpcData) return String(rpcData);
 
-            // 2. RPC yoksa veya hata verdiyse: tasks tablosundaki EN BÜYÜK NUMARAYI BUL
-            // ID text olsa bile sayısal sıralama için bu yöntem en güvenlisidir
-            const { data: lastTasks, error: fetchError } = await supabase
-                .from('tasks')
-                .select('id')
-                .order('id', { ascending: false })
-                .limit(1);
+            // 2. RPC yoksa: counters tablosundan en son sayıyı al
+            const { data: counterData } = await supabase.from('counters').select('count').eq('id', 'tasks').single();
+            let nextNum = (counterData?.count || 0) + 1;
 
-            let nextNum = 1;
-
-            if (!fetchError && lastTasks && lastTasks.length > 0) {
-                // Mevcut en büyük ID'yi sayıya çevir ve 1 ekle
-                const lastId = parseInt(lastTasks[0].id);
-                if (!isNaN(lastId)) {
-                    nextNum = lastId + 1;
+            // 3. 🔥 DÖNGÜ: Bu ID gerçekten boş mu diye tek tek kontrol et
+            let isFree = false;
+            while (!isFree) {
+                const { data: existingTask } = await supabase.from('tasks').select('id').eq('id', String(nextNum)).single();
+                if (!existingTask) {
+                    isFree = true; // Boş numarayı bulduk!
+                } else {
+                    nextNum++; // Doluysa bir sonrakini dene
                 }
             }
 
-            // 3. Bulunan numarayı counters tablosuna da işle (senkronizasyon için)
+            // 4. Bulunan boş numarayı sayaca kaydet
             await supabase.from('counters').upsert({ id: 'tasks', count: nextNum }, { onConflict: 'id' });
 
             return String(nextNum);
         } catch (e) {
             console.error("Sayaç oluşturma hatası:", e);
-            // Çok kritik bir hata olursa benzersizliği garanti etmek için timestamp ekle
             return String(Date.now()).slice(-6); 
         }
     },
