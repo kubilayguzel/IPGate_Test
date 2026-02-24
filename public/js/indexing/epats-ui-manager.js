@@ -2,7 +2,7 @@
 
 import { PersonDataManager } from '../persons/PersonDataManager.js';
 import { PortfolioDataManager } from '../portfolio/PortfolioDataManager.js';
-import { ipRecordsService } from '../../firebase-config.js';
+import { ipRecordsService } from '../../supabase-config.js';
 import { showNotification } from '../../utils.js';
 // DÜZELTME: 'export default' olduğu için süslü parantez kaldırıldı
 import Pagination from '../pagination.js';
