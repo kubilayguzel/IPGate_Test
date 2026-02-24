@@ -601,9 +601,9 @@ tr.selected-row:hover {
 <script type="module">
     import Pagination from './js/pagination.js'; 
     import { loadSharedLayout } from './js/layout-loader.js';
-    import { supabase } from './js/supabase-config.js'; // 🔥 Firebase auth yerine Supabase kullanıyoruz
-    import { showNotification } from './js/utils.js';
-    import { personService, ipRecordsService } from './js/firebase-config.js'; // Eski servislerden sadece gerekenler kaldı
+    import { supabase } from './supabase-config.js'; // 🔥 YOL DÜZELTİLDİ (js/ kaldırıldı)
+    import { showNotification } from './utils.js'; // 🔥 YOL DÜZELTİLDİ (js/ kaldırıldı)
+    // 🚀 FIREBASE İMPORTU TAMAMEN SİLİNDİ!
 
     // Global değişkenler
     let selectedMonitoringItems = new Set();
@@ -614,9 +614,8 @@ tr.selected-row:hover {
     let currentSort = { field: 'applicationDate', direction: 'desc' };
     
     const ipRecordCache = new Map(); 
-    let allIpRecordsMap = new Map(); 
 
-    // --- YENİ: SUPABASE VERİ ÇEKME YARDIMCISI ---
+    // --- YENİ: SUPABASE'DEN İZLENEN MARKALARI ÇEKME ---
     async function fetchSupabaseTrademarks() {
         try {
             const { data, error } = await supabase
@@ -638,7 +637,7 @@ tr.selected-row:hover {
                     ipRecordId: d.ip_record_id,
                     ownerName: d.owner_name || '-',
                     brandTextSearch: bts,
-                    searchMarkName: bts.length > 0 ? bts[0] : (d.mark_name || ''), // Arama kutusunda override için
+                    searchMarkName: bts.length > 0 ? bts[0] : (d.mark_name || ''),
                     niceClassSearch: d.nice_class_search ? d.nice_class_search.split(',').map(s=>s.trim()).filter(Boolean) : [],
                     niceClasses: d.nice_classes ? d.nice_classes.split(',').map(s=>s.trim()).filter(Boolean) : [],
                     imagePath: d.image_path,
@@ -655,16 +654,6 @@ tr.selected-row:hover {
         }
     }
 
-    // IP Kayıtlarını toplu yükleyen fonksiyon (Şimdilik mevcut serviste kaldı)
-    async function loadAllIpRecords() {
-        try {
-            const res = await ipRecordsService.getRecords();
-            if (res.success && Array.isArray(res.data)) {
-                res.data.forEach(rec => allIpRecordsMap.set(rec.id, rec));
-            }
-        } catch (e) { console.error("IP Kayıtları yüklenirken hata:", e); }
-    }
-
     const MERGE_FIELDS = [
         'title', 'markName', 'brandImageUrl', 'applicationNumber', 'applicationNo', 'applicationDate',
         'status', 'niceClasses', 'owners', 'applicants', 'goodsAndServicesByClass', 'ownerName', 'owner'
@@ -677,7 +666,7 @@ tr.selected-row:hover {
         return out;
     }
 
-    // 🔥 IP Kayıtlarını Supabase'den çekmek için güncellendi
+    // --- YENİ: FIREBASE YERİNE SUPABASE'DEN IP KAYDI (MARKALAR) ÇEKME ---
     async function fetchIpRecordByIdCached(recordId) {
         if (!recordId) return null;
         if (ipRecordCache.has(recordId)) return ipRecordCache.get(recordId);
@@ -722,7 +711,6 @@ tr.selected-row:hover {
 
     let currentFilters = { search: '', status: 'all', niceClass: '', owner: '', markName: '', searchTerms: '' };
     let currentSelectedItem;
-    let selectedNiceClasses = new Set();
 
     function initializePagination() {
         pagination = new Pagination({
@@ -922,12 +910,10 @@ tr.selected-row:hover {
         currentPageDataEnriched.forEach(r => {
             const isSelected = selectedMonitoringItems.has(r.id) ? 'checked' : '';
             
-            // Görsel Url Kontrolü
             const trademarkImageHtml = (() => {
                 let imageUrl = r.brandImageUrl || r.imagePath || r.image;
                 if (imageUrl && imageUrl.trim() !== '') {
                     if (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
-                        // Eğer Supabase Bucket'ı kullanılıyorsa:
                         const { data } = supabase.storage.from('trademarks').getPublicUrl(imageUrl);
                         imageUrl = data.publicUrl || imageUrl;
                     }
@@ -1101,7 +1087,7 @@ tr.selected-row:hover {
         return '-';
     };
 
-    const renderMonitoringTable = (data, userUid) => {
+    const renderMonitoringTable = (data) => {
         allMonitoringData = data || [];
         const filterSection = document.getElementById('filterSection');
         if (filterSection && allMonitoringData.length > 0) filterSection.style.display = 'block';
@@ -1124,7 +1110,6 @@ tr.selected-row:hover {
         }
     };
 
-    // Modal Fonksiyonları
     function setupEditCriteriaModal() {
       const editCriteriaBtn = document.getElementById('editCriteriaBtn');
       const saveCriteriaBtn = document.getElementById('saveCriteriaBtn');
@@ -1214,7 +1199,6 @@ tr.selected-row:hover {
                       if (currentSelectedItem.brandImageUrl && currentSelectedItem.brandImageUrl.trim() !== '') {
                           let imageUrl = currentSelectedItem.brandImageUrl;
                           if (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
-                               // Supabase public URL kullanımı
                                const { data } = supabase.storage.from('trademarks').getPublicUrl(imageUrl);
                                imageUrl = data.publicUrl || imageUrl;
                           }
@@ -1310,6 +1294,7 @@ tr.selected-row:hover {
 
           const brandTextArray = Array.from(brandTextSearchList.querySelectorAll('.list-item-text')).map(el => el.textContent);
           const niceClassArray = Array.from(niceClassSearchList.querySelectorAll('.list-item-text')).map(el => parseInt(el.textContent)).filter(n => !isNaN(n));
+          const searchMarkNameValue = (searchMarkNameInput?.value || '').trim();
           
           try {
               const { error } = await supabase.from('monitoring_trademarks').update({
@@ -1324,7 +1309,7 @@ tr.selected-row:hover {
                   if (index !== -1) {
                       allMonitoringData[index].brandTextSearch = brandTextArray;
                       allMonitoringData[index].niceClassSearch = niceClassArray;
-                      // Eğer override ismi de arıyorsanız: allMonitoringData[index].searchMarkName = brandTextArray[0] || '';
+                      allMonitoringData[index].searchMarkName = searchMarkNameValue;
                   }
               } else throw error;
           } catch (error) {
@@ -1413,7 +1398,7 @@ tr.selected-row:hover {
         }
     }
 
-    // --- BAŞLANGIÇ NOKTASI (Supabase Auth ile Değiştirildi) ---
+    // --- BAŞLANGIÇ NOKTASI (Firebase Auth yerine Supabase Auth) ---
     document.addEventListener('DOMContentLoaded', async () => {
         try {
             initializePagination();
@@ -1421,8 +1406,9 @@ tr.selected-row:hover {
             setupEditCriteriaModal();
             await loadSharedLayout({ activeMenuLink: 'monitoring-trademarks.html' });
 
-            const pRes = await personService.getPersons();
-            if (pRes.success) allPersons = pRes.data || [];
+            // 🔥 Supabase'den kişileri (persons) çek
+            const { data: personsData } = await supabase.from('persons').select('*');
+            if (personsData) allPersons = personsData;
 
             const container = document.getElementById('monitoringTableContainer');
             const removeSelectedBtn = document.getElementById('removeSelectedBtn');
@@ -1438,11 +1424,10 @@ tr.selected-row:hover {
             container.innerHTML = '<div class="loading">İzleme listeniz yükleniyor...</div>';
 
             try {
-                // 🔥 Verileri Supabase tablosundan çek
                 const { success, data, error } = await fetchSupabaseTrademarks();
                 if (success) {
                     selectedMonitoringItems.clear();
-                    renderMonitoringTable(data, session.user.id);
+                    renderMonitoringTable(data);
                     updateSelectedButtonState();
                 } else {
                     container.innerHTML = `<div class="error-message">İzleme listeniz yüklenirken bir hata oluştu: ${error}</div>`;
