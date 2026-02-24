@@ -1,8 +1,6 @@
 // public/js/etebs-module.js
 
-import { firebaseServices, authService, ipRecordsService } from '../firebase-config.js';
-import { ref, getDownloadURL, uploadBytes, getStorage } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
-import { collection, query, where, getDocs, addDoc, orderBy, limit, doc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+import { authService, ipRecordsService, supabase } from '../supabase-config.js';
 // --- Modüller ---
 import { RecordMatcher } from './indexing/record-matcher.js';
 import Pagination from './pagination.js';
@@ -37,45 +35,35 @@ export class ETEBSManager {
         // 3. Event Listener'ları kur
         this.bindEvents();
 
-   }
+        // 4. Sayfa açılışında Supabase'den evrakları çek
+        await this.loadAndProcessDocuments(true);
+    }
 
     // ============================================================
     // 0. GERİYE DÖNÜK UYUMLULUK (HTML ile Uyum)
     // ============================================================
-    
-    /**
-     * HTML dosyasındaki eski çağrıları karşılamak için köprü fonksiyon.
-     * fetchNotifications(true, false) şeklindeki çağrıları yeni yapıya yönlendirir.
-     */
     async fetchNotifications(isSilent = false, triggerServerSync = false) {
-        // Eğer sunucu tetiklenmesi isteniyorsa (eski butona basıldıysa)
         if (triggerServerSync) {
             await this.triggerServerSync();
         }
-        
-        // Yeni veri yükleme fonksiyonunu çağır (isSilent -> isBackgroundRefresh)
         await this.loadAndProcessDocuments(isSilent);
     }
 
     // ============================================================
     // 1. BADGE YÖNETİMİ
     // ============================================================
-    
     async updateMainBadgeCount() {
         try {
-            // Sadece 'pending' olanları say
-            const q = query(
-                collection(firebaseServices.db, 'unindexed_pdfs'),
-                where('status', '==', 'pending')
-            );
+            const { count, error } = await supabase
+                .from('unindexed_pdfs')
+                .select('*', { count: 'exact', head: true })
+                .eq('status', 'pending');
             
-            const snapshot = await getDocs(q);
-            const count = snapshot.size;
+            if (error) throw error;
 
-            // UI Güncelle
             const badge = document.querySelector('.tab-badge') || document.getElementById('totalBadge');
             if (badge) {
-                badge.textContent = count;
+                badge.textContent = count || 0;
                 badge.style.display = count > 0 ? 'inline-block' : 'none';
             }
         } catch (error) {
@@ -86,15 +74,12 @@ export class ETEBSManager {
     // ============================================================
     // 2. SUNUCU SENKRONİZASYONU (SYNC)
     // ============================================================
-
     async triggerServerSync() {
         const input = document.getElementById('etebsTokenInput');
         const token = input ? input.value.trim() : null;
-        const user = authService.auth.currentUser;
+        const user = authService.getCurrentUser();
 
         if (!token || !user) throw new Error('Token eksik.');
-
-        // 🔥 DÜZELTME: Token'ı tarayıcı hafızasına (localStorage) kaydetme kodunu sildik.
 
         try {
             const hostname = window.location.hostname;
@@ -105,7 +90,6 @@ export class ETEBSManager {
 
             console.log(`🚀 Sync Başlatılıyor... (${isTestEnv ? 'TEST' : 'PROD'})`);
 
-            // 🔥 DÜZELTME: `await fetch` ile sunucunun belgeleri indirip birleştirmesini bekliyoruz
             const response = await fetch(functionUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -116,13 +100,8 @@ export class ETEBSManager {
                 })
             });
 
-            if (!response.ok) {
-                throw new Error(`Sunucu Hatası: ${response.status}`);
-            }
-            
-            const result = await response.json();
-            return result; // İşlem sonucunu döndür
-
+            if (!response.ok) throw new Error(`Sunucu Hatası: ${response.status}`);
+            return await response.json();
         } catch (e) {
             console.warn("Sync hatası:", e);
             throw e;
@@ -132,7 +111,6 @@ export class ETEBSManager {
     // ============================================================
     // 3. VERİ ÇEKME VE EŞLEŞTİRME (CORE LOGIC)
     // ============================================================
-
     async handleFetchButton() {
         const input = document.getElementById('etebsTokenInput');
         const token = input ? input.value.trim() : null;
@@ -142,38 +120,25 @@ export class ETEBSManager {
             return;
         }
 
-        // --- 🚀 LOADER BAŞLAT ---
         if (window.SimpleLoadingController) {
             window.SimpleLoadingController.show({
                 text: 'Evraklar İndiriliyor',
-                subtext: 'TÜRKPATENT ile bağlantı kuruldu. Yeni tebligatlar çekilip işleniyor, bu işlem evrak sayısına göre 1-2 dakika sürebilir. Lütfen sayfadan ayrılmayın...'
+                subtext: 'TÜRKPATENT ile bağlantı kuruldu. Yeni tebligatlar çekilip işleniyor, lütfen ayrılmayın...'
             });
         }
 
-        // Tarayıcıya loader'ı çizmesi için kısa bir süre tanıyalım
         await new Promise(r => setTimeout(r, 200));
 
         try {
-            // 🔥 DÜZELTME: İşlem BİTENE KADAR kodu burada bekletir (Loader dönmeye devam eder)
             const result = await this.triggerServerSync();
-
-            // İşlem başarılı bittiyse token kutusunu temizle
             if (input) input.value = '';
 
             if (result && result.success) {
-                if (window.SimpleLoadingController) {
-                    window.SimpleLoadingController.showSuccess('Tüm evraklar başarıyla indirildi ve işlendi.');
-                }
-
-                // --- 🔥 SAYFAYI YENİLEMEK YERİNE ANINDA GÜNCELLE ---
-                setTimeout(() => {
-                    // Sayfayı baştan yüklemek yerine sadece evrak listesini çeken fonksiyonu tetikleyelim
-                    this.loadAndProcessDocuments(false); 
-                }, 1500);
+                if (window.SimpleLoadingController) window.SimpleLoadingController.showSuccess('Tüm evraklar başarıyla indirildi ve işlendi.');
+                setTimeout(() => { this.loadAndProcessDocuments(false); }, 1500);
             } else {
                 throw new Error(result?.error || 'Sunucu işlemi tamamlayamadı.');
             }
-
         } catch (error) {
             console.error("Sorgu hatası:", error);
             if (window.SimpleLoadingController) window.SimpleLoadingController.hide();
@@ -183,38 +148,36 @@ export class ETEBSManager {
 
     async loadAndProcessDocuments(isBackgroundRefresh = false) {
         if (!isBackgroundRefresh && window.SimpleLoadingController) {
-            window.SimpleLoadingController.show({ 
-                text: 'Evraklar taranıyor...', 
-                subtext: 'Veriler kontrol ediliyor...' 
-            });
+            window.SimpleLoadingController.show({ text: 'Evraklar taranıyor...', subtext: 'Veriler kontrol ediliyor...' });
         }
 
         try {
-            const db = firebaseServices.db;
-            const colRef = collection(db, 'unindexed_pdfs');
-
-            // 1. SADECE Bekleyenleri (Pending) Çekiyoruz. İndekslenenleri BURADA ÇEKMİYORUZ!
-            const qPending = query(colRef, where('status', '==', 'pending'), limit(150));
-            const snapPending = await getDocs(qPending);
+            // 🔥 YENİ: Firebase yerine Supabase'den çekiliyor
+            const { data: snapPending, error } = await supabase
+                .from('unindexed_pdfs')
+                .select('*')
+                .eq('status', 'pending')
+                .limit(150);
+                
+            if (error) throw error;
 
             this.matchedDocs = [];
             this.unmatchedDocs = [];
 
-            // 2. Eşleşmemiş Evrak Var mı Kontrolü
             let needsMatching = false;
             snapPending.forEach(docSnap => {
-                if (docSnap.data().matched !== true) {
+                const details = docSnap.details || {};
+                if (!docSnap.matched_record_id && !details.matched_record_id) {
                     needsMatching = true;
                 }
             });
 
-            // 3. EĞER Eşleşmemiş Evrak Varsa, SADECE O ZAMAN Tüm Portföyü Çek! (EN BÜYÜK HIZLANDIRICI)
             const portfolioMap = new Map();
             if (needsMatching) {
                 if (!isBackgroundRefresh && window.SimpleLoadingController) {
                     window.SimpleLoadingController.updateText('Portföy Taranıyor', 'Yeni evraklar için veritabanı inceleniyor...');
                 }
-                const recordsResult = await ipRecordsService.getAllRecords({ source: 'server' });
+                const recordsResult = await ipRecordsService.getRecords();
                 const portfolioRecords = recordsResult.success ? recordsResult.data : [];
                 
                 portfolioRecords.forEach(record => {
@@ -227,22 +190,16 @@ export class ETEBSManager {
                 });
             }
 
-            // 4. Verileri İşle ve Veritabanını Güncelle
             const updatePromises = [];
 
             snapPending.forEach(docSnap => {
-                const data = docSnap.data();
-                const docObj = this._normalizeDocData(docSnap.id, data);
+                const docObj = this._normalizeDocData(docSnap);
+                const details = docSnap.details || {};
                 
-                if (data.matched === true && data.matchedRecordId) {
-                    // Zaten veritabanında eşleşmiş, hesaplama yapma, listeye ekle geç.
+                if (docObj.matchedRecordId) {
                     docObj.matched = true;
-                    docObj.matchedRecordId = data.matchedRecordId;
-                    docObj.matchedRecordDisplay = data.matchedRecordDisplay || 'Eşleşen Kayıt';
-                    docObj.recordOwnerType = data.recordOwnerType || 'self';
                     this.matchedDocs.push(docObj);
                 } else {
-                    // Eşleşmemiş, Map'te ara
                     const rawSearchKey = docObj.dosyaNo || docObj.applicationNo || docObj.extractedAppNumber || docObj.evrakNo;
                     const searchKey = this.matcher._normalize(rawSearchKey);
                     const match = searchKey ? portfolioMap.get(searchKey) : null;
@@ -254,14 +211,14 @@ export class ETEBSManager {
                         docObj.recordOwnerType = match.recordOwnerType || 'self';
                         this.matchedDocs.push(docObj);
 
-                        // 🔥 EŞLEŞMEYİ VERİTABANINA YAZ Kİ BİR SONRAKİ SAYFA AÇILIŞINDA YORMASIN
-                        const docRef = doc(db, 'unindexed_pdfs', docSnap.id);
-                        updatePromises.push(updateDoc(docRef, {
-                            matched: true,
-                            matchedRecordId: match.id,
-                            matchedRecordDisplay: docObj.matchedRecordDisplay,
-                            recordOwnerType: docObj.recordOwnerType
-                        }));
+                        updatePromises.push(supabase.from('unindexed_pdfs').update({
+                            details: {
+                                ...details,
+                                matched_record_id: docObj.matchedRecordId,
+                                matched_record_display: docObj.matchedRecordDisplay,
+                                record_owner_type: docObj.recordOwnerType
+                            }
+                        }).eq('id', docSnap.id));
 
                     } else {
                         docObj.matched = false;
@@ -270,7 +227,6 @@ export class ETEBSManager {
                 }
             });
 
-            // Veritabanı güncellemelerini arka planda yap (Kullanıcıyı bekletmez)
             if (updatePromises.length > 0) {
                 Promise.all(updatePromises).catch(err => console.error("DB Match güncelleme hatası:", err));
             }
@@ -290,13 +246,22 @@ export class ETEBSManager {
         }
     }
 
-    _normalizeDocData(id, data) {
+    _normalizeDocData(data) {
+        const details = data.details || {};
         return {
-            id: id,
+            id: data.id,
             ...data,
-            uploadedAt: this._toDate(data.uploadedAt),
-            belgeTarihi: this._toDate(data.belgeTarihi || data.uploadedAt),
-            tebligTarihi: this._toDate(data.tebligTarihi) // <--- BU SATIR EKLENDİ
+            ...details,
+            fileName: data.file_name || details.fileName || 'Belge',
+            fileUrl: data.download_url || details.fileUrl,
+            dosyaNo: data.dosya_no || details.dosyaNo,
+            evrakNo: data.evrak_no || details.evrakNo,
+            matchedRecordId: details.matched_record_id || data.matched_record_id,
+            matchedRecordDisplay: details.matched_record_display || data.matched_record_display,
+            recordOwnerType: details.record_owner_type || data.record_owner_type,
+            uploadedAt: this._toDate(data.created_at || details.uploadedAt),
+            belgeTarihi: this._toDate(details.belgeTarihi || data.created_at),
+            tebligTarihi: this._toDate(details.tebligTarihi)
         };
     }
 
@@ -311,12 +276,10 @@ export class ETEBSManager {
     // ============================================================
     // 4. UI RENDER VE PAGINATION
     // ============================================================
-
     renderAllTabs() {
         this._updateTabBadge('matchedTabBadge', this.matchedDocs.length);
         this._updateTabBadge('unmatchedTabBadge', this.unmatchedDocs.length);
         
-        // İndekslenen sekmesine tıklandığında yükleneceği için varsayılan olarak ... göster
         const indexedBadge = document.getElementById('indexedTabBadge');
         if (indexedBadge && (!this.indexedDocs || this.indexedDocs.length === 0)) {
             indexedBadge.textContent = '...';
@@ -353,18 +316,20 @@ export class ETEBSManager {
         
         if (this.paginations[type]) { /* Opsiyonel temizlik */ }
 
-        this.paginations[type] = new Pagination({
-            containerId: paginationId,
-            itemsPerPage: 10,
-            showItemsPerPageSelector: true,
-            onPageChange: (currentPage, itemsPerPage) => {
-                const start = (currentPage - 1) * itemsPerPage;
-                const pageItems = dataList.slice(start, start + itemsPerPage);
-                this.renderListItems(containerId, pageItems, type);
-            }
-        });
-
-        this.paginations[type].update(dataList.length);
+        if (typeof Pagination !== 'undefined') {
+            this.paginations[type] = new Pagination({
+                containerId: paginationId,
+                itemsPerPage: 10,
+                showItemsPerPageSelector: true,
+                onPageChange: (currentPage, itemsPerPage) => {
+                    const start = (currentPage - 1) * itemsPerPage;
+                    const pageItems = dataList.slice(start, start + itemsPerPage);
+                    this.renderListItems(containerId, pageItems, type);
+                }
+            });
+            this.paginations[type].update(dataList.length);
+        }
+        
         this.renderListItems(containerId, dataList.slice(0, 10), type);
     }
 
@@ -388,7 +353,7 @@ export class ETEBSManager {
 
     _createItemHTML(doc, type) {
         const dateStr = doc.uploadedAt ? doc.uploadedAt.toLocaleDateString('tr-TR') : '-';
-        const isManual = (doc.source === 'manual' || doc.source === 'MANUEL');
+        const isManual = (doc.source === 'manual' || doc.source === 'MANUEL' || doc.details?.source === 'manual');
         
         const sourceBadge = isManual 
             ? '<span class="badge badge-warning text-white mr-2" style="font-size:0.7em;">MANUEL</span>' 
@@ -459,12 +424,10 @@ export class ETEBSManager {
             const q = doc.dosyaNo || doc.evrakNo || '';
             const recordId = doc.matchedRecordId || '';
             
-            // KESİNLİKLE sadece tebligTarihi kullanılacak, belgeTarihi'ne bakılmayacak
-            const targetDate = doc.tebligTarihi;
+            const targetDate = doc.tebligTarihi || doc.uploadedAt;
             let dateStr = '';
             
             if (targetDate) {
-                // Saat dilimi kaymasını önlemek için güvenli formatlama:
                 const yyyy = targetDate.getFullYear();
                 const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
                 const dd = String(targetDate.getDate()).padStart(2, '0');
@@ -478,7 +441,6 @@ export class ETEBSManager {
     // ============================================================
     // 5. TAB, MOD VE UPLOAD YÖNETİMİ
     // ============================================================
-
     bindEvents() {
         const fetchBtn = document.getElementById('fetchNotificationsBtn');
         if (fetchBtn) {
@@ -509,29 +471,37 @@ export class ETEBSManager {
         });
         document.querySelectorAll('.notification-tab-pane').forEach(pane => {
             pane.classList.toggle('active', pane.id === targetId);
+            if (pane.id === targetId) {
+                pane.style.display = 'block';
+            } else {
+                pane.style.display = 'none';
+            }
         });
 
-        // 🔥 İndekslenenler sekmesine tıklanırsa veriyi ÇEK (Lazy Load)
         if (targetId === 'indexed-notifications-tab') {
             this.loadIndexedDocuments();
         }
     }
 
     async loadIndexedDocuments() {
-        // Zaten çekildiyse tekrar çekerek sunucuyu yorma
         if (this.indexedDocs && this.indexedDocs.length > 0) return;
 
         const container = document.getElementById('indexedNotificationsList');
         if (container) container.innerHTML = '<div class="text-center p-4 text-muted"><i class="fas fa-spinner fa-spin fa-2x mb-3"></i><br>İndekslenmiş evraklar getiriliyor...</div>';
 
         try {
-            const colRef = collection(firebaseServices.db, 'unindexed_pdfs');
-            const qIndexed = query(colRef, where('status', '==', 'indexed'), orderBy('uploadedAt', 'desc'), limit(50));
-            const snapIndexed = await getDocs(qIndexed);
+            const { data: snapIndexed, error } = await supabase
+                .from('unindexed_pdfs')
+                .select('*')
+                .eq('status', 'indexed')
+                .order('created_at', { ascending: false })
+                .limit(50);
+                
+            if (error) throw error;
 
             this.indexedDocs = [];
             snapIndexed.forEach(docSnap => {
-                this.indexedDocs.push(this._normalizeDocData(docSnap.id, docSnap.data()));
+                this.indexedDocs.push(this._normalizeDocData(docSnap));
             });
 
             this._updateTabBadge('indexedTabBadge', this.indexedDocs.length);
@@ -557,8 +527,6 @@ export class ETEBSManager {
         if(etebsContent) etebsContent.style.display = mode === 'etebs' ? 'block' : 'none';
         if(uploadContent) uploadContent.style.display = mode === 'upload' ? 'block' : 'none';
     }
-
 }
 
-// Global Erişim
 window.ETEBSManager = ETEBSManager;
