@@ -41,13 +41,24 @@ export class TaskUpdateDataManager {
         return data;
     }
     
-    async saveAccrual(data, isUpdate = false) {
-        // Bu kısmı Accrual modülünü geçirdiğimizde kendi servisine bağlayacağız, şimdilik geçici SQL yazıyoruz
+    async saveAccrual(accrualData, isUpdate = false) {
+        // 🔥 DÜZELTME: Verileri Supabase tablosunun sütunlarına uyarlıyoruz
+        const { files, ...formDataNoFiles } = accrualData;
+
+        const payload = {
+            task_id: String(accrualData.taskId),
+            status: accrualData.status || 'unpaid',
+            files: accrualData.files || [], // 🔥 ANA SÜTUNA DOSYALARI YAZIYORUZ
+            details: formDataNoFiles, // Diğer detayları JSON içine koyuyoruz
+            updated_at: new Date().toISOString()
+        };
+
         if (isUpdate) {
-            const { error } = await supabase.from('accruals').update(data).eq('id', data.id);
+            const { error } = await supabase.from('accruals').update(payload).eq('id', accrualData.id);
             return { success: !error, error };
         } else {
-            const { data: newAcc, error } = await supabase.from('accruals').insert(data).select('id').single();
+            payload.created_at = new Date().toISOString();
+            const { data: newAcc, error } = await supabase.from('accruals').insert(payload).select('id').single();
             return { success: !error, data: newAcc, error };
         }
     }
