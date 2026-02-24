@@ -115,8 +115,10 @@ class TaskUpdateController {
         this.taskData = await this.dataManager.getTaskById(this.taskId);
         this.currentDocuments = this.taskData.documents || [];
         
-        if (this.taskData.details?.epatsDocument && !this.currentDocuments.some(d => d.type === 'epats_document')) {
-            const legacyEpats = this.taskData.details.epatsDocument;
+        // 🔥 YENİ KÖPRÜ: epats_document sütununu da kontrol ediyoruz
+        const dbEpats = this.taskData.epats_document || this.taskData.details?.epatsDocument;
+        if (dbEpats && !this.currentDocuments.some(d => d.type === 'epats_document')) {
+            const legacyEpats = dbEpats;
             legacyEpats.type = 'epats_document'; 
             this.currentDocuments.push(legacyEpats); 
         }
@@ -617,7 +619,9 @@ class TaskUpdateController {
             details: this.taskData.details || {},
             relatedIpRecordId: this.selectedIpRecordId,
             taskOwner: this.selectedPersonId,
-            documents: this.currentDocuments 
+            documents: this.currentDocuments,
+            // 🔥 YENİ KÖPRÜ: EPATS dosyasını ana sütuna kaydet
+            epats_document: this.currentDocuments.find(d => d.type === 'epats_document') || null
         };
 
         if (updateData.details.epatsDocument) delete updateData.details.epatsDocument;
