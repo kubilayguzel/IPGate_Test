@@ -662,7 +662,12 @@ tr.selected-row:hover {
     function pick(obj, fields) {
         const out = {};
         if (!obj) return out;
-        for (const f of fields) if (Object.prototype.hasOwnProperty.call(obj, f)) out[f] = obj[f];
+        for (const f of fields) {
+            // Sadece dolu ve geçerli verileri al, boş (null/undefined) olanlar orijinal marka adını ezmesin!
+            if (obj[f] !== undefined && obj[f] !== null && obj[f] !== '') {
+                out[f] = obj[f];
+            }
+        }
         return out;
     }
 
@@ -922,8 +927,15 @@ tr.selected-row:hover {
                 return '<span style="color:#999; font-size:12px;">🖼️ Görsel yok</span>';
             })();
 
-            const markNameText = r.title || r.markName || '-';
+            const markNameText = r.markName || r.title || '-';
             const safeMarkName = markNameText.replace(/"/g, '&quot;');
+            
+            // Eğer sistemde kayıtlı bir dosyası varsa tıklanabilir link yap
+            let markNameHtml = markNameText;
+            if (r.ipRecordId && r.ipRecordId !== '-' && r.ipRecordId !== 'null') {
+                markNameHtml = `<a href="portfolio-detail.html?id=${r.ipRecordId}" target="_blank" title="IP Kaydına Git" style="color: #1e3c72; text-decoration: none;">${markNameText}</a>`;
+            }
+
             const ownerNames = getOwnerNames(r);
             const safeOwnerNames = ownerNames.replace(/"/g, '&quot;');
 
@@ -970,8 +982,7 @@ tr.selected-row:hover {
             html += `<tr data-id="${r.id}">
                         <td><input type="checkbox" class="row-checkbox" data-id="${r.id}" ${isSelected}></td>
                         <td>${trademarkImageHtml}</td>
-                        <td style="font-weight: 500;" title="${safeMarkName}">${markNameText}</td>
-                        <td style="font-size: 0.9em;" title="${safeSearchTerms}">${searchTermsHtml}</td>
+                        <td style="font-weight: 500;" title="${safeMarkName}">${markNameHtml}</td>                        <td style="font-size: 0.9em;" title="${safeSearchTerms}">${searchTermsHtml}</td>
                         <td><div class="owner-cell" title="${safeOwnerNames}">${ownerNames}</div></td>
                         <td>${r.applicationNumber || r.applicationNo || '-'}</td>
                         <td>${formatTurkishDate(r.applicationDate)}</td>
