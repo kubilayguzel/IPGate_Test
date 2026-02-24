@@ -171,7 +171,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         processData(preservePage = false) {
             const parseDate = (d) => {
                 if (!d) return null;
-                return new Date(d); 
+                const parsed = new Date(d);
+                if (isNaN(parsed.getTime())) return null; // 🔥 YENİ: Tarih geçersizse çökmesini engeller
+                return parsed; 
             };
 
             this.processedData = this.allTasks.map(task => {
