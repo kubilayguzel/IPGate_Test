@@ -4,5 +4,8 @@
     "firebase-admin": "^13.4.0",
     "pdf-lib": "^1.17.1",
     "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "supabase": "^2.76.14"
   }
 }
