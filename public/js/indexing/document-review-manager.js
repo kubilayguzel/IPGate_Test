@@ -749,16 +749,37 @@ export class DocumentReviewManager {
             const txResult = await ipRecordsService.addTransactionToRecord(this.matchedRecord.id, transactionData);
             const childTransactionId = txResult.id;
 
-            // Dosyaları Transaction içine JSON olarak güncelle (arrayUnion alternatifi)
-            if (txResult.success && (this.pdfData.fileUrl || (String(childTypeId) === '27' && oppositionFileUrl))) {
+            // 🔥 YENİ: DOSYAYI STORAGE'DA 'indexed_pdfs' KLASÖRÜNE TAŞIMA İŞLEMİ
+            let finalPdfUrl = this.pdfData.fileUrl || this.pdfData.downloadURL;
+            let finalPdfPath = this.pdfData.file_path || (this.pdfData.details && this.pdfData.details.file_path);
+
+            if (finalPdfPath && !finalPdfPath.startsWith('indexed_pdfs/')) {
+                const cleanName = (this.pdfData.fileName || 'evrak.pdf').replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                const targetPath = `indexed_pdfs/${this.matchedRecord.id}/${Date.now()}_${cleanName}`;
+                
+                // Supabase Storage klasör taşıma
+                const { error: moveError } = await supabase.storage.from(STORAGE_BUCKET).move(finalPdfPath, targetPath);
+                
+                if (!moveError) {
+                    finalPdfPath = targetPath;
+                    const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(targetPath);
+                    finalPdfUrl = urlData.publicUrl;
+                    console.log("✅ Dosya başarıyla 'indexed_pdfs' klasörüne taşındı.");
+                } else {
+                    console.warn("⚠️ Dosya taşınamadı, eski yoluyla devam ediliyor:", moveError);
+                }
+            }
+
+            // Dosyaları Transaction içine JSON olarak güncelle
+            if (txResult.success && (finalPdfUrl || (String(childTypeId) === '27' && oppositionFileUrl))) {
                 const { data: existingTx } = await supabase.from('transactions').select('details').eq('id', childTransactionId).single();
                 let currentDocs = existingTx?.details?.documents || [];
                 
-                if (this.pdfData.fileUrl) {
+                if (finalPdfUrl) {
                     currentDocs.push({
                         id: generateUUID(),
                         name: this.pdfData.fileName || 'Resmi Yazı.pdf',
-                        downloadURL: this.pdfData.fileUrl,
+                        downloadURL: finalPdfUrl, // 🔥 Artık yeni url'yi (indexed_pdfs içindeki) kullanıyor
                         type: 'application/pdf',
                         documentDesignation: 'Resmi Yazı',
                         uploadedAt: new Date().toISOString()
@@ -976,11 +997,16 @@ export class DocumentReviewManager {
                 } catch (err) {}
             }
 
-            await supabase.from(UNINDEXED_PDFS_COLLECTION).update({
+                await supabase.from(UNINDEXED_PDFS_COLLECTION).update({
                 status: 'indexed',
-                indexed_at: new Date().toISOString(),
-                final_transaction_id: childTransactionId,
-                matched_record_id: this.matchedRecord.id
+                download_url: finalPdfUrl, // Ana sütunu yeni linkle güncelle
+                details: {
+                    ...(this.pdfData.details || {}),
+                    file_path: finalPdfPath, // JSON içindeki yolu yeni klasörle değiştir
+                    indexed_at: new Date().toISOString(),
+                    final_transaction_id: childTransactionId,
+                    matched_record_id: this.matchedRecord.id
+                }
             }).eq('id', String(this.pdfId));
 
             showNotification('İşlem başarıyla tamamlandı!', 'success');
