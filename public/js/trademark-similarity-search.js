@@ -105,25 +105,40 @@ const _normalizeImageSrc = (u) => {
 };
 
 const _getBrandImageByAppNo = async (appNo) => {
-    if (!appNo) return '';
-    if (_appNoImgCache.has(appNo)) return _appNoImgCache.get(appNo) || '';
-    let url = '';
-    
-    // 1. Bülten Kayıtlarında Ara
-    const { data: bData } = await supabase.from('trademark_bulletin_records').select('image_path').eq('application_no', appNo).limit(1).single();
-    if (bData?.image_path) url = _normalizeImageSrc(bData.image_path);
+    if (!appNo || appNo === '-') return '';
+    if (_storageUrlCache.has(appNo)) return _storageUrlCache.get(appNo);
 
-    // 2. Bulamazsa Portföyde (IP Records) Ara
-    if (!url) {
-        const { data: ipData } = await supabase.from('ip_records').select('image_path, brand_image_url, details').or(`application_number.eq.${appNo},applicationNo.eq.${appNo}`).limit(1).single();
-        if (ipData) {
-            let details = {};
-            try { details = typeof ipData.details === 'string' ? JSON.parse(ipData.details) : (ipData.details || {}); } catch(e){}
-            url = _normalizeImageSrc(ipData.brand_image_url || ipData.image_path || details?.brandInfo?.brandImage || '');
+    try {
+        // .single() yerine .limit(1) kullanıp data kontrolü yapmak en güvenlisidir
+        const { data: bRec } = await supabase
+            .from('trademark_bulletin_records')
+            .select('image_path')
+            .eq('application_no', appNo)
+            .limit(1);
+
+        if (bRec && bRec.length > 0 && bRec[0].image_path) {
+            const url = _normalizeImageSrc(bRec[0].image_path);
+            _storageUrlCache.set(appNo, url);
+            return url;
         }
+
+        // Portföyde ara
+        const { data: ipRec } = await supabase
+            .from('ip_records')
+            .select('image_path')
+            .eq('application_no', appNo) // Sütun adınızın 'application_no' olduğundan emin olun
+            .limit(1);
+
+        if (ipRec && ipRec.length > 0 && ipRec[0].image_path) {
+            const url = _normalizeImageSrc(ipRec[0].image_path);
+            _storageUrlCache.set(appNo, url);
+            return url;
+        }
+    } catch (err) {
+        console.warn("Görsel aranırken hata oluştu (AppNo: " + appNo + "):", err);
     }
-    _appNoImgCache.set(appNo, url);
-    return url;
+
+    return '';
 };
 
 const imageObserver = new IntersectionObserver((entries, observer) => {
@@ -148,14 +163,35 @@ const _ipCache = new Map();
 const _getIp = async (recordId) => {
     if (!recordId) return null;
     if (_ipCache.has(recordId)) return _ipCache.get(recordId);
+    
     try {
-        const { data, error } = await supabase.from('ip_records').select('*').eq('id', recordId).single();
-        if (error || !data) return null;
-        try { data.applicants = typeof data.applicants === 'string' ? JSON.parse(data.applicants) : (data.applicants || []); } catch(e){}
-        try { data.details = typeof data.details === 'string' ? JSON.parse(data.details) : (data.details || {}); } catch(e){}
-        _ipCache.set(recordId, data);
-        return data;
-    } catch {
+        // .single() yerine .limit(1) kullanarak 406 hatasından kaçınıyoruz
+        const { data, error } = await supabase
+            .from('ip_records')
+            .select('*')
+            .eq('id', recordId)
+            .limit(1);
+
+        if (error || !data || data.length === 0) {
+            console.warn(`⚠️ IP kaydı bulunamadı: ${recordId}`);
+            return null;
+        }
+
+        const record = data[0];
+
+        // JSON parse işlemlerini güvenli hale getiriyoruz
+        try { 
+            record.applicants = typeof record.applicants === 'string' ? JSON.parse(record.applicants) : (record.applicants || []); 
+        } catch(e) { record.applicants = []; }
+        
+        try { 
+            record.details = typeof record.details === 'string' ? JSON.parse(record.details) : (record.details || {}); 
+        } catch(e) { record.details = {}; }
+
+        _ipCache.set(recordId, record);
+        return record;
+    } catch (err) {
+        console.error("❌ _getIp kritik hata:", err);
         _ipCache.set(recordId, null);
         return null;
     }
