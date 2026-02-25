@@ -2,14 +2,9 @@
 import { supabase } from '../../supabase-config.js';
 
 export class TransactionHelper {
+    static _taskCache = new Map();        
+    static _taskPromiseCache = new Map(); 
 
-    // Basit in-memory cache (sayfa ömrü boyunca)
-    static _taskCache = new Map();        // taskId -> taskData | null
-    static _taskPromiseCache = new Map(); // taskId -> Promise<taskData|null>
-
-    /**
-     * Task dokümanları için tekilleştirilmiş fetch (aynı taskId tekrar istenirse cache kullanır).
-     */
     static async getTaskData(taskId) {
         if (!taskId) return null;
         if (this._taskCache.has(taskId)) return this._taskCache.get(taskId);
@@ -17,19 +12,14 @@ export class TransactionHelper {
 
         const p = (async () => {
             try {
-                // 🔥 YENİ: Firebase getDoc yerine Supabase SQL Sorgusu
                 const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
-                
                 if (error || !data) {
                     this._taskCache.set(taskId, null);
                     return null;
                 }
-
-                // Eski Firebase verileri details json'u içindeyse dışarı yayıyoruz
-                const taskData = { id: data.id, ...(data.details || {}), ...data };
-                
-                this._taskCache.set(taskId, taskData);
-                return taskData;
+                // Veritabanı yassılaştığı için direkt data'yı döndürüyoruz
+                this._taskCache.set(taskId, data);
+                return data;
             } catch (e) {
                 console.warn(`Task belge çekme hatası (ID: ${taskId}):`, e);
                 this._taskCache.set(taskId, null);
@@ -43,9 +33,6 @@ export class TransactionHelper {
         return p;
     }
 
-    /**
-     * Transaction üzerindeki (task'a gitmeden) direkt belgeleri normalize eder.
-     */
     static getDirectDocuments(transaction) {
         const docs = [];
         const seenUrls = new Set();
@@ -63,29 +50,24 @@ export class TransactionHelper {
             }
         };
 
-        if (Array.isArray(transaction.documents)) {
-            transaction.documents.forEach(addDoc);
-        }
-
-        if (transaction.relatedPdfUrl) {
-            addDoc({ name: 'Resmi Yazı', url: transaction.relatedPdfUrl, type: 'official' });
-        }
-        if (transaction.oppositionPetitionFileUrl) {
-            addDoc({ name: 'İtiraz Dilekçesi', url: transaction.oppositionPetitionFileUrl, type: 'petition' });
-        }
-        if (transaction.oppositionEpatsPetitionFileUrl) {
-            addDoc({ name: 'Karşı ePATS Dilekçesi', url: transaction.oppositionEpatsPetitionFileUrl, type: 'epats' });
-        }
+        if (Array.isArray(transaction.documents)) transaction.documents.forEach(addDoc);
+        if (transaction.relatedPdfUrl) addDoc({ name: 'Resmi Yazı', url: transaction.relatedPdfUrl, type: 'official' });
+        if (transaction.oppositionPetitionFileUrl) addDoc({ name: 'İtiraz Dilekçesi', url: transaction.oppositionPetitionFileUrl, type: 'petition' });
+        if (transaction.oppositionEpatsPetitionFileUrl) addDoc({ name: 'Karşı ePATS Dilekçesi', url: transaction.oppositionEpatsPetitionFileUrl, type: 'epats' });
 
         return docs;
     }
 
-    /**
-     * Sadece task üzerinden gelen belgeleri getirir (cache'li).
-     */
     static async getTaskDocuments(transaction) {
         const docs = [];
         const seenUrls = new Set();
+        
+        // Yeni şemada task bağlantısı task_id sütununda tutulur
+        const taskId = transaction.task_id || transaction.triggeringTaskId;
+        if (!taskId) return docs;
+
+        const taskData = await this.getTaskData(taskId);
+        if (!taskData) return docs;
 
         const addDoc = (d) => {
             const url = d.fileUrl || d.url || d.path || d.downloadURL;
@@ -100,86 +82,28 @@ export class TransactionHelper {
             }
         };
 
-        if (!transaction.triggeringTaskId) return docs;
-        const taskData = await this.getTaskData(transaction.triggeringTaskId);
-        if (!taskData) return docs;
-
-        if (taskData.details?.epatsDocument?.downloadURL) {
+        // Yeni yassı task şemasına göre ePATS dokümanı kontrolü
+        if (taskData.epats_doc_url) {
             addDoc({
-                name: taskData.details.epatsDocument.name || 'ePats Belgesi',
-                url: taskData.details.epatsDocument.downloadURL,
+                name: taskData.epats_doc_name || 'ePats Belgesi',
+                url: taskData.epats_doc_url,
                 type: 'epats'
             });
         }
+        
+        // Görev içindeki esnek dokümanlar
         if (Array.isArray(taskData.documents)) {
             taskData.documents.forEach(d => addDoc(d));
         }
         return docs;
     }
-    
-    /**
-     * Bir transaction için tüm ilişkili belgeleri (Kendi belgeleri + Task belgeleri) toplar.
-     * @param {Object} transaction - İşlem verisi
-     * @returns {Promise<Array>} - Normalize edilmiş belge listesi
-     */
+
     static async getDocuments(transaction) {
-        const docs = [];
-        const seenUrls = new Set();
-
-        // Belge ekleme yardımcısı (Duplicate önler)
-        const addDoc = (d, source) => {
-            const url = d.fileUrl || d.url || d.path || d.downloadURL;
-            if (url && !seenUrls.has(url)) {
-                seenUrls.add(url);
-                docs.push({
-                    name: d.fileName || d.name || 'Belge',
-                    url: url,
-                    type: d.type || 'document',
-                    source: source // 'direct' veya 'task' (renk ayrımı için)
-                });
-            }
-        };
-
-        // 1. Transaction üzerindeki direkt belgeler (Öncelikli)
-        if (Array.isArray(transaction.documents)) {
-            transaction.documents.forEach(d => addDoc(d, 'direct'));
-        }
-        
-        // Özel alanlardaki belgeler
-        if (transaction.relatedPdfUrl) {
-            addDoc({ name: 'Resmi Yazı', url: transaction.relatedPdfUrl, type: 'official' }, 'direct');
-        }
-        if (transaction.oppositionPetitionFileUrl) {
-            addDoc({ name: 'İtiraz Dilekçesi', url: transaction.oppositionPetitionFileUrl, type: 'petition' }, 'direct');
-        }
-        if (transaction.oppositionEpatsPetitionFileUrl) {
-            addDoc({ name: 'Karşı ePATS Dilekçesi', url: transaction.oppositionEpatsPetitionFileUrl, type: 'epats' }, 'direct');
-        }
-
-        // 2. Task (Görev) üzerindeki belgeler (Fallback)
-        if (transaction.triggeringTaskId) {
-            const taskData = await this.getTaskData(transaction.triggeringTaskId);
-            if (taskData) {
-                if (taskData.details?.epatsDocument?.downloadURL) {
-                    addDoc({
-                        name: taskData.details.epatsDocument.name || 'ePats Belgesi',
-                        url: taskData.details.epatsDocument.downloadURL,
-                        type: 'epats'
-                    }, 'task');
-                }
-
-                if (Array.isArray(taskData.documents)) {
-                    taskData.documents.forEach(d => addDoc(d, 'task'));
-                }
-            }
-        }
-
-        return docs;
+        const directDocs = this.getDirectDocuments(transaction);
+        const taskDocs = await this.getTaskDocuments(transaction);
+        return [...directDocs, ...taskDocs];
     }
 
-    /**
-     * Parent-Child ilişkisini kurar ve sıralar.
-     */
     static organizeTransactions(transactions) {
         const parents = transactions.filter(t => t.transactionHierarchy === 'parent' || !t.parentId);
         const childrenMap = {};
@@ -191,8 +115,8 @@ export class TransactionHelper {
             }
         });
 
-        // Tarihe göre sırala
-        const sortByDate = (a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0);
+        // Tarih (created_at veya timestamp) bazlı sıralama
+        const sortByDate = (a, b) => new Date(a.timestamp || a.date || a.created_at || 0) - new Date(b.timestamp || b.date || b.created_at || 0);
         parents.sort(sortByDate);
         Object.values(childrenMap).forEach(list => list.sort(sortByDate));
 
