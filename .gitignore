@@ -8,3 +8,4 @@ firebase-key.json
 07-migrate-settings-others.js
 export-supabase.js
 supabase_schema_and_sample.json
+supabase_sample.json
