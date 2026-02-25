@@ -91,7 +91,7 @@ async function getAllResults(jobId) {
         similarityScore: r.similarity_score,
         holders: r.holders,
         imagePath: r.image_path,
-        isSimilar: true // Arama motorundan gelenler varsayılan benzerdir
+        isSimilar: false // Arama motorundan gelenler varsayılan benzerdir
     }));
 }
 
