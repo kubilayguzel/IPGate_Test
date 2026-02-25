@@ -488,15 +488,17 @@ class DataEntryModule {
             const { data: children } = await supabase.from('ip_records').select('id').eq('parent_id', parentId).eq('transaction_hierarchy', 'child');
             if (!children || children.length === 0) return;
 
+            // 🔥 DÜZELTME: 'details' sütunu kaldırıldı ve sadece veritabanında var olan sabit sütunlar eşleştirildi
             const updates = {
+                title: parentData.title || parentData.brandText || null,
                 brand_name: parentData.title || parentData.brandText || null,
+                brand_text: parentData.title || parentData.brandText || null,
                 portfolio_status: parentData.status || null,
                 application_date: parentData.applicationDate || null,
                 registration_date: parentData.registrationDate || null,
                 renewal_date: parentData.renewalDate || null,
                 brand_image_url: parentData.brandImageUrl || null,
-                updated_at: new Date().toISOString(),
-                details: { ...parentData }
+                updated_at: new Date().toISOString()
             };
 
             const updatePromises = children.map(child => supabase.from('ip_records').update(updates).eq('id', child.id));
