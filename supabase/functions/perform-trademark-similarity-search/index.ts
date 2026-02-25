@@ -8,6 +8,7 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// --- YARDIMCI FONKSİYONLAR ---
 const RELATED_CLASSES_MAP: Record<string, string[]> = {
     "29": ["30", "31", "43"], "30": ["29", "31", "43"], "31": ["29", "30", "43"],
     "32": ["33"], "33": ["32"], "43": ["29", "30", "31"],
@@ -24,132 +25,283 @@ const RELATED_CLASSES_MAP: Record<string, string[]> = {
     "36": ["35", "37", "39"]
 };
 
-// Basit Levenshtein Benzerlik Skoru (Performans için optimize edildi)
-function calculateSim(s1: string, s2: string): number {
-    s1 = s1.toLowerCase().trim();
-    s2 = s2.toLowerCase().trim();
-    if (s1 === s2) return 1.0;
-    const len1 = s1.length, len2 = s2.length;
-    const matrix = Array.from({ length: len2 + 1 }, (_, i) => [i]);
-    for (let j = 0; j <= len1; j++) matrix[0][j] = j;
-    for (let i = 1; i <= len2; i++) {
-        for (let j = 1; j <= len1; j++) {
-            const cost = s2[i - 1] === s1[j - 1] ? 0 : 1;
-            matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
-        }
-    }
-    return 1 - (matrix[len2][len1] / Math.max(len1, len2));
+const GENERIC_WORDS = [
+    'ltd', 'şti', 'aş', 'anonim', 'şirketi', 'şirket', 'limited', 'inc', 'corp', 'co', 'company', 'group', 'grup',
+    'sanayi', 'ticaret', 'turizm', 'tekstil', 'gıda', 'inşaat', 'danışmanlık', 'hizmet', 'hizmetleri', 'bilişim', 'teknoloji',
+    'mühendislik', 'üretim', 'imalat', 'tasarım', 'dizayn', 'grafik', 'web', 'yazılım', 'donanım', 'elektronik', 'makina',
+    'ürün', 'products', 'services', 'çözüm', 'sistem', 'malzeme', 'ekipman', 'cihaz', 'araç', 'yedek', 'parça', 'aksesuar',
+    'meşhur', 'ünlü', 'tarihi', 'geleneksel', 'klasik', 'yeni', 'taze', 'özel', 'premium', 'lüks', 'kalite', 'uygun',
+    'türkiye', 'uluslararası', 'emlak', 'konut', 'ticari', 'ofis', 'plaza', 'alışveriş', 'rezidans', 'daire',
+    'dijital', 'internet', 'mobil', 'ağ', 'sunucu', 'platform', 'sosyal', 'medya',
+    'yemek', 'restoran', 'cafe', 'kahve', 'çay', 'fırın', 'ekmek', 'pasta', 'börek', 'pizza', 'burger', 'kebap', 'döner', 
+    'et', 'tavuk', 'sebze', 'meyve', 'süt', 'peynir', 'yoğurt', 'dondurma', 'şeker', 'bal', 'organik', 'doğal',
+    've', 'ile', 'için', 'bir', 'bu', 'da', 'de', 'ki', 'mi', 'mı', 'mu', 'mü', 'sadece', 'tek', 'en', 'çok', 'az', 'yeni', 'eski'
+];
+
+function removeTurkishSuffixes(word: string) {
+    if (!word) return '';
+    if (word.endsWith('ler') || word.endsWith('lar')) return word.substring(0, word.length - 3);
+    if (word.endsWith('si') || word.endsWith('sı') || word.endsWith('sü') || word.endsWith('su')) return word.substring(0, word.length - 2);
+    if (word.length > 2 && ['i', 'ı', 'u', 'ü'].includes(word[word.length - 1])) return word.substring(0, word.length - 1);
+    return word;
 }
 
-// 🚀 ASIL İŞİ YAPAN DAHİLİ WORKER FONKSİYONU
-async function startInternalWorker(supabase: any, jobId: string, monitoredMarks: any[], bulletinNo: string) {
-    console.log(`👷 Worker Başladı: Job=${jobId}, Bülten=${bulletinNo}`);
+function cleanMarkName(name: string, removeGenericWords = true) {
+    if (!name) return '';
+    let cleaned = name.toLowerCase().replace(/[^a-z0-9ğüşöçı\s]/g, '').replace(/\s+/g, ' ').trim();
+    if (removeGenericWords) {
+        cleaned = cleaned.split(' ').filter(word => {
+            const stemmedWord = removeTurkishSuffixes(word);
+            return !GENERIC_WORDS.includes(stemmedWord) && !GENERIC_WORDS.includes(word);
+        }).join(' ');
+    }
+    return cleaned.trim();
+}
+
+const visualMap: Record<string, string[]> = {
+    "a": ["e", "o"], "b": ["d", "p"], "c": ["ç", "s"], "ç": ["c", "s"], "d": ["b", "p"], "e": ["a", "o"], "f": ["t"],
+    "g": ["ğ", "q"], "ğ": ["g", "q"], "h": ["n"], "i": ["l", "j", "ı"], "ı": ["i"], "j": ["i", "y"], "k": ["q", "x"],
+    "l": ["i", "1"], "m": ["n"], "n": ["m", "r"], "o": ["a", "0", "ö"], "ö": ["o"], "p": ["b", "q"], "q": ["g", "k"],
+    "r": ["n"], "s": ["ş", "c", "z"], "ş": ["s", "z"], "t": ["f"], "u": ["ü", "v"], "ü": ["u", "v"], "v": ["u", "ü", "w"],
+    "w": ["v"], "x": ["ks"], "y": ["j"], "z": ["s", "ş"], "0": ["o"], "1": ["l", "i"], "ks": ["x"], "Q": ["O","0"],
+    "O": ["Q", "0"], "I": ["l", "1"], "L": ["I", "1"], "Z": ["2"], "S": ["5"], "B": ["8"], "D": ["O"]
+};
+
+function visualMismatchPenalty(a: string, b: string) {
+    if (!a || !b) return 5; 
+    const lenDiff = Math.abs(a.length - b.length);
+    const minLen = Math.min(a.length, b.length);
+    let penalty = lenDiff * 0.5;
+    for (let i = 0; i < minLen; i++) {
+        const ca = a[i].toLowerCase();
+        const cb = b[i].toLowerCase();
+        if (ca !== cb) {
+            if (visualMap[ca] && visualMap[ca].includes(cb)) penalty += 0.25;
+            else penalty += 1.0;
+        }
+    }
+    return penalty;
+}
+
+// 🚀 CPU DOSTU, ÖNBELLEKLİ LEVENSHTEIN (Hızlandırıldı)
+const v0 = new Int32Array(512);
+const v1 = new Int32Array(512);
+
+function levenshteinSimilarity(a: string, b: string): number {
+    if (a === b) return 1.0;
+    const lenA = a.length, lenB = b.length;
+    if (lenA === 0 || lenB === 0) return 0.0;
+    if (lenB >= 512) return 0.0; 
+
+    for (let i = 0; i <= lenB; i++) v0[i] = i;
+
+    for (let i = 0; i < lenA; i++) {
+        v1[0] = i + 1;
+        for (let j = 0; j < lenB; j++) {
+            const cost = a[i] === b[j] ? 0 : 1;
+            v1[j + 1] = Math.min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost);
+        }
+        for (let j = 0; j <= lenB; j++) v0[j] = v1[j];
+    }
+    return 1 - (v1[lenB] / Math.max(lenA, lenB));
+}
+
+function calculateSimilarityScoreInternal(cleanedHitName: string, cleanedSearchName: string) {
+    if (!cleanedSearchName || !cleanedHitName) return { finalScore: 0.0, positionalExactMatchScore: 0.0 }; 
+    if (cleanedSearchName === cleanedHitName) return { finalScore: 1.0, positionalExactMatchScore: 1.0 }; 
+
+    const levenshteinScore = levenshteinSimilarity(cleanedSearchName, cleanedHitName);
     
+    const words1 = cleanedSearchName.split(' ').filter(w => w.length > 0);
+    const words2 = cleanedHitName.split(' ').filter(w => w.length > 0);
+    let maxWordScore = 0.0;
+
+    if (words1.length === 0 && words2.length === 0) {
+        maxWordScore = 1.0;
+    } else if (words1.length > 0 && words2.length > 0) {
+        for (const w1 of words1) {
+            for (const w2 of words2) {
+                const sim = levenshteinSimilarity(w1, w2);
+                if (sim > maxWordScore) maxWordScore = sim;
+            }
+        }
+    }
+
+    const visualPenalty = visualMismatchPenalty(cleanedSearchName, cleanedHitName);
+    const maxPossibleVisualPenalty = Math.max(cleanedSearchName.length, cleanedHitName.length) * 1.0;
+    const visualScore = maxPossibleVisualPenalty === 0 ? 1.0 : (1.0 - (visualPenalty / maxPossibleVisualPenalty));
+
+    let positionalExactMatchScore = 0.0;
+    const len = Math.min(cleanedSearchName.length, cleanedHitName.length, 3);
+    if (len > 0) {
+        let match = true;
+        for (let i = 0; i < len; i++) {
+            if (cleanedSearchName[i] !== cleanedHitName[i]) { match = false; break; }          
+        }
+        if (match) positionalExactMatchScore = 1.0;
+    }
+
+    const finalScore = (levenshteinScore * 0.40) + (maxWordScore * 0.40) + (visualScore * 0.20);
+    return { finalScore: Math.max(0.0, Math.min(1.0, finalScore)), positionalExactMatchScore }; 
+}
+
+
+// --- ANA YÖNLENDİRİCİ FONKSİYON ---
+serve(async (req) => {
+    if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+
     try {
-        const { count } = await supabase.from('trademark_bulletin_records').select('*', { count: 'exact', head: true }).eq('bulletin_no', bulletinNo);
-        const totalBulletinRecords = count || 1;
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!; // Service Role şart
+        const supabase = createClient(supabaseUrl, supabaseKey);
+        const body = await req.json();
 
-        // İzlenen markaların sınıflarını hazırla (Performans için Map/Set kullanımı)
-        const preparedMarks = monitoredMarks.map(m => {
-            const classesRaw = Array.isArray(m.niceClassSearch) && m.niceClassSearch.length > 0 ? m.niceClassSearch : (Array.isArray(m.niceClasses) ? m.niceClasses : []);
-            const orangeSet = new Set(classesRaw.map((c: any) => String(c).replace(/\D/g, '')));
-            const blueSet = new Set();
-            orangeSet.forEach((c: any) => { if (RELATED_CLASSES_MAP[c]) RELATED_CLASSES_MAP[c].forEach(rel => blueSet.add(rel)); });
-            return { ...m, orangeSet, blueSet };
-        });
+        // =========================================================================
+        // ZİNCİRLEME WORKER MODU (CPU Limitini aşmamak için kendi kendini çağırır)
+        // =========================================================================
+        if (body.action === 'worker') {
+            const { jobId, monitoredMarks, selectedBulletinId, lastId, processedCount, totalBulletinRecords } = body;
+            const bulletinNo = selectedBulletinId.split('_')[0];
+            const BATCH_SIZE = 500; // Güvenli CPU limiti için her seferinde 500 kayıt
 
-        let lastId = '0';
-        let processedCount = 0;
+            // İzlenen markaları 1 kere temizle (1 Milyon kere temizlemesini önler!)
+            const preparedMarks = monitoredMarks.map((mark: any) => {
+                const primaryName = (mark.searchMarkName || mark.markName || '').trim();
+                const alternatives = Array.isArray(mark.brandTextSearch) ? mark.brandTextSearch : [];
+                const searchTerms = [primaryName, ...alternatives]
+                    .filter(t => t && t.trim().length > 0)
+                    .map(term => ({ term, cleanedSearchName: cleanMarkName(term, term.trim().split(/\s+/).length > 1) }));
+                
+                const classesRaw = Array.isArray(mark.niceClassSearch) && mark.niceClassSearch.length > 0 ? mark.niceClassSearch : (Array.isArray(mark.niceClasses) ? mark.niceClasses : []);
+                const orangeSet = new Set(classesRaw.map((c: any) => String(c).replace(/\D/g, '')).filter(Boolean));
+                const blueSet = new Set();
+                orangeSet.forEach((c: any) => { if (RELATED_CLASSES_MAP[c]) RELATED_CLASSES_MAP[c].forEach(rel => blueSet.add(rel)); });
+                
+                return { ...mark, searchTerms, orangeSet, blueSet };
+            });
 
-        // Sayfalama (Pagination) ile tüm bülten kayıtlarını tara
-        while (true) {
+            // 500 Kayıt Çek
             const { data: hits, error } = await supabase
                 .from('trademark_bulletin_records')
-                .select('id, application_no, mark_name, nice_classes, holders, image_path')
+                .select('id, application_no, application_date, mark_name, nice_classes, holders, image_path')
                 .eq('bulletin_no', bulletinNo)
                 .order('id')
                 .gt('id', lastId)
-                .limit(1000);
+                .limit(BATCH_SIZE);
 
             if (error) throw error;
-            if (!hits || hits.length === 0) break;
 
-            lastId = hits[hits.length - 1].id;
-            const resultsToInsert = [];
+            // KAYIT KALMADIYSA İŞİ BİTİR
+            if (!hits || hits.length === 0) {
+                await supabase.from('search_progress_workers').update({ status: 'completed', progress: 100 }).eq('id', `${jobId}_main`);
+                await supabase.from('search_progress').update({ status: 'completed' }).eq('id', jobId);
+                console.log(`✅ Job ${jobId} başarıyla tamamlandı.`);
+                return new Response(JSON.stringify({ success: true, finished: true }), { headers: corsHeaders });
+            }
 
+            const newLastId = hits[hits.length - 1].id;
+            const uiResults = [];
+            const permanentRecords = [];
+
+            // Karşılaştırmalar
             for (const hit of hits) {
-                const hitClasses = String(hit.nice_classes || '').split(/[^\d]+/).filter(Boolean);
-                
-                for (const mark of preparedMarks) {
-                    // Sınıf çakışması kontrolü
-                    const hasClassMatch = hitClasses.some(hc => mark.orangeSet.has(hc) || mark.blueSet.has(hc));
-                    if (!hasClassMatch) continue;
+                const hitClasses = typeof hit.nice_classes === 'string' ? hit.nice_classes.split(/[^\d]+/).map(c => String(c).replace(/\D/g, '')).filter(Boolean) : [];
+                const cleanedHitName = cleanMarkName(hit.mark_name || ''); // 1 kere temizlenir
 
-                    const score = calculateSim(hit.mark_name || '', mark.markName || mark.title || '');
-                    
-                    if (score >= 0.5) {
-                        resultsToInsert.push({
-                            job_id: jobId,
-                            monitored_trademark_id: mark.id,
-                            mark_name: hit.mark_name,
-                            application_no: hit.application_no,
-                            nice_classes: hit.nice_classes,
-                            similarity_score: score,
-                            holders: hit.holders,
-                            image_path: hit.image_path
+                for (const mark of preparedMarks) {
+                    const classColors: Record<string, string> = {};
+                    let hasPoolMatch = false;
+
+                    hitClasses.forEach((hc: string) => {
+                        if (mark.orangeSet.has(hc)) { classColors[hc] = 'orange'; hasPoolMatch = true; }
+                        else if (mark.blueSet.has(hc)) { classColors[hc] = 'gray'; hasPoolMatch = true; }
+                    });
+
+                    for (const searchItem of mark.searchTerms) {
+                        let isExactPrefixSuffix = searchItem.cleanedSearchName.length >= 3 && cleanedHitName.includes(searchItem.cleanedSearchName);
+
+                        if (!hasPoolMatch && !isExactPrefixSuffix) continue;
+
+                        // Temizlenmiş stringleri direkt gönder (Büyük CPU Tasarrufu)
+                        const { finalScore, positionalExactMatchScore } = calculateSimilarityScoreInternal(cleanedHitName, searchItem.cleanedSearchName);
+
+                        if (finalScore < 0.5 && positionalExactMatchScore < 0.5 && !isExactPrefixSuffix) continue;
+
+                        uiResults.push({
+                            job_id: jobId, monitored_trademark_id: mark.id, mark_name: hit.mark_name,
+                            application_no: hit.application_no, nice_classes: hit.nice_classes, similarity_score: finalScore,
+                            holders: hit.holders, image_path: hit.image_path
                         });
+
+                        let holdersData = hit.holders;
+                        if (typeof holdersData === 'string') { holdersData = holdersData.split(',').map((h: string) => h.trim()); }
+
+                        permanentRecords.push({
+                            application_date: hit.application_date || '', application_no: hit.application_no,
+                            bulletin_id: selectedBulletinId, class_colors: classColors, holders: holdersData || [],
+                            image_path: hit.image_path || '', is_earlier: false, mark_name: hit.mark_name,
+                            matched_term: searchItem.term, monitored_mark_id: mark.id,
+                            monitored_trademark: mark.markName || mark.title || '', monitored_trademark_id: mark.id,
+                            nice_classes: hit.nice_classes || '', positional_exact_match_score: positionalExactMatchScore,
+                            similarity_score: finalScore, source: 'new'
+                        });
+                        break;
                     }
                 }
             }
 
-            // Bulunanları toplu yaz ve sayacı güncelle
-            if (resultsToInsert.length > 0) {
-                await supabase.from('search_progress_results').insert(resultsToInsert);
+            // Veritabanına Yaz
+            if (uiResults.length > 0) {
+                await supabase.from('search_progress_results').insert(uiResults);
+                await supabase.from('monitoring_trademark_records').insert(permanentRecords);
+                
                 const { data: jobData } = await supabase.from('search_progress').select('current_results').eq('id', jobId).single();
-                await supabase.from('search_progress').update({ current_results: (jobData?.current_results || 0) + resultsToInsert.length }).eq('id', jobId);
+                await supabase.from('search_progress').update({ current_results: (jobData?.current_results || 0) + uiResults.length }).eq('id', jobId);
             }
 
-            processedCount += hits.length;
-            const progressPercent = Math.min(100, Math.floor((processedCount / totalBulletinRecords) * 100));
-            
-            // search_progress_workers tablosunu güncelle (Tek bir ana worker gibi davranıyoruz)
+            const newProcessedCount = processedCount + hits.length;
+            const progressPercent = Math.min(100, Math.floor((newProcessedCount / totalBulletinRecords) * 100));
             await supabase.from('search_progress_workers').upsert({ id: `${jobId}_main`, job_id: jobId, status: 'processing', progress: progressPercent });
+
+            // 🔥 ZİNCİRLEME ÇAĞRI: Kendini sonraki sayfa için arka planda çağır! (CPU Limitini Sıfırlar)
+            if (hits.length === BATCH_SIZE) {
+                EdgeRuntime.waitUntil(
+                    supabase.functions.invoke('perform-trademark-similarity-search', {
+                        body: { action: 'worker', jobId, monitoredMarks, selectedBulletinId, lastId: newLastId, processedCount: newProcessedCount, totalBulletinRecords },
+                        headers: { Authorization: `Bearer ${supabaseKey}` }
+                    })
+                );
+            } else {
+                await supabase.from('search_progress_workers').update({ status: 'completed', progress: 100 }).eq('id', `${jobId}_main`);
+                await supabase.from('search_progress').update({ status: 'completed' }).eq('id', jobId);
+                console.log(`✅ Job ${jobId} başarıyla tamamlandı.`);
+            }
+
+            return new Response(JSON.stringify({ success: true, processed: hits.length }), { headers: corsHeaders });
         }
 
-        await supabase.from('search_progress_workers').update({ status: 'completed', progress: 100 }).eq('id', `${jobId}_main`);
-        await supabase.from('search_progress').update({ status: 'completed' }).eq('id', jobId);
-        console.log(`✅ Job ${jobId} başarıyla tamamlandı.`);
-
-    } catch (err) {
-        console.error(`❌ Worker Hatası (Job ${jobId}):`, err);
-        await supabase.from('search_progress').update({ status: 'error', error_message: err.message }).eq('id', jobId);
-    }
-}
-
-serve(async (req) => {
-    // CORS Preflight
-    if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-
-    try {
-        const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-        const body = await req.json();
-
-        // Worker Mode çağrısını artık dahili yapacağımız için action === 'worker' kısmını sildik
+        // =========================================================================
+        // BAŞLANGIÇ MODU (Arayüzden gelen ilk istek)
+        // =========================================================================
         const { monitoredMarks, selectedBulletinId } = body;
+        if (!monitoredMarks || !selectedBulletinId) throw new Error("Eksik parametre.");
+
         const jobId = `job_${Date.now()}`;
         const bulletinNo = selectedBulletinId.split('_')[0];
 
-        // 1. İşi veritabanına kaydet
-        await supabase.from('search_progress').insert({ 
-            id: jobId, 
-            status: 'started', 
-            current_results: 0, 
-            total_records: monitoredMarks.length 
-        });
+        await supabase.from('search_progress').insert({ id: jobId, status: 'started', current_results: 0, total_records: monitoredMarks.length });
+        
+        // Progress bar için toplam bülten kaydını bul
+        const { count } = await supabase.from('trademark_bulletin_records').select('*', { count: 'exact', head: true }).eq('bulletin_no', bulletinNo);
+        const totalRecords = count || 1;
 
-        // 2. 🚀 KRİTİK: Arka plan işlemini başlat
-        // waitUntil sayesinde Deno, tarayıcıya yanıtı dönse bile bu fonksiyonu öldürmez.
-        EdgeRuntime.waitUntil(startInternalWorker(supabase, jobId, monitoredMarks, bulletinNo));
+        // İlk işçiyi arka planda ateşle
+        EdgeRuntime.waitUntil(
+            supabase.functions.invoke('perform-trademark-similarity-search', {
+                body: { action: 'worker', jobId, monitoredMarks, selectedBulletinId, lastId: '0', processedCount: 0, totalBulletinRecords: totalRecords },
+                headers: { Authorization: `Bearer ${supabaseKey}` }
+            })
+        );
 
         console.log(`🚀 Arama Tetiklendi: ${jobId}`);
 
