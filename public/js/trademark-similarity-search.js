@@ -108,12 +108,16 @@ const _getBrandImageByAppNo = async (appNo) => {
     if (!appNo || appNo === '-') return '';
     if (_storageUrlCache.has(appNo)) return _storageUrlCache.get(appNo);
 
+    // 🔥 EKSİK OLAN SATIR EKLENDİ: Boşlukları tolere etmek için güvenli ID oluşturuyoruz
+    const safeAppNo = appNo.toString().replace(/\s+/g, '%');
+
     try {
-        // .single() yerine .limit(1) kullanıp data kontrolü yapmak en güvenlisidir
+        // 1. Önce bülten kayıtlarında ara (Sadece resmi olanları getir)
         const { data: bRec } = await supabase
             .from('trademark_bulletin_records')
             .select('image_path')
-            .eq('application_no', appNo)
+            .ilike('application_no', `%${safeAppNo}%`)
+            .not('image_path', 'is', null)
             .limit(1);
 
         if (bRec && bRec.length > 0 && bRec[0].image_path) {
@@ -122,22 +126,26 @@ const _getBrandImageByAppNo = async (appNo) => {
             return url;
         }
 
-        // Portföyde ara
+        // 2. Bulamazsa Portföyde ara
         const { data: ipRec } = await supabase
             .from('ip_records')
-            .select('image_path')
-            .eq('application_no', appNo) // Sütun adınızın 'application_no' olduğundan emin olun
+            .select('brand_image_url, details')
+            .ilike('application_number', `%${safeAppNo}%`) 
             .limit(1);
 
-        if (ipRec && ipRec.length > 0 && ipRec[0].image_path) {
-            const url = _normalizeImageSrc(ipRec[0].image_path);
-            _storageUrlCache.set(appNo, url);
-            return url;
+        if (ipRec && ipRec.length > 0) {
+            const foundImage = ipRec[0].brand_image_url || ipRec[0].details?.brandImage;
+            if (foundImage) {
+                const url = _normalizeImageSrc(foundImage);
+                _storageUrlCache.set(appNo, url);
+                return url;
+            }
         }
     } catch (err) {
         console.warn("Görsel aranırken hata oluştu (AppNo: " + appNo + "):", err);
     }
 
+    _storageUrlCache.set(appNo, '');
     return '';
 };
 
@@ -945,7 +953,9 @@ const handleReportGeneration = async (event, options = {}) => {
             const blob = new Blob([Uint8Array.from(atob(response.file), c => c.charCodeAt(0))], { type: 'application/zip' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            link.download = isGlobal ? `Toplu_Rapor_${new Date().toISOString().slice(0, 10)}.zip` : `${ownerName.replace(/[^a-zA-Z0-9\s]/g, '_')}_Benzerlik_Raporu.zip`;
+            // 🔥 DÜZELTME: Dosya ismini maksimum 25 karakterle sınırlandırdık ki Windows hata vermesin
+            const safeDownloadName = (ownerName || 'Rapor').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 25);
+            link.download = isGlobal ? `Toplu_Rapor.zip` : `${safeDownloadName}_Rapor.zip`;
             document.body.appendChild(link); link.click(); document.body.removeChild(link);
 
             if (createTasks && createdTaskCount > 0) {
