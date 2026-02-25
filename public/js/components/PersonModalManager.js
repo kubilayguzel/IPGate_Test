@@ -10,7 +10,8 @@ export class PersonModalManager {
         this.onSuccess = options.onSuccess || (() => {});
         this.isEdit = false;
         this.currentPersonId = null;
-        this.documents = []; // {type, validityDate, countryCode, fileName, fileObj, url, isNew}
+        this.documents = []; 
+        this.docsToDelete = []; // 🔥 YENİ: Silinecek Storage Evrakları
         this.relatedDraft = [];
         this.relatedLoaded = [];
         this.relatedToDelete = [];
@@ -234,90 +235,67 @@ export class PersonModalManager {
     }
 
     setupEventListeners() {
-        // TCKN/VKN Sadece Rakam ve Hane Sınırı
-        document.getElementById('personTckn').oninput = (e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0, 11);
-        document.getElementById('personVkn').oninput = (e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0, 10);
+        const el = (id) => document.getElementById(id);
         
-        // Kişi Tipi Değişimi
-        document.getElementById('personType').onchange = (e) => {
+        if(el('personTckn')) el('personTckn').oninput = (e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0, 11);
+        if(el('personVkn')) el('personVkn').oninput = (e) => e.target.value = e.target.value.replace(/\D/g, '').slice(0, 10);
+        
+        if(el('personType')) el('personType').onchange = (e) => {
             const isGercek = e.target.value === 'gercek';
-            document.getElementById('gercekFields').style.display = isGercek ? '' : 'none';
-            document.getElementById('tuzelFields').style.display = isGercek ? 'none' : '';
-            document.getElementById('personNameLabel').innerText = isGercek ? 'Ad Soyad *' : 'Firma Adı *';
+            el('gercekFields').style.display = isGercek ? '' : 'none';
+            el('tuzelFields').style.display = isGercek ? 'none' : '';
+            el('personNameLabel').innerText = isGercek ? 'Ad Soyad *' : 'Firma Adı *';
         };
 
-        // Ülke -> İl/Eyalet Değişimi
-        document.getElementById('countrySelect').onchange = async (e) => {
+        if(el('countrySelect')) el('countrySelect').onchange = async (e) => {
             const countryCode = e.target.value;
             const isTR = /^(TR|TUR)$/i.test(countryCode);
-            document.getElementById('provinceSelect').style.display = isTR ? '' : 'none';
-            document.getElementById('provinceText').style.display = isTR ? 'none' : '';
+            el('provinceSelect').style.display = isTR ? '' : 'none';
+            el('provinceText').style.display = isTR ? 'none' : '';
             if (isTR) await this.loadProvinces(countryCode);
         };
 
-        // --- KRİTİK: Mail To/CC Toggle Senkronizasyonu ---
         document.querySelectorAll('.scope-cb').forEach(cb => {
             cb.onchange = () => this.syncMailPrefsAvailability();
         });
 
-        // İlgili Kişi & Evrak Butonları
-        document.getElementById('toggleRelatedSectionBtn').onclick = () => {
-            const sect = document.getElementById('relatedSection');
+        if(el('toggleRelatedSectionBtn')) el('toggleRelatedSectionBtn').onclick = () => {
+            const sect = el('relatedSection');
             sect.style.display = sect.style.display === 'none' ? 'block' : 'none';
         };
 
-        document.getElementById('addRelatedBtn').onclick = () => this.addRelatedHandler();
-        document.getElementById('updateRelatedBtn').onclick = () => this.updateRelatedHandler();
-        document.getElementById('cancelRelatedBtn').onclick = () => this.resetRelatedForm();
-        document.getElementById('addDocBtn').onclick = () => this.addDocumentHandler();
-        document.getElementById('savePersonBtn').onclick = (e) => this.handleSave(e);
+        if(el('addRelatedBtn')) el('addRelatedBtn').onclick = () => this.addRelatedHandler();
+        if(el('updateRelatedBtn')) el('updateRelatedBtn').onclick = () => this.updateRelatedHandler();
+        if(el('cancelRelatedBtn')) el('cancelRelatedBtn').onclick = () => this.resetRelatedForm();
+        if(el('addDocBtn')) el('addDocBtn').onclick = () => this.addDocumentHandler();
+        if(el('savePersonBtn')) el('savePersonBtn').onclick = (e) => this.handleSave(e);
 
-        // Telefon Formatlama
         this.addPhoneListeners('personPhone');
         this.addPhoneListeners('relatedPhone');
 
-        // --- SÜRÜKLE BIRAK MANTIĞI ---
-        const dropZone = document.getElementById('docDropZone');
-        const fileInput = document.getElementById('docFile');
-        const fileNameDisplay = document.getElementById('docFileNameDisplay');
+        const dropZone = el('docDropZone');
+        const fileInput = el('docFile');
+        const fileNameDisplay = el('docFileNameDisplay');
 
         if (dropZone && fileInput) {
             dropZone.onclick = () => fileInput.click();
-
-            dropZone.ondragover = (e) => {
-                e.preventDefault();
-                dropZone.style.background = "#e0f2f1";
-                dropZone.style.borderColor = "#4db6ac";
-            };
-
-            dropZone.ondragleave = () => {
-                dropZone.style.background = "#f1faee";
-                dropZone.style.borderColor = "#a8dadc";
-            };
-
+            dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.background = "#e0f2f1"; dropZone.style.borderColor = "#4db6ac"; };
+            dropZone.ondragleave = () => { dropZone.style.background = "#f1faee"; dropZone.style.borderColor = "#a8dadc"; };
             dropZone.ondrop = (e) => {
                 e.preventDefault();
                 dropZone.style.background = "#f1faee";
                 dropZone.style.borderColor = "#a8dadc";
-                if (e.dataTransfer.files.length) {
-                    fileInput.files = e.dataTransfer.files;
-                    fileNameDisplay.innerText = e.dataTransfer.files[0].name;
-                }
+                if (e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; fileNameDisplay.innerText = e.dataTransfer.files[0].name; }
             };
-
-            fileInput.onchange = () => {
-                if (fileInput.files.length) fileNameDisplay.innerText = fileInput.files[0].name;
-            };
+            fileInput.onchange = () => { if (fileInput.files.length) fileNameDisplay.innerText = fileInput.files[0].name; };
         }
-        const indefiniteCb = document.getElementById('docDateIndefinite');
-        const docDateInput = document.getElementById('docDate');
+        const indefiniteCb = el('docDateIndefinite');
+        const docDateInput = el('docDate');
         
         if(indefiniteCb && docDateInput) {
             indefiniteCb.onchange = (e) => {
                 docDateInput.disabled = e.target.checked;
-                if(e.target.checked) {
-                    docDateInput.value = ''; // Süresiz ise tarihi temizle
-                }
+                if(e.target.checked) docDateInput.value = ''; 
             };
         }
     }
@@ -325,7 +303,7 @@ export class PersonModalManager {
     async open(personId = null, callback = null) {
         this.isEdit = !!personId;
         this.currentPersonId = personId;
-        this.tempCallback = callback; // Başarı durumunda çalışacak fonksiyonu sakla
+        this.tempCallback = callback; 
         this.resetForm();
 
         await this.loadInitialData();
@@ -337,24 +315,15 @@ export class PersonModalManager {
             document.getElementById('personModalTitle').textContent = 'Yeni Kişi Ekle';
         }
 
-        // --- EKRAN KARARMASINI ÖNLEYEN GÜVENLİ AÇILIŞ ---
         if (window.$) {
-            const $modal = $('#personModal');
-            
-            // 1. Modalı body'nin en sonuna taşı (Z-index çakışmalarını %100 çözer)
+            const $modal = window.$('#personModal');
             $modal.appendTo('body');
-            
-            // 2. Modalı başlat
             $modal.modal({ backdrop: 'static', keyboard: false });
             $modal.modal('show');
-
-            // 3. Arka plan katmanının (backdrop) modalın altında kalmasını zorla
             $modal.on('shown.bs.modal', function () {
-                const zIndex = 1050 + (10 * $('.modal:visible').length);
-                $(this).css('z-index', zIndex);
-                setTimeout(() => {
-                    $('.modal-backdrop').not('.modal-stack').css('z-index', zIndex - 1).addClass('modal-stack');
-                }, 0);
+                const zIndex = 1050 + (10 * window.$('.modal:visible').length);
+                window.$(this).css('z-index', zIndex);
+                setTimeout(() => { window.$('.modal-backdrop').not('.modal-stack').css('z-index', zIndex - 1).addClass('modal-stack'); }, 0);
             });
         }
     }
@@ -366,7 +335,7 @@ export class PersonModalManager {
             const toEl = document.querySelector(`.mail-to[data-scope="${s}"]`);
             const ccEl = document.querySelector(`.mail-cc[data-scope="${s}"]`);
             
-            if (!cb || !toEl || !ccEl) return; // Elemanlardan biri eksikse bu turu atla
+            if (!cb || !toEl || !ccEl) return; 
 
             const toLabel = toEl.parentElement;
             const ccLabel = ccEl.parentElement;
@@ -381,11 +350,7 @@ export class PersonModalManager {
                 ccLabel.classList.add('disabled');
                 toEl.disabled = true;
                 ccEl.disabled = true;
-                // Düzenleme modunda değilsek temizle (Edit modunda burayı atlamak için input check kontrolü eklenebilir)
-                if (!this.editingRelated) {
-                    toEl.checked = false;
-                    ccEl.checked = false;
-                }
+                if (!this.editingRelated) { toEl.checked = false; ccEl.checked = false; }
             }
         });
     }
@@ -401,7 +366,6 @@ export class PersonModalManager {
         saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Yükleniyor...';
 
         try {
-            // 1. Evrakları Storage'a yükle (Sadece yenileri)
             const processedDocs = [];
             for (const doc of this.documents) {
                 if (doc.isNew && doc.fileObj) {
@@ -413,8 +377,9 @@ export class PersonModalManager {
                 });
             }
 
-            // 2. Kişi Veri Paketi
             const countrySel = document.getElementById('countrySelect');
+            const provinceSel = document.getElementById('provinceSelect');
+            
             const personData = {
                 name: nameVal,
                 type: document.getElementById('personType').value,
@@ -427,39 +392,39 @@ export class PersonModalManager {
                 address: document.getElementById('personAddress').value,
                 countryCode: countrySel.value,
                 countryName: countrySel.options[countrySel.selectedIndex]?.text,
-                province: document.getElementById('provinceSelect').style.display === 'none' 
+                province: provinceSel.style.display === 'none' 
                             ? document.getElementById('provinceText').value 
-                            : document.getElementById('provinceSelect').options[document.getElementById('provinceSelect').selectedIndex]?.text,
+                            : provinceSel.options[provinceSel.selectedIndex]?.text,
                 is_evaluation_required: document.getElementById('is_evaluation_required').checked,
                 documents: processedDocs,
                 updatedAt: new Date().toISOString()
             };
 
-            // 3. Supabase Kayıt (Service üzerinden)
             let savedId = this.currentPersonId;
             if (this.isEdit) {
                 const res = await personService.updatePerson(this.currentPersonId, personData);
-                if (!res.success) throw new Error("Supabase Güncelleme Hatası: " + res.error);
+                if(!res.success) throw new Error(res.error);
             } else {
                 const res = await personService.addPerson(personData);
-                if (!res.success) throw new Error("Supabase Ekleme Hatası: " + res.error);
+                if(!res.success) throw new Error(res.error);
                 savedId = res.data.id;
             }
 
-            // 4. İlgilileri Kaydet (Batch ile)
+            // İlgili kişileri kaydet
             await this.saveRelatedToDb(savedId);
 
-            // --- TEMİZLENMİŞ BÖLÜM: Veri Dönüşü ve UI Kapatma ---
-            const finalPersonObject = { id: savedId, ...personData };
-
-            // Callback kontrolü
-            if (this.tempCallback) {
-                this.tempCallback(finalPersonObject);
-            } else {
-                this.onSuccess(finalPersonObject);
+            // 🔥 YENİ: Veritabanı başarıyla güncellendiyse silinecek evrakları Storage'dan kalıcı sil
+            if (this.docsToDelete && this.docsToDelete.length > 0) {
+                for (const delUrl of this.docsToDelete) {
+                    await this.dataManager.deleteDocument(delUrl);
+                }
             }
 
-            // Modal'ı kapat ve bildirimi göster (Tek sefer)
+            const finalPersonObject = { id: savedId, ...personData };
+
+            if (this.tempCallback) this.tempCallback(finalPersonObject);
+            else this.onSuccess(finalPersonObject);
+
             showNotification('Kişi bilgileri başarıyla kaydedildi.', 'success');
             window.$('#personModal').modal('hide');
 
@@ -471,27 +436,29 @@ export class PersonModalManager {
         }
     }
 
-    // --- İlgili Kişi (Related) İşlemleri ---
     addRelatedHandler() {
         const name = document.getElementById('relatedName').value.trim();
         if (!name) return showNotification('İlgili adı zorunludur.', 'warning');
 
-        const scopes = Array.from(document.querySelectorAll('.scope-cb:checked')).map(cb => cb.value);
-        const notify = {};
-        ['patent','marka','tasarim','dava','muhasebe'].forEach(s => {
-            notify[s] = {
-                to: document.querySelector(`.mail-to[data-scope="${s}"]`).checked,
-                cc: document.querySelector(`.mail-cc[data-scope="${s}"]`).checked
-            };
-        });
-
-        this.relatedDraft.push({
+        const scopeMap = { marka: 'trademark', patent: 'patent', tasarim: 'design', dava: 'litigation', muhasebe: 'finance' };
+        
+        const draftObj = {
             name,
             email: document.getElementById('relatedEmail').value.trim(),
             phone: document.getElementById('relatedPhone').value.trim(),
-            responsible: scopes.reduce((obj, s) => ({ ...obj, [s]: true }), {}),
-            notify
+            resp_trademark: document.getElementById('scopeMarka').checked,
+            resp_patent: document.getElementById('scopePatent').checked,
+            resp_design: document.getElementById('scopeTasarim').checked,
+            resp_litigation: document.getElementById('scopeDava').checked,
+            resp_finance: document.getElementById('scopeMuhasebe').checked,
+        };
+
+        ['marka','patent','tasarim','dava','muhasebe'].forEach(s => {
+            draftObj[`notify_${scopeMap[s]}_to`] = document.querySelector(`.mail-to[data-scope="${s}"]`).checked;
+            draftObj[`notify_${scopeMap[s]}_cc`] = document.querySelector(`.mail-cc[data-scope="${s}"]`).checked;
         });
+
+        this.relatedDraft.push(draftObj);
 
         this.renderRelatedList();
         this.resetRelatedForm();
@@ -512,14 +479,14 @@ export class PersonModalManager {
             const item = `
                 <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-center p-2" 
                      style="cursor: pointer;" 
-                     onclick="window.personModal.editRelated(${idx}, ${isLoaded === true})">
+                     onclick="window.personModalManager.editRelated(${idx}, ${isLoaded === true})">
                     <div style="flex-grow: 1;">
                         <strong class="d-block text-dark">${r.name}</strong>
                         <small class="text-muted">${r.email || ''} ${r.phone || ''}</small>
                     </div>
                     <div>
                         <button type="button" class="btn btn-sm btn-outline-danger border-0" 
-                                onclick="event.stopPropagation(); window.personModal.removeRelated(${idx}, ${isLoaded})">
+                                onclick="event.stopPropagation(); window.personModalManager.removeRelated(${idx}, ${isLoaded})">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
@@ -529,13 +496,9 @@ export class PersonModalManager {
     }
 
     editRelated(idx, isLoaded) {
-        // 1. Düzenlenecek veriyi seç
         const data = isLoaded ? this.relatedLoaded[idx] : this.relatedDraft[idx];
-        console.log("Düzenlenen İlgili Verisi:", data);
-
         if (!data) return;
 
-        // 2. Form Alanlarını Doldur (Güvenli atama)
         const safeSet = (id, val) => {
             const el = document.getElementById(id);
             if (el) el.value = val || '';
@@ -546,52 +509,37 @@ export class PersonModalManager {
         safeSet('relatedEmail', data.email);
         safeSet('relatedPhone', data.phone);
 
-        // 3. Checkboxları (Sorumlu Alanlar) İşaretle
-        const resp = data.responsible || {};
-        const scopes = ['patent', 'marka', 'tasarim', 'dava', 'muhasebe'];
+        const scopeMap = { marka: 'trademark', patent: 'patent', tasarim: 'design', dava: 'litigation', muhasebe: 'finance' };
         
-        scopes.forEach(s => {
+        ['marka', 'patent', 'tasarim', 'dava', 'muhasebe'].forEach(s => {
             const capitalized = s.charAt(0).toUpperCase() + s.slice(1);
             const cb = document.getElementById('scope' + capitalized);
-            // Veri yapısı küçük/büyük harf duyarlılığına karşı önlem
-            if (cb) cb.checked = !!(resp[s] || resp[capitalized]);
+            
+            const isResp = data[`resp_${scopeMap[s]}`] || (data.responsible && (data.responsible[s] || data.responsible[capitalized]));
+            if (cb) cb.checked = !!isResp;
         });
 
-        // 4. Mail Tercihlerini (To/CC) Aktif Hale Getir ve İşaretle
-        this.syncMailPrefsAvailability(); // Önce disabled durumlarını kaldır
+        this.syncMailPrefsAvailability(); 
 
-        const notify = data.notify || {};
-        scopes.forEach(s => {
+        ['marka', 'patent', 'tasarim', 'dava', 'muhasebe'].forEach(s => {
             const toInput = document.querySelector(`.mail-to[data-scope="${s}"]`);
             const ccInput = document.querySelector(`.mail-cc[data-scope="${s}"]`);
-            const prefs = notify[s] || notify[s.charAt(0).toUpperCase() + s.slice(1)] || { to: false, cc: false };
             
-            if (toInput) toInput.checked = !!prefs.to;
-            if (ccInput) ccInput.checked = !!prefs.cc;
+            const isNotifyTo = data[`notify_${scopeMap[s]}_to`] || (data.notify && data.notify[s] && data.notify[s].to);
+            const isNotifyCc = data[`notify_${scopeMap[s]}_cc`] || (data.notify && data.notify[s] && data.notify[s].cc);
+            
+            if (toInput) toInput.checked = !!isNotifyTo;
+            if (ccInput) ccInput.checked = !!isNotifyCc;
         });
 
-        // 5. BUTON GÖRÜNÜRLÜĞÜNÜ AYARLA (İsteğinize Göre)
-        
-        // A) "İlgili Ekle" butonunu gizle
         const addBtn = document.getElementById('addRelatedBtn');
         if (addBtn) addBtn.style.display = 'none';
 
-        // B) "Güncelle/İptal" grubunu göster
         const editGroup = document.getElementById('relatedEditButtons');
-        if (editGroup) {
-            editGroup.style.display = 'flex'; // veya 'inline-flex'
-        } else {
-            // Eğer HTML'de grup div'i oluşturmadıysanız eski usul butonları tek tek açarız:
-            const updBtn = document.getElementById('updateRelatedBtn');
-            const canBtn = document.getElementById('cancelRelatedBtn');
-            if(updBtn) updBtn.style.display = 'inline-block';
-            if(canBtn) canBtn.style.display = 'inline-block';
-        }
+        if (editGroup) editGroup.style.display = 'flex'; 
         
-        // 6. Durumu Kaydet
         this.editingRelated = { idx, isLoaded };
         
-        // 7. Kullanıcıyı forma odakla
         const formSection = document.getElementById('relatedSection');
         if(formSection) formSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -603,31 +551,27 @@ export class PersonModalManager {
         const name = document.getElementById('relatedName').value.trim();
         if (!name) return showNotification('İlgili adı zorunludur.', 'warning');
 
-        // Formdaki yeni verileri topla
-        const scopes = Array.from(document.querySelectorAll('.scope-cb:checked')).map(cb => cb.value);
-        const notify = {};
-        ['patent','marka','tasarim','dava','muhasebe'].forEach(s => {
-            notify[s] = {
-                to: document.querySelector(`.mail-to[data-scope="${s}"]`).checked,
-                cc: document.querySelector(`.mail-cc[data-scope="${s}"]`).checked
-            };
-        });
-
+        const scopeMap = { marka: 'trademark', patent: 'patent', tasarim: 'design', dava: 'litigation', muhasebe: 'finance' };
+        
         const updatedData = {
             name,
             email: document.getElementById('relatedEmail').value.trim(),
             phone: document.getElementById('relatedPhone').value.trim(),
-            responsible: scopes.reduce((obj, s) => ({ ...obj, [s]: true }), {}),
-            notify
+            resp_trademark: document.getElementById('scopeMarka').checked,
+            resp_patent: document.getElementById('scopePatent').checked,
+            resp_design: document.getElementById('scopeTasarim').checked,
+            resp_litigation: document.getElementById('scopeDava').checked,
+            resp_finance: document.getElementById('scopeMuhasebe').checked,
         };
 
-        // İlgili diziyi güncelle
+        ['marka','patent','tasarim','dava','muhasebe'].forEach(s => {
+            updatedData[`notify_${scopeMap[s]}_to`] = document.querySelector(`.mail-to[data-scope="${s}"]`).checked;
+            updatedData[`notify_${scopeMap[s]}_cc`] = document.querySelector(`.mail-cc[data-scope="${s}"]`).checked;
+        });
+
         if (isLoaded) {
-            // Firestore'daki ID'yi koru
             const oldId = this.relatedLoaded[idx].id;
             this.relatedLoaded[idx] = { id: oldId, ...updatedData };
-            // Not: Firestore güncellemesi handleSave sırasında veya anlık yapılabilir. 
-            // Şimdilik liste üzerinden yönetiyoruz.
         } else {
             this.relatedDraft[idx] = updatedData;
         }
@@ -637,57 +581,44 @@ export class PersonModalManager {
         showNotification('İlgili bilgileri güncellendi.', 'success');
     }
 
-resetRelatedForm() {
-        // 1. Metin Alanlarını Temizle
+    resetRelatedForm() {
         const textIds = ['relatedId', 'relatedName', 'relatedEmail', 'relatedPhone'];
         textIds.forEach(id => {
             const el = document.getElementById(id);
             if(el) el.value = '';
         });
 
-        // 2. Edit Modunu Sıfırla
         this.editingRelated = null;
 
-        // 3. Sorumlu Alanları Varsayılan Olarak SEÇİLİ Yap
         document.querySelectorAll('.scope-cb').forEach(cb => cb.checked = true);
 
-        // 4. Mail Tercihlerini Ayarla
-        // Sorumlu alanlar seçili olduğu için mail kutuları da aktif olmalı
         document.querySelectorAll('.mail-to').forEach(cb => {
-            cb.checked = true; // "To" varsayılan seçili
-            cb.disabled = false; // Aktif
+            cb.checked = true; 
+            cb.disabled = false; 
             if(cb.parentElement) cb.parentElement.classList.remove('disabled');
         });
 
         document.querySelectorAll('.mail-cc').forEach(cb => {
-            cb.checked = false; // "CC" varsayılan boş
-            cb.disabled = false; // Aktif (Seçilebilir)
+            cb.checked = false; 
+            cb.disabled = false; 
             if(cb.parentElement) cb.parentElement.classList.remove('disabled');
         });
 
-        // 5. Butonları Varsayılan Hale Getir
-        // Güncelle/İptal grubunu gizle
         const editGroup = document.getElementById('relatedEditButtons');
         if (editGroup) editGroup.style.display = 'none';
 
-        // Ekle butonunu göster
         const addBtn = document.getElementById('addRelatedBtn');
-        if (addBtn) addBtn.style.display = 'inline-block'; // veya flex yapınıza göre
+        if (addBtn) addBtn.style.display = 'inline-block'; 
     }
 
-    // ARTIK ANINDA SİLMEYECEK, LİSTEDEN ÇIKARIP "SİLİNECEKLER" KUTUSUNA ATACAK
     async removeRelated(idx, isLoaded) {
         if (!confirm('Bu ilgiliyi listeden kaldırmak istiyor musunuz? (İşlem "Kaydet" butonuna basınca tamamlanacaktır)')) return;
         
         if (isLoaded) {
-            // Veritabanından gelen bir kayıt ise, ID'sini silinecekler listesine at
             const item = this.relatedLoaded[idx];
             this.relatedToDelete.push(item.id); 
-            
-            // Ekranda görünmemesi için listeden çıkar
             this.relatedLoaded.splice(idx, 1);
         } else {
-            // Henüz kaydedilmemiş taslak ise sadece listeden sil
             this.relatedDraft.splice(idx, 1);
         }
         this.renderRelatedList();
@@ -698,11 +629,8 @@ resetRelatedForm() {
         const file = fileInput.files[0];
         const proxyParty = document.getElementById('docProxyParty').value.trim();
         
-        // YENİ: Süresiz kontrolü
         const isIndefinite = document.getElementById('docDateIndefinite').checked;
         const rawDate = document.getElementById('docDate').value;
-        
-        // Eğer süresiz seçiliyse 'Süresiz' yaz, değilse tarihi al
         const validityDate = isIndefinite ? 'Süresiz' : rawDate;
 
         if (!file) return showNotification('Lütfen bir dosya seçin.', 'warning');
@@ -710,7 +638,7 @@ resetRelatedForm() {
         this.documents.push({
             type: document.getElementById('docType').value,
             proxyParty: proxyParty,
-            validityDate: validityDate, // Değişkeni kullanıyoruz
+            validityDate: validityDate, 
             countryCode: document.getElementById('docCountry').value,
             fileName: file.name,
             fileObj: file,
@@ -719,12 +647,11 @@ resetRelatedForm() {
 
         this.renderDocuments();
         
-        // Temizlik
         fileInput.value = '';
         document.getElementById('docProxyParty').value = '';
         document.getElementById('docDate').value = '';
-        document.getElementById('docDateIndefinite').checked = false; // Checkbox'ı sıfırla
-        document.getElementById('docDate').disabled = false; // Tarihi tekrar aktif et
+        document.getElementById('docDateIndefinite').checked = false; 
+        document.getElementById('docDate').disabled = false; 
         document.getElementById('docFileNameDisplay').innerText = 'PDF Sürükle veya Tıkla';    
     }
 
@@ -744,14 +671,24 @@ resetRelatedForm() {
                             </div>
                         </div>
                     </div>
-                    <button type="button" class="btn btn-sm btn-outline-danger border-0 rounded-circle" onclick="window.personModal.removeDocument(${i})">
+                    <button type="button" class="btn btn-sm btn-outline-danger border-0 rounded-circle" onclick="event.stopPropagation(); window.personModalManager.removeDocument(${i})">
                         <i class="fas fa-times"></i>
                     </button>
                 </div>`);
         });
     }
 
+    // 🔥 YENİ: Silme işlemi onaylı ve Storage silinecekler listesiyle (docsToDelete) donatıldı
     removeDocument(idx) {
+        if (!confirm('Bu evrakı listeden kaldırmak istediğinize emin misiniz? (Kayıt işlemiyle kalıcı silinecektir)')) return;
+        
+        const docToDel = this.documents[idx];
+        
+        // Eğer veritabanından gelen eski bir evraksa URL'sini silinecekler listesine al
+        if (!docToDel.isNew && docToDel.url) {
+            this.docsToDelete.push(docToDel.url);
+        }
+        
         this.documents.splice(idx, 1);
         this.renderDocuments();
     }
@@ -763,28 +700,22 @@ resetRelatedForm() {
         const countrySelect = document.getElementById('countrySelect');
         const docCountry = document.getElementById('docCountry');
 
-        countrySelect.innerHTML = options;
-        docCountry.innerHTML = options;
+        if(countrySelect) countrySelect.innerHTML = options;
+        if(docCountry) docCountry.innerHTML = options;
 
-        // Varsayılan Türkiye Seçimi (HER İKİ ALAN İÇİN)
-        // Hem TR hem TUR kodlarını kontrol eder
         const trOption = countries.find(c => /^(TR|TUR)$/i.test(c.code));
         
         if (trOption) {
-            countrySelect.value = trOption.code;
-            docCountry.value = trOption.code;
-            
-            // Kişi adresi TR olduğu için illeri yükle
+            if(countrySelect) countrySelect.value = trOption.code;
+            if(docCountry) docCountry.value = trOption.code;
             await this.loadProvinces(trOption.code);
         }
     }
 
     async loadProvinces(code) {
         const provinces = await this.dataManager.getProvinces(code);
-        
         const options = ['<option value="">İl Seçiniz</option>'].concat(
             provinces.map(p => {
-                // Veri obje ise code/id/name/label alanlarını dene, değilse doğrudan kendisini kullan
                 const pCode = (p.code || p.id || p).toString();
                 const pName = (p.name || p.label || p).toString();
                 return `<option value="${pCode}">${pName}</option>`;
@@ -792,17 +723,14 @@ resetRelatedForm() {
         ).join('');
         
         const provinceSel = document.getElementById('provinceSelect');
-        if (provinceSel) {
-            provinceSel.innerHTML = options;
-        }
+        if (provinceSel) provinceSel.innerHTML = options;
     }
 
     async loadPersonData(id) {
-        const persons = await personService.getPersons(); // Cache veya master data'dan da gelebilir
+        const persons = await personService.getPersons(); 
         const p = persons.data.find(x => x.id === id);
         if (!p) return;
 
-        // Temel alanları doldur
         document.getElementById('personType').value = p.type || 'gercek';
         document.getElementById('personType').dispatchEvent(new Event('change'));
         document.getElementById('personName').value = p.name || '';
@@ -815,24 +743,19 @@ resetRelatedForm() {
         document.getElementById('personAddress').value = p.address || '';
         document.getElementById('is_evaluation_required').checked = !!p.is_evaluation_required;
 
-        // 🔥 ÜLKE VE İL SEÇİMİ DÜZELTMESİ 🔥
         const countrySelect = document.getElementById('countrySelect');
-        if (p.countryCode) {
+        if (p.countryCode && countrySelect) {
             countrySelect.value = p.countryCode;
             
-            // Eğer ülke Türkiye ise illeri yükle ve seç
             if (/^(TR|TUR)$/i.test(p.countryCode)) {
                 document.getElementById('provinceSelect').style.display = '';
                 document.getElementById('provinceText').style.display = 'none';
                 
-                // İllerin yüklenmesini bekle
                 await this.loadProvinces(p.countryCode);
                 
-                // Veritabanında il ismi (text) kayıtlı olduğu için text üzerinden eşleştirme yap
                 if (p.province) {
                     const provinceSelect = document.getElementById('provinceSelect');
                     let found = false;
-                    // Seçenekler arasında metni (text) eşleşen var mı?
                     for (let i = 0; i < provinceSelect.options.length; i++) {
                         if (provinceSelect.options[i].text === p.province) {
                             provinceSelect.selectedIndex = i;
@@ -840,54 +763,48 @@ resetRelatedForm() {
                             break;
                         }
                     }
-                    // Eğer text olarak bulamazsa value olarak dene (eski kayıtlar için)
-                    if (!found) {
-                        provinceSelect.value = p.province;
-                    }
+                    if (!found) provinceSelect.value = p.province;
                 }
             } else {
-                // Yabancı ülke ise input text'i doldur
                 document.getElementById('provinceSelect').style.display = 'none';
                 document.getElementById('provinceText').style.display = '';
                 document.getElementById('provinceText').value = p.province || '';
             }
         }
 
-        // Evrakları yükle
-        this.documents = p.documents || [];
+        // 🔥 YENİ: Arayüzdeki Array'i ana veriden bağımsız (Deep Copy) yapıyoruz
+        // Bu sayede evrak silme anında DOM çakışması ve listenin tümden gitmesi engellenir
+        this.documents = p.documents ? [...p.documents] : [];
         this.renderDocuments();
 
-        // İlgilileri Firestore'dan çek
         const related = await this.dataManager.getRelatedPersons(id);
         this.relatedLoaded = related;
         this.renderRelatedList();
     }
 
     resetForm() {
-        document.getElementById('personForm').reset();
+        const form = document.getElementById('personForm');
+        if (form) form.reset();
+        
         this.documents = [];
+        this.docsToDelete = []; // 🔥 Sıfırlama
         this.relatedDraft = [];
         this.relatedLoaded = [];
-        
-        // --- YENİ: Listeyi Sıfırla ---
         this.relatedToDelete = [];
-        // -----------------------------
         
-        document.getElementById('relatedSection').style.display = 'none';
-        document.getElementById('docListContainer').innerHTML = '';
-        document.getElementById('relatedListContainer').innerHTML = '';
-        window.personModal = this; 
+        const relatedSection = document.getElementById('relatedSection');
+        if (relatedSection) relatedSection.style.display = 'none';
+        
+        const docList = document.getElementById('docListContainer');
+        if (docList) docList.innerHTML = '';
+        
+        const relatedList = document.getElementById('relatedListContainer');
+        if (relatedList) relatedList.innerHTML = '';
     }
 
-// PersonModalManager.js
     addPhoneListeners(id) {
         const el = document.getElementById(id);
-        
-        // KRİTİK DÜZELTME: Eğer eleman bulunamazsa işlemi durdur (Hata almayı önler)
-        if (!el) {
-            console.warn(`Uyarı: ${id} ID'li telefon inputu bulunamadı.`);
-            return;
-        }
+        if (!el) return;
 
         el.onfocus = () => { if(!el.value) el.value = '+90 '; };
         el.oninput = (e) => {
@@ -904,18 +821,12 @@ resetRelatedForm() {
     }
 
     async saveRelatedToDb(personId) {
-        try {
-            await personService.saveRelatedPersons(
-                personId, 
-                this.relatedDraft, 
-                this.relatedLoaded, 
-                this.relatedToDelete
-            );
-            // Temizlik
-            this.relatedDraft = [];
-            this.relatedToDelete = [];
-        } catch (error) {
-            console.error("Related person save error:", error);
-        }
+        const res = await personService.saveRelatedPersons(personId, this.relatedDraft, this.relatedLoaded, this.relatedToDelete);
+        if (!res.success) throw new Error("İlgili kişiler kaydedilemedi: " + res.error);
+        
+        this.relatedDraft = [];
+        this.relatedToDelete = [];
     }
 }
+
+window.personModalManager = new PersonModalManager();
