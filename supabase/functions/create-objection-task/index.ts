@@ -26,13 +26,13 @@ serve(async (req) => {
 
         const hitMarkName = similarMarkName || similarMark?.markName || 'Bilinmeyen Marka';
 
-        // 1. 🔥 ŞEMA UYUMLU: Bülten Kaydını Ekle (bulletin_id sütunu yok, sadece bulletin_no kullanıyoruz)
+        // 1. Bülten Kaydını Ekle
         const newBulletinRecordId = crypto.randomUUID();
         if (bulletinRecordData) {
             const safeHolders = Array.isArray(bulletinRecordData.holders) ? bulletinRecordData.holders.map((h:any) => h.name || h.holderName || h).join(', ') : String(bulletinRecordData.holders || '');
             const safeNiceClasses = Array.isArray(bulletinRecordData.niceClasses) ? bulletinRecordData.niceClasses.join(', ') : String(bulletinRecordData.niceClasses || '');
             
-            await supabase.from('trademark_bulletin_records').insert({
+            const { error: brError } = await supabase.from('trademark_bulletin_records').insert({
                 id: newBulletinRecordId,
                 bulletin_no: String(bulletinNo),
                 mark_name: String(hitMarkName),
@@ -42,11 +42,12 @@ serve(async (req) => {
                 nice_classes: safeNiceClasses,
                 holders: safeHolders
             });
+            if (brError) throw new Error("Bülten Kaydı Hatası: " + JSON.stringify(brError));
         }
 
-        // 2. 🔥 ŞEMA UYUMLU: 3. Taraf Portföy Kaydını (Rakip Marka) Ekliyoruz
+        // 2. 3. Taraf Portföy Kaydını (Rakip Marka) Ekliyoruz
         const thirdPartyIpRecordId = crypto.randomUUID();
-        await supabase.from('ip_records').insert({
+        const { error: tpError } = await supabase.from('ip_records').insert({
             id: thirdPartyIpRecordId,
             brand_name: hitMarkName,
             application_number: String(similarMark?.applicationNo || ''),
@@ -55,18 +56,14 @@ serve(async (req) => {
             portfolio_status: 'third_party',
             official_status: 'Yayımda',
             brand_image_url: bulletinRecordData?.imagePath || null,
-            details: {
-                source: 'similarity_search',
-                niceClasses: similarMark?.niceClasses || [],
-                bulletinNo: bulletinNo
-            }
+            details: { source: 'similarity_search', niceClasses: similarMark?.niceClasses || [], bulletinNo: bulletinNo }
         });
+        if (tpError) throw new Error("3. Taraf Portföy Kaydı Hatası: " + JSON.stringify(tpError));
 
-        // 3. ŞEMA UYUMLU: İzlenen Markayı ve Müşteriyi Bul (client_id ve ip_record_id kullanılarak)
+        // 3. İzlenen Markayı Bul
         const { data: monitoredData } = await supabase.from('monitoring_trademarks').select('*').eq('id', monitoredMarkId).single();
         const relatedIpRecordId = monitoredData?.ip_record_id || null;
         let clientName = monitoredData?.owner_name || 'İzlenen Marka Sahibi';
-        
         let clientId = null;
         let ipAppNo = monitoredData?.application_no || "-";
         let ipTitle = monitoredData?.mark_name || "-";
@@ -85,7 +82,7 @@ serve(async (req) => {
             }
         }
 
-        // 4. Son Tarih Hesaplama
+        // 4. Son Tarih
         let officialDueDate = null;
         const { data: bulletinData } = await supabase.from('trademark_bulletins').select('bulletin_date').eq('bulletin_no', bulletinNo).single();
         if (bulletinData?.bulletin_date) {
@@ -97,7 +94,7 @@ serve(async (req) => {
             }
         }
 
-        // 5. ŞEMA UYUMLU: Görevi (Task) Oluştur 
+        // 5. Task Oluştur 
         let newTaskId = `task_${Date.now()}`;
         try {
             const { data: countData } = await supabase.from('counters').select('last_id').eq('id', 'tasks').single();
@@ -106,7 +103,7 @@ serve(async (req) => {
             newTaskId = String(nextId);
         } catch(e) {}
 
-        await supabase.from('tasks').insert({
+        const { error: taskInsertError } = await supabase.from('tasks').insert({
             id: newTaskId, 
             task_type: '20', 
             status: 'awaiting_client_approval', 
@@ -121,9 +118,10 @@ serve(async (req) => {
             iprecord_applicant_name: clientName,
             details: { objectionTarget: hitMarkName, targetAppNo: similarMark?.applicationNo, bulletinNo, monitoredMarkId, similarityScore: similarMark?.similarityScore || 0 }
         });
+        if (taskInsertError) throw new Error("Görev Ekleme Hatası: " + JSON.stringify(taskInsertError));
 
-        // 6. ŞEMA UYUMLU: Transaction Kaydı (İtiraz Edildi)
-        await supabase.from('transactions').insert({
+        // 6. Transaction Kaydı
+        const { error: txError } = await supabase.from('transactions').insert({
             id: crypto.randomUUID(),
             ip_record_id: thirdPartyIpRecordId,
             transaction_type_id: '20',
@@ -131,16 +129,13 @@ serve(async (req) => {
             transaction_hierarchy: 'parent',
             details: { taskId: newTaskId, oppositionOwner: clientName }
         });
+        if (txError) throw new Error("İşlem Geçmişi Hatası: " + JSON.stringify(txError));
 
-        // Fonksiyon sorunsuz bitiyor ve Arayüze geri dönüyor
-        return new Response(JSON.stringify({ 
-            success: true, 
-            taskId: newTaskId,
-            bulletinRecordId: newBulletinRecordId
-        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
+        return new Response(JSON.stringify({ success: true, taskId: newTaskId, bulletinRecordId: newBulletinRecordId }), 
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
 
     } catch (error) {
-        console.error("Task Oluşturma Hatası:", error);
+        console.error("❌ Kritik Hata:", error);
         return new Response(JSON.stringify({ success: false, error: error.message }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
     }
 });
