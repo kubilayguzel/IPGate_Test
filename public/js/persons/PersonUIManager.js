@@ -36,8 +36,6 @@ export class PersonUIManager {
     }
 
     async deletePerson(id) {
-        // Kullanıcıya tekrar sormaya gerek yok, HTML tarafında confirm yaptık.
-        
         try {
             // Yükleniyor efekti (Listeyi flu yap)
             const tableBody = document.getElementById('personsTableBody');
@@ -46,24 +44,17 @@ export class PersonUIManager {
             // personService'i çağır
             let service = window.personService; 
             if (!service) {
-                const module = await import('../../supabase-config.js'); // DOĞRU YOL
+                // YENİ: Firebase yerine Supabase config dosyasına bağlandı
+                const module = await import('../../supabase-config.js');
                 service = module.personService;
             }
 
             const result = await service.deletePerson(id);
 
             if (result.success) {
-                // Başarılıysa listeyi yenile
                 await this.loadPersons();
-                
-                // Varsa bildirim göster
                 if(window.showNotification) window.showNotification('Kişi başarıyla silindi.', 'success');
-
-                // --- EKLENEN KISIM BAŞLANGIÇ ---
-                // İşlem bittiği için opaklığı normale döndür
                 if(tableBody) tableBody.style.opacity = '1';
-                // --- EKLENEN KISIM BİTİŞ ---
-
             } else {
                 alert("Silme işlemi başarısız: " + result.error);
                 if(tableBody) tableBody.style.opacity = '1';
@@ -106,10 +97,8 @@ export class PersonUIManager {
 
     applyFiltersAndSort() {
         const term = document.getElementById('personSearchInput')?.value || '';
-        // Arama varsa filtrelenmiş veriyi, yoksa tüm veriyi al
         let sourceData = term ? [...this.filteredData] : [...this.allPersons];
 
-        // 1. Sıralama (Sorting)
         sourceData.sort((a, b) => {
             let valA = (a[this.sortColumn] || '').toString().toLowerCase();
             let valB = (b[this.sortColumn] || '').toString().toLowerCase();
@@ -120,9 +109,7 @@ export class PersonUIManager {
 
         this.filteredData = sourceData;
         
-        // 2. Pagination Senkronizasyonu
         if (this.pagination) {
-            // update() metodu totalItems, totalPages hesaplar ve render eder
             this.pagination.update(this.filteredData.length);
         }
         
@@ -135,7 +122,6 @@ export class PersonUIManager {
 
         tableBody.innerHTML = '';
         
-        // Pagination'dan o anki sayfanın verisini al
         const paginatedData = this.pagination.getCurrentPageData(this.filteredData);
 
         if (paginatedData.length === 0) {
