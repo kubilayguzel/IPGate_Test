@@ -1,10 +1,9 @@
-// public/js/portfolio/PortfolioRenderer.js
 import { STATUSES, formatToTRDate } from '../../utils.js';
 import '../simple-loading.js';
 
 export class PortfolioRenderer {
     constructor(containerId, dataManager) {
-        this.containerId = containerId; // ID'yi sakla
+        this.containerId = containerId; 
         this.dataManager = dataManager;
         
         this.simpleLoader = null;
@@ -13,29 +12,20 @@ export class PortfolioRenderer {
         }
     }
 
-    // GÜNCELLEME: tbody'i ihtiyaç anında (lazy) getir
     get tbody() {
         return document.getElementById(this.containerId);
     }
 
-    // --- TEMEL METODLAR ---
-
     clearTable() {
-        if (this.tbody) {
-            this.tbody.innerHTML = '';
-        }
+        if (this.tbody) this.tbody.innerHTML = '';
     }
 
     showLoading(show) {
         const defaultSpinner = document.getElementById('loadingIndicator');
-        
         if (show) {
             if (defaultSpinner) defaultSpinner.style.display = 'none';
             if (this.simpleLoader) {
-                this.simpleLoader.show({
-                    text: 'Veriler Yükleniyor',
-                    subtext: 'Lütfen bekleyiniz, kayıtlar taranıyor...'
-                });
+                this.simpleLoader.show({ text: 'Veriler Yükleniyor', subtext: 'Lütfen bekleyiniz, kayıtlar taranıyor...' });
             } else if (defaultSpinner) {
                 defaultSpinner.style.display = 'flex';
             }
@@ -108,7 +98,6 @@ export class PortfolioRenderer {
         });
     }
 
-    // --- STANDART ROW ---
     renderStandardRow(record, isTrademarkTab, isSelected) {
         const tr = document.createElement('tr');
         tr.dataset.id = record.id;
@@ -127,33 +116,30 @@ export class PortfolioRenderer {
              tr.style.backgroundColor = '#ffffff';
         }
 
-        const countryName = this.dataManager.getCountryName(record.country);
+        const countryName = this.dataManager.getCountryName(record.country || record.countryCode);
         const imgHtml = isTrademarkTab ? 
             `<td><div class="trademark-image-wrapper">${record.brandImageUrl ? `<img class="trademark-image-thumbnail" src="${record.brandImageUrl}" loading="lazy">` : ''}</div></td>` : '';
 
-        // 🔥 YENİ: Kaydın TÜRKPATENT menşeli olup olmadığını kontrol et
-        const isTP = [record.origin, record.source].map(s => (s||'').toUpperCase()).some(s => s.includes('TURKPATENT') || s.includes('TÜRKPATENT'));
+        const isTP = [record.origin, record.source, record.country].map(s => (s||'').toUpperCase()).some(s => s.includes('TURKPATENT') || s.includes('TÜRKPATENT') || s === 'TR');
         
-        // Buton tipini ve içeriğini menşeye göre ayarla
         const viewBtnTitle = isTP ? "TürkPatent'te Sorgula" : "Detayı Görüntüle";
-        
-        // TP ise logoyu bas (Resmi beyaz yapmak için filter kullandık), değilse standart göz ikonu
         const btnContent = isTP 
             ? `<img src="./tp-icon.png" style="width: 50px; height: 50px; object-fit: contain;" alt="TP">`
             : `<i class="fas fa-eye"></i>`;
 
         const actions = `
             <div class="d-flex gap-1 justify-content-end">
-            <button class="action-btn view-btn btn btn-sm ${isTP ? '' : 'btn-info'}" data-id="${record.id}" title="${viewBtnTitle}" ${isTP ? 'style="background:transparent;border:none;padding:2px;"' : ''}>${btnContent}</button>
-            <button class="action-btn edit-btn btn btn-sm btn-warning" data-id="${record.id}" title="Düzenle"><i class="fas fa-edit"></i></button>
+                <button class="action-btn view-btn btn btn-sm ${isTP ? '' : 'btn-info'}" data-id="${record.id}" title="${viewBtnTitle}" ${isTP ? 'style="background:transparent;border:none;padding:2px;"' : ''}>${btnContent}</button>
+                <button class="action-btn edit-btn btn btn-sm btn-warning" data-id="${record.id}" title="Düzenle"><i class="fas fa-edit"></i></button>
                 <button class="action-btn delete-btn btn btn-sm btn-danger" data-id="${record.id}" title="Sil"><i class="fas fa-trash"></i></button>
-            </div>
-        `;
+            </div>`;
 
         const caret = (isWipoParent && irNo) ? `<i class="fas fa-chevron-right row-caret" style="cursor:pointer;"></i>` : '';
         const titleText = record.title || record.brandText || '-';
         const appNoText = record.applicationNumber || (isWipoParent ? irNo : '-'); 
-        const applicantText = record.formattedApplicantName || '-';
+        
+        // 🔥 GÜNCELLEME: Çözümlenmiş başvuru sahibini kullan
+        const applicantText = record.formattedApplicantName || record.applicantName || '-';
 
         let html = `
             <td><input type="checkbox" class="record-checkbox" data-id="${record.id}" ${isSelected ? 'checked' : ''}></td>
@@ -170,19 +156,22 @@ export class PortfolioRenderer {
             html += `<td title="${countryName}">${countryName}</td>`;
         }
 
-        // 🔥 YENİ: Başvuru numarasını tıklanabilir link (Detay sayfasına giden) yapıyoruz
         if (appNoText && appNoText !== '-') {
             html += `<td title="Portföy detayını aç"><a href="portfolio-detail.html?id=${record.id}" target="_blank" style="color: #1e3c72; font-weight: 600; text-decoration: underline;">${appNoText}</a></td>`;
         } else {
             html += `<td title="${appNoText}">${appNoText}</td>`;
         }
         
-        html += `<td>${this.formatDate(record.applicationDate)}</td>`;
+        // 🔥 GÜNCELLEME: Tarihi direkt çözümleyiciden çekip ekrana bas
+        html += `<td>${record.formattedApplicationDate || '-'}</td>`;
+        
         html += `<td>${isChild ? '' : this.getStatusBadge(record)}</td>`;
         html += `<td><small title="${applicantText}">${applicantText}</small></td>`;
         
+        // 🔥 GÜNCELLEME: Nice sınıflarını direkt çözümleyiciden al
         const niceText = record.formattedNiceClasses || '-';
         html += `<td title="${niceText}">${niceText}</td>`;
+        
         html += `<td>${actions}</td>`;
 
         tr.innerHTML = html;
@@ -222,29 +211,25 @@ export class PortfolioRenderer {
         tr.className = isChild ? 'group-row child-row' : (hasChildren ? 'group-header' : '');
         if (isChild) tr.setAttribute('aria-hidden', 'true');
         
-        // 🔥 GÜNCELLEME: Kendi portföyümüze gelen bir itirazsa arkaplanı belirgin kırmızımsı yap
         if (!isChild && row.isOwnRecord) {
-            // Bootstrap'in kendi tehlike (kırmızı) taban rengini kullanıyoruz ki kesin çalışsın:
             tr.classList.add('table-danger'); 
-            // Veya CSS ile ezilmemesi için: tr.style.setProperty('background-color', '#ffebee', 'important');
         } else if (isChild) {
-            tr.style.backgroundColor = '#f8f9fa'; // Alt işlemler için belirgin açık gri
+            tr.style.backgroundColor = '#f8f9fa'; 
         }
 
         const docsHtml = (row.documents || []).map(doc => {
             let iconClass = 'fa-file-pdf'; 
-            let iconColor = '#dc3545'; // Standart Kırmızı
+            let iconColor = '#dc3545'; 
             
-            // 🔥 Güncellenen "type" alanına göre ikonlar
             if (doc.type === 'epats_document') {
                 iconClass = 'fa-file-invoice';
-                iconColor = '#0d6efd'; // ePATS için Mavi
+                iconColor = '#0d6efd'; 
             } else if (doc.type === 'official_document') {
                 iconClass = 'fa-file-signature';
-                iconColor = '#198754'; // Resmi Yazı için Yeşil
+                iconColor = '#198754'; 
             } else if (doc.type === 'opposition_petition') {
                 iconClass = 'fa-file-contract';
-                iconColor = '#fd7e14'; // İtiraz Dilekçesi için Turuncu
+                iconColor = '#fd7e14'; 
             }
 
             return `
@@ -280,13 +265,16 @@ export class PortfolioRenderer {
     }
 
     formatDate(d) {
-        return formatToTRDate(d); // Artık merkezi utils fonksiyonunu kullanır
+        if (!d) return '-';
+        if (typeof d === 'object' && d._seconds) d = new Date(d._seconds * 1000);
+        return formatToTRDate(d);
     }
     
     getStatusBadge(record) {
         const rawStatus = record.status;
         let displayStatus = rawStatus || '-';
         let color = 'secondary';
+        
         if (record.type && STATUSES[record.type]) {
             const statusObj = STATUSES[record.type].find(s => s.value === rawStatus);
             if (statusObj) {
@@ -303,6 +291,7 @@ export class PortfolioRenderer {
                 }
             }
         }
+        
         if (color === 'secondary') {
              const s = String(rawStatus).toLowerCase();
              if (['registered', 'approved', 'active', 'tescilli', 'finalized', 'kesinleşti'].includes(s)) color = 'success';
