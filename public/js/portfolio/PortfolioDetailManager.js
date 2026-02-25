@@ -206,10 +206,10 @@ export class PortfolioDetailManager {
             const pIcons = pDirectDocs.map((d, i) => this.createDocIcon(d, i === 0)).join(' ');
 
             let pDocsHtml = pIcons || '';
-            if (parent.task_id) {
-                pDocsHtml += `<span class="tx-docs-loading text-muted small ml-2"><i class="fas fa-spinner fa-spin"></i> PDF'ler...</span>`;
-                enrichQueue.push({ tx: parent, containerId: pId, hasAnyDirect: pDirectDocs.length > 0 });
-            }
+            
+            // 🔥 KOŞULSUZ ARAMA: Her işlem için veritabanında görev belgesi var mı diye arat!
+            pDocsHtml += `<span class="tx-docs-loading text-muted small ml-2"><i class="fas fa-spinner fa-spin"></i> PDF aranıyor...</span>`;
+            enrichQueue.push({ tx: parent, containerId: pId, hasAnyDirect: pDirectDocs.length > 0 });
 
             const childrenHtml = children.length === 0 ? '' : `
                 <div class="accordion-transaction-children" style="display:none;">
@@ -220,10 +220,10 @@ export class PortfolioDetailManager {
                         const cIcons = cDirectDocs.map((d, i) => this.createDocIcon(d, i === 0)).join(' ');
                         
                         let cDocsHtml = cIcons || '';
-                        if (child.task_id) {
-                            cDocsHtml += `<span class="tx-docs-loading text-muted small ml-2"><i class="fas fa-spinner fa-spin"></i> PDF'ler...</span>`;
-                            enrichQueue.push({ tx: child, containerId: cId, hasAnyDirect: cDirectDocs.length > 0 });
-                        }
+                        
+                        // 🔥 ALT İŞLEMLER İÇİN DE KOŞULSUZ ARAMA
+                        cDocsHtml += `<span class="tx-docs-loading text-muted small ml-2"><i class="fas fa-spinner fa-spin"></i> PDF aranıyor...</span>`;
+                        enrichQueue.push({ tx: child, containerId: cId, hasAnyDirect: cDirectDocs.length > 0 });
 
                         return `
                         <div class="child-transaction-item d-flex justify-content-between align-items-center p-2 border-top bg-light ml-4" style="border-left: 3px solid #f39c12;">
@@ -279,7 +279,17 @@ export class PortfolioDetailManager {
 
     createDocIcon(doc, isFirst) {
         const color = (doc.source === 'task') ? 'text-info' : 'text-danger'; 
-        return `<a href="${doc.url}" target="_blank" class="mx-1 ${color}" title="${doc.name || 'Belge'}"><i class="fas fa-file-pdf fa-lg"></i></a>`;
+        
+        // 🔥 GÜNCELLEME: Dosya tipine (Image/PDF/Word) göre uygun ikonu seç!
+        let iconClass = 'fa-file-pdf';
+        if (doc.type) {
+            const t = doc.type.toLowerCase();
+            if (t.includes('image') || t.includes('jpg') || t.includes('jpeg') || t.includes('png')) iconClass = 'fa-file-image';
+            else if (t.includes('word') || t.includes('doc')) iconClass = 'fa-file-word';
+            else if (t.includes('epats')) iconClass = 'fa-file-invoice';
+        }
+
+        return `<a href="${doc.url}" target="_blank" class="mx-1 ${color}" title="${doc.name || 'Belge'}"><i class="fas ${iconClass} fa-lg"></i></a>`;
     }
 
     toggleLoading(show) {
