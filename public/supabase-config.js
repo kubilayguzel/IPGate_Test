@@ -453,17 +453,28 @@ export const ipRecordsService = {
         return { success: true };
     },
 
-    // E) GÜNCELLEME İŞLEMİ (Cache Temizliği Güncellendi)
+    // E) GÜNCELLEME İŞLEMİ (Sütunlar ve Alt Tablolar Düzeltildi)
     async updateRecord(id, data) {
         try {
             const updateData = {
-                brand_name: data.title || data.brandText || null, application_number: data.applicationNumber || null, application_date: data.applicationDate || null,
-                registration_number: data.registrationNumber || data.internationalRegNumber || null, registration_date: data.registrationDate || null,
-                renewal_date: data.renewalDate || null, brand_type: data.brandType || null, brand_category: data.brandCategory || null,
-                ip_type: data.ipType || data.type || null, origin: data.origin || null, portfolio_status: data.portfoyStatus || data.recordStatus || null,
-                official_status: data.status || null, nice_classes: data.niceClasses ? data.niceClasses.map(Number).filter(n => !isNaN(n)) : [],
-                goods_and_services: data.goodsAndServicesByClass || null, wipo_ir: data.wipoIR || data.aripoIR || data.internationalRegNumber || null,
-                country_code: data.country || null, brand_image_url: data.brandImageUrl || null, updated_at: new Date().toISOString(), details: data 
+                title: data.title || data.brandText || null,
+                brand_name: data.brandName || data.title || data.brandText || null, 
+                brand_text: data.brandText || null,
+                application_number: data.applicationNumber || null, 
+                application_date: data.applicationDate || null,
+                registration_number: data.registrationNumber || data.internationalRegNumber || null, 
+                registration_date: data.registrationDate || null,
+                renewal_date: data.renewalDate || null, 
+                brand_type: data.brandType || null, 
+                brand_category: data.brandCategory || null,
+                ip_type: data.ipType || data.type || null, 
+                origin: data.origin || null, 
+                portfolio_status: data.portfoyStatus || data.recordStatus || null,
+                status: data.status || null, 
+                wipo_ir: data.wipoIR || data.aripoIR || data.internationalRegNumber || null,
+                country_code: data.country || null, 
+                brand_image_url: data.brandImageUrl || null, 
+                updated_at: new Date().toISOString()
             };
 
             Object.keys(updateData).forEach(key => { if (updateData[key] === undefined) delete updateData[key]; });
@@ -471,15 +482,25 @@ export const ipRecordsService = {
             const { error: updateError } = await supabase.from('ip_records').update(updateData).eq('id', id);
             if (updateError) throw updateError;
 
+            // 1. Sahipleri Güncelle (Önce sil, sonra ekle)
             if (data.applicants && Array.isArray(data.applicants)) {
-                await supabase.from('ip_record_persons').delete().eq('ip_record_id', id).eq('role', 'applicant');
+                await supabase.from('ip_record_applicants').delete().eq('ip_record_id', id);
                 if (data.applicants.length > 0) {
-                    const personsToInsert = data.applicants.map(app => ({ ip_record_id: id, person_id: app.id, role: 'applicant' }));
-                    await supabase.from('ip_record_persons').insert(personsToInsert);
+                    const personsToInsert = data.applicants.map((app, i) => ({ ip_record_id: id, person_id: app.id, order_index: i }));
+                    await supabase.from('ip_record_applicants').insert(personsToInsert);
                 }
             }
 
-            await localCache.remove('ip_records_cache'); 
+            // 2. Sınıfları Güncelle (Önce sil, sonra ekle)
+            if (data.goodsAndServicesByClass && Array.isArray(data.goodsAndServicesByClass)) {
+                await supabase.from('ip_record_classes').delete().eq('ip_record_id', id);
+                if (data.goodsAndServicesByClass.length > 0) {
+                    const cls = data.goodsAndServicesByClass.map(c => ({ ip_record_id: id, class_no: c.classNo, items: c.items || [] }));
+                    await supabase.from('ip_record_classes').insert(cls);
+                }
+            }
+
+            await localCache.remove('ip_records_cache_v2'); 
             return { success: true };
         } catch (error) { return { success: false, error: error.message }; }
     },
@@ -797,14 +818,13 @@ export const taskService = {
         return { success: true, data: enrichedData[0] };
     },
 
-    // 5. Görev Ekleme
+    // 5. Görev Ekleme (Foreign Key Alanları Düzeltildi)
     async addTask(taskData) {
         try {
-            // 🔥 Sayaçtan gerçek ID'yi alıyoruz
             const nextId = await this._getNextTaskId();
 
             const payload = {
-                id: nextId, // 🔥 Rastgele UUID yerine sayaçtan gelen ID
+                id: nextId, 
                 title: taskData.title,
                 description: taskData.description || null,
                 task_type: String(taskData.taskType),
@@ -813,15 +833,15 @@ export const taskService = {
                 due_date: taskData.dueDate || null,
                 official_due_date: taskData.officialDueDate || null,
                 operational_due_date: taskData.operationalDueDate || null,
-                assigned_to_user_id: taskData.assignedTo_uid || null,
-                ip_record_id: taskData.relatedIpRecordId ? String(taskData.relatedIpRecordId) : null,
+                assigned_to_uid: taskData.assignedTo_uid || null, // DÜZELTİLDİ
+                related_ip_record_id: taskData.relatedIpRecordId ? String(taskData.relatedIpRecordId) : null, // DÜZELTİLDİ
                 transaction_id: taskData.transactionId ? String(taskData.transactionId) : null,
-                epats_document: taskData.epatsDocument || null, 
-                history: taskData.history || [],
-                details: taskData 
+                epats_doc_name: taskData.epatsDocument?.name || null, // Yassılaştırma
+                epats_doc_url: taskData.epatsDocument?.url || null,
+                target_app_no: taskData.targetAppNo || null,
+                bulletin_no: taskData.bulletinNo || null
             };
             
-            // undefined olanları temizle
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
             
             const { data, error } = await supabase.from('tasks').insert(payload).select('id').single();
@@ -836,7 +856,7 @@ export const taskService = {
         return await this.addTask(taskData);
     },
 
-    // 6. Görev Güncelleme
+    // 6. Görev Güncelleme (Foreign Key Alanları Düzeltildi)
     async updateTask(taskId, updateData) {
         try {
             const payload = {
@@ -848,12 +868,10 @@ export const taskService = {
                 due_date: updateData.dueDate,
                 official_due_date: updateData.officialDueDate,
                 operational_due_date: updateData.operationalDueDate,
-                assigned_to_user_id: updateData.assignedTo_uid || updateData.assigned_to_user_id,
-                ip_record_id: updateData.relatedIpRecordId ? String(updateData.relatedIpRecordId) : undefined,
+                assigned_to_uid: updateData.assignedTo_uid, // DÜZELTİLDİ
+                related_ip_record_id: updateData.relatedIpRecordId ? String(updateData.relatedIpRecordId) : undefined, // DÜZELTİLDİ
                 transaction_id: updateData.transactionId ? String(updateData.transactionId) : undefined,
-                history: updateData.history,
-                updated_at: new Date().toISOString(),
-                details: updateData
+                updated_at: new Date().toISOString()
             };
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
             const { error } = await supabase.from('tasks').update(payload).eq('id', String(taskId));
