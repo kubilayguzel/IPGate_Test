@@ -18,18 +18,9 @@ export class PortfolioDataManager {
         this._buildStatusMap();
     }
 
-    async _processInChunks(array, processor, chunkSize = 500) {
-        const result = [];
-        for (let i = 0; i < array.length; i += chunkSize) {
-            const chunk = array.slice(i, i + chunkSize);
-            result.push(...chunk.map(processor));
-            await new Promise(resolve => setTimeout(resolve, 0)); 
-        }
-        return result;
-    }
-
     async _mapRawToProcessed(rawData) {
-        return await this._processInChunks(rawData, record => ({
+        // 🔥 HIZLANDIRMA 2: Gecikme yaratan "Chunking" kaldırıldı. Tüm işlemler anında (senkron) yapılıyor.
+        return rawData.map(record => ({
             ...record,
             applicationDateTs: this._parseDate(record.applicationDate),
             formattedApplicantName: this._resolveApplicantName(record),
@@ -37,15 +28,14 @@ export class PortfolioDataManager {
             formattedNiceClasses: this._formatNiceClasses(record),
             statusText: this._resolveStatusText(record),
             formattedCountryName: this.getCountryName(record.country || record.countryCode)
-        }), 500);
+        }));
     }
 
     async loadInitialData() {
-        // 🔥 GÜNCELLEME: Kişiler (persons) listesi yüklenmeden eşleştirmeye (mapping) geçmesine asla izin vermiyoruz!
         await Promise.all([
             this.loadTransactionTypes(),
             this.loadCountries(),
-            this.loadPersons()
+            this.loadPersons() // Kişilerin eksik gelmesini engeller
         ]);
         return this.allRecords;
     }
@@ -92,6 +82,11 @@ export class PortfolioDataManager {
     }
 
     async loadRecords({ type = null } = {}) {
+        // 🔥 HIZLANDIRMA 3: Eğer kayıtlar RAM'de varsa veritabanına/önbelleğe gitmeden ANINDA geri dön
+        if (this.allRecords && this.allRecords.length > 0) {
+            return this.allRecords;
+        }
+
         const result = type 
             ? await ipRecordsService.getRecordsByType(type) 
             : await ipRecordsService.getRecords();            
@@ -123,7 +118,7 @@ export class PortfolioDataManager {
             
             if (names.length > 0) return names.join(', ');
         }
-        return record.applicantName || record.ownerName || '-';
+        return record.applicantName || '-';
     }
 
     _resolveStatusText(record) {
@@ -206,10 +201,8 @@ export class PortfolioDataManager {
 
             const recordsMap = new Map(this.allRecords.map(r => [r.id, r]));
             
-            const localRows = await this._processInChunks(parents, (parent) => {
-                let record = recordsMap.get(parent.recordId);
-                if (!record) { record = { id: parent.recordId, isMissing: true }; }
-
+            const localRows = await this._mapRawToProcessed(parents.map(parent => {
+                let record = recordsMap.get(parent.recordId) || { id: parent.recordId, isMissing: true };
                 const children = childrenMap[parent.id] || [];
                 const typeInfo = this.transactionTypesMap.get(String(parent.type));
 
@@ -223,7 +216,7 @@ export class PortfolioDataManager {
                 
                 parentRow.children.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
                 return parentRow;
-            }, 100); 
+            }));
 
             this.objectionRows = localRows.filter(Boolean);
             return this.objectionRows;
@@ -304,32 +297,10 @@ export class PortfolioDataManager {
     }
 
     _formatNiceClasses(record) {
-        const classes = new Set();
-        let nc = record.niceClasses;
-        
-        // 🔥 GÜNCELLEME: String (Metin) gelen JSON veya virgüllü dizileri çözümlüyoruz
-        if (typeof nc === 'string') {
-            try { nc = JSON.parse(nc); } catch(e) { nc = nc.split(',').map(x => x.trim()); }
+        if (Array.isArray(record.niceClasses) && record.niceClasses.length > 0) {
+            return record.niceClasses.sort((a,b) => a-b).map(c => c < 10 ? `0${c}` : c).join(', ');
         }
-
-        if (Array.isArray(nc)) {
-            nc.forEach(c => {
-                const parsed = parseInt(c);
-                if (!isNaN(parsed)) classes.add(parsed);
-            });
-        }
-
-        if (Array.isArray(record.goodsAndServicesByClass)) {
-            record.goodsAndServicesByClass.forEach(item => {
-                if (item.classNo) {
-                    const parsed = parseInt(item.classNo);
-                    if (!isNaN(parsed)) classes.add(parsed);
-                }
-            });
-        }
-
-        if (classes.size === 0) return '-';
-        return Array.from(classes).sort((a, b) => a - b).map(c => c < 10 ? `0${c}` : c).join(', ');
+        return '-';
     }
 
     _fmtDate(val) {
@@ -366,7 +337,7 @@ export class PortfolioDataManager {
             sourceData = this.objectionRows.filter(r => r.portfoyStatus !== 'inactive' && r.recordStatus !== 'pasif');
         } else {
             sourceData = this.allRecords.filter(r => {
-                // 🔥 GÜNCELLEME: recordOwnerType'ı kesin olarak kontrol et ve "third_party" (Karşı Taraf) olanları SİL!
+                // 🔥 KESİN GÜZELLEME: Karşı Taraf (Third Party) OLANLARI ASLA LİSTELEME
                 if (r.recordOwnerType === 'third_party') return false;
 
                 const isThirdPartyOrBulletin = ['third_party', 'published_in_bulletin'].includes(r.portfoyStatus || r.status);
