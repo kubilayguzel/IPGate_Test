@@ -245,17 +245,14 @@ export class SuitStrategy extends BaseStrategy {
             const newSuitId = newSuit.id;
 
             // 3. İLK TRANSACTION (SUPABASE SQL)
+            // 🔥 DÜZELTME: transactions tablosunda details sütunu olmadığı için, veriler doğru sütunlara (task_id vb.) aktarıldı
             const initialTransaction = {
                 ip_record_id: newSuitId, 
                 transaction_type_id: data.transactionTypeId,
                 description: "Dava Açıldı",
                 transaction_hierarchy: 'parent',
-                details: {
-                    transactionTypeName: txName,
-                    triggeringTaskId: 'manual_entry', 
-                    creationDate: data.suitDetails.openingDate || new Date().toISOString()
-                },
-                created_at: new Date().toISOString()
+                task_id: 'manual_entry', 
+                created_at: data.suitDetails.openingDate || new Date().toISOString()
             };
 
             await supabase.from('transactions').insert(initialTransaction);
