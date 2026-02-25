@@ -1021,9 +1021,12 @@ export const taskService = {
     },
 
     // 5. Görev Ekleme (Foreign Key Alanları Düzeltildi)
+
     async addTask(taskData) {
         try {
-            const nextId = await this._getNextTaskId();
+            // 🔥 Tahakkuk görevi mi diye kontrol et ve doğru sayacı çağır
+            const isAccrualTask = String(taskData.taskType) === '53';
+            const nextId = await this._getNextTaskId(isAccrualTask);
 
             const payload = {
                 id: nextId, 
@@ -1035,10 +1038,10 @@ export const taskService = {
                 due_date: taskData.dueDate || null,
                 official_due_date: taskData.officialDueDate || null,
                 operational_due_date: taskData.operationalDueDate || null,
-                assigned_to_uid: taskData.assignedTo_uid || null, // DÜZELTİLDİ
-                related_ip_record_id: taskData.relatedIpRecordId ? String(taskData.relatedIpRecordId) : null, // DÜZELTİLDİ
+                assigned_to_uid: taskData.assignedTo_uid || null,
+                related_ip_record_id: taskData.relatedIpRecordId ? String(taskData.relatedIpRecordId) : null,
                 transaction_id: taskData.transactionId ? String(taskData.transactionId) : null,
-                epats_doc_name: taskData.epatsDocument?.name || null, // Yassılaştırma
+                epats_doc_name: taskData.epatsDocument?.name || null,
                 epats_doc_url: taskData.epatsDocument?.url || null,
                 target_app_no: taskData.targetAppNo || null,
                 bulletin_no: taskData.bulletinNo || null
@@ -1084,45 +1087,33 @@ export const taskService = {
         }
     },
 
-    // --- SAYAÇTAN YENİ ID ALMA (SADECE lastId KULLANIR) ---
-    async _getNextTaskId() {
+    // --- SAYAÇTAN YENİ TASK ID ALMA (Örn: T-875) ---
+    async _getNextTaskId(isAccrualTask = false) {
+        // İsteğinize göre: Tahakkuk göreviyse accrual-tasks, değilse tasks sayacını kullan
+        const counterId = isAccrualTask ? 'accrual-tasks' : 'tasks';
+        
         try {
-            // 1. counters tablosundan 'tasks' için 'lastId' değerini çek
-            const { data: counterData, error: fetchError } = await supabase
-                .from('counters')
-                .select('lastId') // 🔥 Doğru sütun adı: lastId
-                .eq('id', 'tasks')
-                .single();
+            // 🔥 lastId yerine last_id kullanıyoruz
+            const { data: counterData } = await supabase.from('counters').select('last_id').eq('id', counterId).single();
 
-            // Eğer tabloda henüz hiç görev sayacı yoksa (veya lastId boşsa) sıfır kabul edip 1'den başla
-            let nextNum = (counterData?.lastId || 0) + 1;
+            let nextNum = (counterData?.last_id || 0) + 1;
+            let proposedId = `T-${nextNum}`;
 
-            // 2. 🔥 ÇAKIŞMA ÖNLEYİCİ DÖNGÜ (Her ihtimale karşı bu numara gerçekten boş mu kontrolü)
             let isFree = false;
             while (!isFree) {
-                const { data: existingTask } = await supabase
-                    .from('tasks')
-                    .select('id')
-                    .eq('id', String(nextNum))
-                    .single();
-                    
-                if (!existingTask) {
-                    isFree = true; // Boş numarayı bulduk!
-                } else {
-                    nextNum++; // Eğer veritabanında bu numara varsa, 1 artırıp tekrar dene
+                const { data: existingTask } = await supabase.from('tasks').select('id').eq('id', proposedId).single();
+                if (!existingTask) isFree = true;
+                else {
+                    nextNum++;
+                    proposedId = `T-${nextNum}`;
                 }
             }
 
-            // 3. Bulunan ve garanti olan yeni numarayı counters tablosundaki lastId alanına yaz
-            await supabase
-                .from('counters')
-                .upsert({ id: 'tasks', lastId: nextNum }, { onConflict: 'id' });
-
-            return String(nextNum);
-        } catch (e) {
-            console.error("Sayaç oluşturma hatası:", e);
-            // Sunucu/Bağlantı hatası anında uygulamanın çökmemesi için can yeleği (Zaman damgası)
-            return String(Date.now()).slice(-6); 
+            await supabase.from('counters').upsert({ id: counterId, last_id: nextNum });
+            return proposedId;
+        } catch (error) {
+            console.error(`Sayaç Hatası (${counterId}):`, error);
+            return `T-${Date.now()}`;
         }
     },
 };
@@ -1130,19 +1121,41 @@ export const taskService = {
 // ==========================================
 // 9. TAHAKKUK (ACCRUAL) SERVİSİ
 // ==========================================
+
 export const accrualService = {
-    
+    // --- TAHAKKUK SAYAÇ SERVİSİ ---
+    async _getNextAccrualId() {
+        try {
+            const { data: counterData } = await supabase.from('counters').select('last_id').eq('id', 'accruals').single();
+            let nextNum = (counterData?.last_id || 0) + 1;
+            let proposedId = `A-${nextNum}`;
+
+            let isFree = false;
+            while (!isFree) {
+                const { data: existing } = await supabase.from('accruals').select('id').eq('id', proposedId).single();
+                if (!existing) isFree = true;
+                else { nextNum++; proposedId = `A-${nextNum}`; }
+            }
+
+            await supabase.from('counters').upsert({ id: 'accruals', last_id: nextNum });
+            return proposedId;
+        } catch (error) { return `A-${Date.now()}`; }
+    },
+
     // 1. Yeni Tahakkuk Ekleme
     async addAccrual(accrualData) {
         try {
-            // Ana SQL sütunlarına gidecek veriler ve esnek JSONB (details) verileri
+            // 🔥 TAHAKKUK ID'Sİ SAYAÇTAN ÇEKİLİYOR
+            const nextId = await this._getNextAccrualId();
+
             const payload = {
+                id: nextId, 
                 task_id: String(accrualData.taskId || accrualData.task_id || ''),
                 status: accrualData.status || 'unpaid',
                 evreka_invoice_no: accrualData.evrekaInvoiceNo || accrualData.evreka_invoice_no || null,
                 tpe_invoice_no: accrualData.tpeInvoiceNo || accrualData.tpe_invoice_no || null,
                 created_at: accrualData.createdAt || accrualData.created_at || new Date().toISOString(),
-                details: accrualData.details || accrualData // Geri kalan her şey (Tutar, dosyalar vb.)
+                details: accrualData.details || accrualData
             };
 
             const { data, error } = await supabase.from('accruals').insert(payload).select('id').single();
