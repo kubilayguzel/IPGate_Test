@@ -1,7 +1,6 @@
 // public/js/portfolio/PortfolioDetailManager.js
 import { TransactionHelper } from './TransactionHelper.js';
 import { loadSharedLayout } from '../layout-loader.js';
-// 🔥 Firebase kütüphaneleri silindi, yerine Supabase servisleri eklendi!
 import { ipRecordsService, transactionTypeService, personService, commonService, waitForAuthUser, redirectOnLogout } from '../../supabase-config.js';
 import { STATUSES } from '../../utils.js';
 import '../simple-loading.js';
@@ -42,7 +41,6 @@ export class PortfolioDetailManager {
             this.toggleLoading(true);
             await waitForAuthUser(); 
 
-            // 🔥 YENİ: Firebase yerine Supabase Servisleri ile paralel çekim
             const [recordRes, countriesRes, txTypesRes] = await Promise.all([
                 ipRecordsService.getRecordById(this.recordId),
                 commonService.getCountries(),
@@ -51,7 +49,6 @@ export class PortfolioDetailManager {
 
             if (!recordRes || !recordRes.success || !recordRes.data) throw new Error("Kayıt bulunamadı.");
 
-            // Ülke ve İşlem Tipi haritalarını doldur
             if (countriesRes.success && Array.isArray(countriesRes.data)) {
                 countriesRes.data.forEach(c => this.countriesMap.set(String(c.code), c.name));
             }
@@ -63,7 +60,6 @@ export class PortfolioDetailManager {
             }
 
             this.currentRecord = recordRes.data;
-            
             await this.renderAll();
 
             if (typeof loadSharedLayout === 'function') loadSharedLayout();
@@ -93,14 +89,14 @@ export class PortfolioDetailManager {
         const r = this.currentRecord;
         if (!r) return;
 
-        this.elements.heroTitle.textContent = r.title || r.brandText || r.trademarkName || '-';
+        this.elements.heroTitle.textContent = r.title || r.brandName || r.brandText || '-';
         
         if (this.elements.heroCard) {
             this.elements.heroCard.classList.remove('d-none');
             this.elements.heroCard.style.display = 'flex';
         }
 
-        const imgSrc = r.brandImageUrl || r.brandImage || r.brandInfo?.brandImage;
+        const imgSrc = r.brandImageUrl || r.brandImage;
         const imgWrap = this.elements.brandImage?.closest('.hero-img-wrap');
         if (imgSrc && this.elements.brandImage) {
             this.elements.brandImage.src = imgSrc;
@@ -110,12 +106,15 @@ export class PortfolioDetailManager {
         }
 
         const isTP = this.checkIfTurkPatentOrigin(r);
-        const countryName = this.countriesMap.get(String(r.country)) || r.country || '-';
-        const regNo = r.registrationNumber || r.internationalRegNumber || r.wipoIR || '-';
+        const countryName = this.countriesMap.get(String(r.countryCode || r.country)) || r.countryCode || '-';
+        const regNo = r.registrationNumber || r.wipoIR || '-';
 
-        const gsbc = r.goodsAndServicesByClass;
-        let classList = Array.isArray(gsbc) ? gsbc : (gsbc ? Object.values(gsbc) : []);
-        let classesStr = classList.length > 0 ? classList.map(c => c.classNo).join(', ') : (r.niceClasses ? r.niceClasses.join(', ') : '-');
+        let classesStr = '-';
+        if (r.goodsAndServicesByClass && r.goodsAndServicesByClass.length > 0) {
+            classesStr = r.goodsAndServicesByClass.map(c => c.classNo).join(', ');
+        } else if (r.niceClasses) {
+            classesStr = r.niceClasses.join(', ');
+        }
 
         if (this.elements.heroKv) {
             this.elements.heroKv.innerHTML = `
@@ -147,12 +146,11 @@ export class PortfolioDetailManager {
     renderGoodsList() {
         const container = this.elements.goodsContainer;
         if (!container) return;
-        const gsbc = this.currentRecord.goodsAndServicesByClass;
-        let arr = Array.isArray(gsbc) ? gsbc : (gsbc ? Object.values(gsbc) : []);
-        if (arr.length === 0) { container.innerHTML = '<div class="text-muted p-3">Eşya listesi yok.</div>'; return; }
+        const gsbc = this.currentRecord.goodsAndServicesByClass || [];
+        if (gsbc.length === 0) { container.innerHTML = '<div class="text-muted p-3">Eşya listesi yok.</div>'; return; }
 
-        container.innerHTML = arr.sort((a,b) => Number(a.classNo) - Number(b.classNo)).map(entry => {
-            const listHtml = this.formatNiceClassContent(entry.classNo, entry.items || [entry.goodsText]);
+        container.innerHTML = [...gsbc].sort((a,b) => Number(a.classNo) - Number(b.classNo)).map(entry => {
+            const listHtml = this.formatNiceClassContent(entry.classNo, entry.items || []);
             return `
                 <div class="goods-group border rounded p-3 mb-2 bg-white">
                     <div class="font-weight-bold text-primary mb-2">Nice ${entry.classNo}</div>
@@ -188,8 +186,8 @@ export class PortfolioDetailManager {
         const accordion = this.elements.txAccordion;
         if (!accordion) return;
 
-        const res = await ipRecordsService.getTransactionsForRecord(this.recordId);
-        const transactions = res.success ? res.transactions : [];
+        const res = await ipRecordsService.getRecordTransactions(this.recordId);
+        const transactions = res.success ? res.data : [];
 
         if (transactions.length === 0) {
             accordion.innerHTML = '<div class="p-3 text-muted">İşlem geçmişi bulunamadı.</div>';
@@ -208,7 +206,7 @@ export class PortfolioDetailManager {
             const pIcons = pDirectDocs.map((d, i) => this.createDocIcon(d, i === 0)).join(' ');
 
             let pDocsHtml = pIcons || '';
-            if (parent.triggeringTaskId) {
+            if (parent.task_id) {
                 pDocsHtml += `<span class="tx-docs-loading text-muted small ml-2"><i class="fas fa-spinner fa-spin"></i> PDF'ler...</span>`;
                 enrichQueue.push({ tx: parent, containerId: pId, hasAnyDirect: pDirectDocs.length > 0 });
             }
@@ -222,14 +220,14 @@ export class PortfolioDetailManager {
                         const cIcons = cDirectDocs.map((d, i) => this.createDocIcon(d, i === 0)).join(' ');
                         
                         let cDocsHtml = cIcons || '';
-                        if (child.triggeringTaskId) {
+                        if (child.task_id) {
                             cDocsHtml += `<span class="tx-docs-loading text-muted small ml-2"><i class="fas fa-spinner fa-spin"></i> PDF'ler...</span>`;
                             enrichQueue.push({ tx: child, containerId: cId, hasAnyDirect: cDirectDocs.length > 0 });
                         }
 
                         return `
                         <div class="child-transaction-item d-flex justify-content-between align-items-center p-2 border-top bg-light ml-4" style="border-left: 3px solid #f39c12;">
-                            <div><small class="text-muted">↳ ${cTypeName}</small><span class="text-muted ml-2 small">${this.formatDate(child.timestamp || child.date, true)}</span></div>
+                            <div><small class="text-muted">↳ ${cTypeName}</small><span class="text-muted ml-2 small">${this.formatDate(child.timestamp || child.date || child.created_at, true)}</span></div>
                             <div id="${cId}">${cDocsHtml || '-'}</div>
                         </div>`;
                     }).join('')}
@@ -242,7 +240,7 @@ export class PortfolioDetailManager {
                             <i class="fas fa-chevron-right mr-2 text-muted transition-icon ${children.length ? 'has-child-indicator' : ''}"></i>
                             <div class="d-flex flex-column">
                                 <span class="font-weight-bold" data-tx-type="${parent.type}">${typeName}</span>
-                                <small class="text-muted">${this.formatDate(parent.timestamp || parent.date, true)}</small>
+                                <small class="text-muted">${this.formatDate(parent.timestamp || parent.date || parent.created_at, true)}</small>
                             </div>
                         </div>
                         <div class="d-flex align-items-center" id="${pId}">
@@ -305,7 +303,6 @@ export class PortfolioDetailManager {
                 const pId = typeof app === 'string' ? app : app.id;
                 if (!pId) return { name: app.name || '-' };
                 try {
-                    // 🔥 YENİ: Firebase db yerine Supabase personService kullanılıyor
                     const res = await personService.getPersonById(pId);
                     return (res.success && res.data) ? { name: res.data.name, address: res.data.address } : { name: app.name || '-' };
                 } catch { return { name: app.name || '-' }; }
@@ -313,7 +310,7 @@ export class PortfolioDetailManager {
             names = resolved.map(a => a.name); 
             addresses = resolved.map(a => a.address).filter(Boolean);
         } else {
-            names = [r.applicantName || r.clientName || r.ownerName || '-']; 
+            names = [r.applicantName || '-']; 
             addresses = [r.applicantAddress || '-'];
         }
         this.elements.applicantName.innerHTML = names.join('<br>');
@@ -347,9 +344,7 @@ export class PortfolioDetailManager {
     formatDate(d, withTime = false) {
         if (!d || d === '-') return '-';
         try {
-            // Eğer JSON'dan saniye objesi gelirse
-            if (typeof d === 'object' && d._seconds) d = d._seconds * 1000;
-            const dateObj = d.toDate ? d.toDate() : new Date(d);
+            const dateObj = new Date(d);
             if (isNaN(dateObj.getTime())) return '-';
             return dateObj.toLocaleDateString('tr-TR', withTime ? { hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit', year:'numeric'} : {});
         } catch { return String(d); }
@@ -363,7 +358,7 @@ export class PortfolioDetailManager {
 
     checkIfTurkPatentOrigin(rec) {
         const c = [rec?.origin, rec?.source].map(s => (s||'').toUpperCase());
-        return c.some(s => s.includes('TURKPATENT') || s.includes('TÜRKPATENT'));
+        return c.some(s => s.includes('TURKPATENT') || s.includes('TÜRKPATENT') || s.includes('TR'));
     }
 
     setupEventListeners() {
