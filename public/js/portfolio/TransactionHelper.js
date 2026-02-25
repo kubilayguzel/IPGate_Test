@@ -1,102 +1,86 @@
-import { supabase } from '../../supabase-config.js';
-
+// public/js/portfolio/TransactionHelper.js
 export class TransactionHelper {
-    static _taskCache = new Map();        
-    static _taskPromiseCache = new Map(); 
-
-    static async getTaskData(taskId) {
-        if (!taskId) return null;
-        if (this._taskCache.has(taskId)) return this._taskCache.get(taskId);
-        if (this._taskPromiseCache.has(taskId)) return this._taskPromiseCache.get(taskId);
-
-        const p = (async () => {
-            try {
-                const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
-                if (error || !data) {
-                    this._taskCache.set(taskId, null);
-                    return null;
-                }
-                this._taskCache.set(taskId, data);
-                return data;
-            } catch (e) {
-                this._taskCache.set(taskId, null);
-                return null;
-            } finally {
-                this._taskPromiseCache.delete(taskId);
-            }
-        })();
-
-        this._taskPromiseCache.set(taskId, p);
-        return p;
-    }
-
+    
+    // İşlemle (Transaction) Doğrudan İlişkili Evrakları Okur
     static getDirectDocuments(transaction) {
         const docs = [];
         const seenUrls = new Set();
 
-        const addDoc = (d) => {
-            const url = d.fileUrl || d.url || d.path || d.downloadURL;
+        const addDoc = (d, source = 'direct') => {
+            if (!d) return;
+            // Veritabanınızın yapısına tam uygun URL yakalama (document_url eklendi)
+            const url = d.document_url || d.file_url || d.url || d.fileUrl || d.downloadURL || d.path;
             if (url && !seenUrls.has(url)) {
                 seenUrls.add(url);
-                docs.push({ name: d.fileName || d.name || 'Belge', url, type: d.type || 'document', source: 'direct' });
+                docs.push({ 
+                    name: d.document_name || d.file_name || d.name || d.fileName || 'Belge', 
+                    url, 
+                    type: d.document_type || d.type || 'document', 
+                    source 
+                });
             }
         };
 
-        if (Array.isArray(transaction.documents)) transaction.documents.forEach(addDoc);
-        if (transaction.relatedPdfUrl) addDoc({ name: 'Resmi Yazı', url: transaction.relatedPdfUrl, type: 'official' });
-        if (transaction.oppositionPetitionFileUrl) addDoc({ name: 'İtiraz Dilekçesi', url: transaction.oppositionPetitionFileUrl, type: 'petition' });
-        if (transaction.oppositionEpatsPetitionFileUrl) addDoc({ name: 'Karşı ePATS Dilekçesi', url: transaction.oppositionEpatsPetitionFileUrl, type: 'epats' });
+        // 1. ASIL HEDEF: 'transaction_documents' tablosundan gelen belgeler
+        if (Array.isArray(transaction.transaction_documents)) {
+            transaction.transaction_documents.forEach(td => addDoc(td, 'direct'));
+        }
+
+        // 2. Yedek (JSON/Legacy) belgeler
+        if (Array.isArray(transaction.documents)) {
+            transaction.documents.forEach(d => addDoc(d, 'direct'));
+        }
+
+        // 3. Statik linkler
+        if (transaction.relatedPdfUrl || transaction.related_pdf_url) addDoc({ name: 'Resmi Yazı', url: transaction.relatedPdfUrl || transaction.related_pdf_url, type: 'official' }, 'direct');
+        if (transaction.oppositionPetitionFileUrl || transaction.opposition_petition_file_url) addDoc({ name: 'İtiraz Dilekçesi', url: transaction.oppositionPetitionFileUrl || transaction.opposition_petition_file_url, type: 'petition' }, 'direct');
+        if (transaction.oppositionEpatsPetitionFileUrl || transaction.opposition_epats_petition_file_url) addDoc({ name: 'Karşı ePATS Dilekçesi', url: transaction.oppositionEpatsPetitionFileUrl || transaction.opposition_epats_petition_file_url, type: 'epats' }, 'direct');
 
         return docs;
     }
 
+    // Görev (Task) JSONB'si İçindeki Resim/PDF'leri Okur
     static async getTaskDocuments(transaction) {
         const docs = [];
         const seenUrls = new Set();
-        let taskData = null;
         
-        // 1. Transaction içinde Task ID varsa
-        const taskId = transaction.task_id || transaction.triggeringTaskId || transaction.triggering_task_id || (transaction.details && transaction.details.triggeringTaskId);
-        
-        if (taskId) {
-            taskData = await this.getTaskData(taskId);
-        } 
-        // 2. Task tablosu içinde Transaction ID'si yazıyorsa (Ters Bağlantı)
-        else if (transaction.id) {
-            try {
-                const { data } = await supabase.from('tasks').select('*').eq('transaction_id', transaction.id).limit(1);
-                if (data && data.length > 0) taskData = data[0];
-            } catch(e) {}
-        }
-
+        // İşleme bağlanmış görev verisini al (Yepyeni Relational Yapı)
+        const taskData = transaction.task_data;
         if (!taskData) return docs;
 
-        const addDoc = (d) => {
+        const addDoc = (d, source = 'task') => {
             if (!d) return;
             const url = d.url || d.downloadURL || d.fileUrl || d.path; 
             if (url && !seenUrls.has(url)) {
                 seenUrls.add(url);
-                docs.push({ name: d.name || d.fileName || 'Belge', url, type: d.type || 'document', source: 'task' });
+                docs.push({ name: d.name || d.fileName || 'Belge', url, type: d.type || 'document', source });
             }
         };
-        
-        // Gönderdiğiniz JSONB formatını yakala
+
+        // Gönderdiğiniz örnekteki JSONB formatını diziye çevir
         let taskDocs = taskData.documents;
         if (typeof taskDocs === 'string') {
             try { taskDocs = JSON.parse(taskDocs); } catch(e) { taskDocs = []; }
         }
 
+        // 1. Resim (JPG) ve PDF'leri (Gönderdiğiniz JSON formatı) Ekle
         if (Array.isArray(taskDocs)) {
-            taskDocs.forEach(d => addDoc(d));
+            taskDocs.forEach(d => addDoc(d, 'task'));
         }
 
+        // 2. Yassı ePATS Belgesi
         if (taskData.epats_doc_url || taskData.epats_doc_download_url) {
-            addDoc({ name: taskData.epats_doc_name || 'ePats Belgesi', url: taskData.epats_doc_url || taskData.epats_doc_download_url, type: 'epats' });
+            addDoc({ 
+                name: taskData.epats_doc_name || 'ePats Belgesi', 
+                url: taskData.epats_doc_url || taskData.epats_doc_download_url, 
+                type: 'epats' 
+            }, 'task');
         }
 
+        // 3. Legacy (Eski) Detail JSON Yedekleri
         if (taskData.details) {
-            if (taskData.details.epatsDocument) addDoc(taskData.details.epatsDocument);
-            if (Array.isArray(taskData.details.documents)) taskData.details.documents.forEach(d => addDoc(d));
+            if (taskData.details.epatsDocument) addDoc(taskData.details.epatsDocument, 'task');
+            if (Array.isArray(taskData.details.documents)) taskData.details.documents.forEach(d => addDoc(d, 'task'));
         }
 
         return docs;
@@ -119,6 +103,7 @@ export class TransactionHelper {
             }
         });
 
+        // Tarih sıralaması
         const sortByDate = (a, b) => new Date(a.timestamp || a.date || a.created_at || 0) - new Date(b.timestamp || b.date || b.created_at || 0);
         parents.sort(sortByDate);
         Object.values(childrenMap).forEach(list => list.sort(sortByDate));
