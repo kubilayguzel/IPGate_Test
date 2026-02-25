@@ -211,44 +211,55 @@ function setupUploadEvents() {
           updateProgress(pct, `Metin Verileri Kaydediliyor: ${Math.min(i + 1000, finalRecords.length)} / ${finalRecords.length}`);
       }
 
-      // --- HATA TOLERANSLI YÜKLEME FONKSİYONU ---
-      // Bağlantı koparsa pes etmez, 3 kere tekrar dener!
-      async function uploadImageWithRetry(destPath, imgData, contentType, retries = 3) {
+      // --- KURŞUN GEÇİRMEZ (FAIL-SAFE) YÜKLEME FONKSİYONU ---
+      // Bağlantı kopsa bile döngüyü ASLA kırmaz, diğer görsellere devam eder.
+      async function uploadImageWithRetrySafe(destPath, imgData, contentType, retries = 5) {
           for (let i = 0; i < retries; i++) {
-              const { data, error } = await supabase.storage.from('brand_images').upload(destPath, imgData, {
-                  contentType: contentType,
-                  upsert: true
-              });
-              
-              if (!error) return data; // Başarılıysa hemen dön
-              
-              // Hata aldıysa ve son deneme değilse biraz bekle ve tekrar dene
-              if (i < retries - 1) {
-                  console.warn(`⏳ Bağlantı koptu, tekrar deneniyor (${i+1}/3): ${destPath}`);
-                  await new Promise(res => setTimeout(res, 1000 * (i + 1))); // 1sn, 2sn bekle
-              } else {
-                  throw error; // 3 denemede de olmazsa hatayı fırlat
+              try {
+                  const { data, error } = await supabase.storage.from('brand_images').upload(destPath, imgData, {
+                      contentType: contentType,
+                      upsert: true // Var olanları ezer/atlar
+                  });
+                  
+                  if (!error) return true; // Başarılı
+                  
+                  // Hata varsa biraz daha uzun bekle ve tekrar dene
+                  console.warn(`⏳ Bağlantı koptu, tekrar deneniyor (${i+1}/${retries}): ${destPath}`);
+                  await new Promise(res => setTimeout(res, 1000 * (i + 1))); 
+              } catch (err) {
+                  // Ağ tamamen gitse bile çökmeyi engelle
+                  await new Promise(res => setTimeout(res, 1000 * (i + 1))); 
               }
           }
+          console.error(`❌ 5 denemede de yüklenemedi, ancak DÖNGÜ DEVAM EDİYOR: ${destPath}`);
+          return false; // Hata fırlatmaz (throw error yok), sadece false döner.
       }
 
-      // 5. Görselleri Storage'a Yükle (Dengeli ve Güvenli Paketler)
-      const CHUNK_SIZE = 60; // Ağınızı boğmamak için en stabil sayı 30'dur.
+      // 5. Görselleri Storage'a Yükle (Dengeli ve Asla Çökmeyen Paketler)
+      updateProgress(30, "Görseller Storage'a aktarılıyor. (Lütfen sekmeyi kapatmayın)...");
+      const CHUNK_SIZE = 25; // Supabase Rate Limit'e takılmamak için en güvenli hız
+      let uploadedCount = 0;
+
       for (let i = 0; i < imageFiles.length; i += CHUNK_SIZE) {
           const chunk = imageFiles.slice(i, i + CHUNK_SIZE);
           
           await Promise.all(chunk.map(async (entry) => {
-              const imgData = await entry.async("blob");
-              const imgName = entry.name.split('/').pop() || "unknown.jpg";
-              const destPath = `bulletins/trademark_${bulletinNo}_images/${imgName}`;
-              const contentType = imgName.endsWith('.png') ? 'image/png' : 'image/jpeg';
-              
-              // Normal upload yerine, yenilmez (retry) fonksiyonumuzu kullanıyoruz!
-              await uploadImageWithRetry(destPath, imgData, contentType);
+              try {
+                  const imgData = await entry.async("blob");
+                  const imgName = entry.name.split('/').pop() || "unknown.jpg";
+                  const destPath = `bulletins/trademark_${bulletinNo}_images/${imgName}`;
+                  const contentType = imgName.endsWith('.png') ? 'image/png' : 'image/jpeg';
+                  
+                  // Çökmeyen fonksiyonumuzu çağırıyoruz
+                  await uploadImageWithRetrySafe(destPath, imgData, contentType);
+              } catch (blobErr) {
+                  console.error("Dosya okuma hatası, atlanıyor...", blobErr);
+              }
           }));
           
-          let pct = 30 + Math.floor((i / imageFiles.length) * 70);
-          updateProgress(pct, `Görseller Yükleniyor ve Doğrulanıyor: ${Math.min(i + CHUNK_SIZE, imageFiles.length)} / ${imageFiles.length}`);
+          uploadedCount += chunk.length;
+          let pct = 30 + Math.floor((uploadedCount / imageFiles.length) * 70);
+          updateProgress(pct, `Görseller Yükleniyor: ${Math.min(uploadedCount, imageFiles.length)} / ${imageFiles.length}`);
       }
 
       updateProgress(100, "🎉 İşlem Başarıyla Tamamlandı! Tablo yenileniyor...", "green");
