@@ -1,0 +1,10 @@
+firebase-key.json
+01-migrate-users-persons.js
+02-migrate-ip-records.js
+03-migrate-transactions.js
+04-migrate-tasks-accruals.js
+05-migrate-mails.js
+06-migrate-bulletins-monitoring.js
+07-migrate-settings-others.js
+export-supabase.js
+supabase_schema_and_sample.json
