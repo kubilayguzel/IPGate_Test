@@ -209,14 +209,42 @@ export const personService = {
 
     async updatePerson(id, personData) {
         const payload = {
-            name: personData.name, person_type: personData.type, tckn: personData.tckn || null, tax_no: personData.taxNo || null,
-            tpe_no: personData.tpeNo || null, email: personData.email || null, phone: personData.phone || null,
-            address: personData.address || null, country_code: personData.countryCode || null, province: personData.province || null,
-            is_evaluation_required: personData.is_evaluation_required || false, documents: personData.documents || [],
-            details: personData, updated_at: new Date().toISOString()
+            name: personData.name, 
+            type: personData.type, 
+            tckn: personData.tckn || null, 
+            birth_date: personData.birthDate || null,
+            tax_no: personData.taxNo || null,
+            tpe_no: personData.tpeNo || null, 
+            email: personData.email || null, 
+            phone: personData.phone || null,
+            address: personData.address || null, 
+            country_code: personData.countryCode || null, 
+            country_name: personData.countryName || null,
+            province: personData.province || null, 
+            is_evaluation_required: personData.is_evaluation_required || false,
+            documents: personData.documents || [],
+            updated_at: new Date().toISOString()
         };
-        const { error } = await supabase.from('persons').update(payload).eq('id', id);
-        if (error) return { success: false, error: error.message };
+        
+        // Boş string ('') gelen verileri veritabanı format hatası vermesin diye null yapıyoruz
+        Object.keys(payload).forEach(key => { 
+            if (payload[key] === undefined || payload[key] === '') {
+                payload[key] = null; 
+            }
+        });
+
+        console.log("🟢 SUPABASE'E GÖNDERİLEN UPDATE PAKETİ:", payload);
+
+        // Update işlemini yap ve sonucunu (select ile) geri döndür ki hatayı görelim
+        const { data, error } = await supabase.from('persons').update(payload).eq('id', id).select();
+        
+        if (error) {
+            console.error("🔴 SUPABASE UPDATE HATASI:", error);
+            // Hatayı fırlatarak arayüzün sahte başarılı mesajı vermesini engelliyoruz
+            alert("Kayıt Başarısız: " + error.message);
+            return { success: false, error: error.message };
+        }
+        
         return { success: true };
     },
 
@@ -237,29 +265,54 @@ export const personService = {
         try {
             // 1. Silinecekler
             if (toDelete && toDelete.length > 0) {
-                await supabase.from('persons_related').delete().in('id', toDelete);
+                const { error } = await supabase.from('persons_related').delete().in('id', toDelete);
+                if (error) throw error;
             }
+            
             // 2. Güncellenecekler
             if (loaded && loaded.length > 0) {
                 for (const r of loaded) {
                     if (r.id) {
-                        const { id, ...updateData } = r;
-                        await supabase.from('persons_related').update(updateData).eq('id', id);
+                        // Veritabanı ID'si ve Person_ID'sini ayırıp kalanları güncelliyoruz
+                        const { id, person_id, created_at, ...updateData } = r;
+                        Object.keys(updateData).forEach(key => { 
+                            if (updateData[key] === undefined || updateData[key] === '') updateData[key] = null; 
+                        });
+                        const { error } = await supabase.from('persons_related').update(updateData).eq('id', id);
+                        if (error) throw error;
                     }
                 }
             }
+            
             // 3. Yeni Eklenecekler
             if (draft && draft.length > 0) {
                 const inserts = draft.map(d => ({
-                    person_id: personId, name: d.name, email: d.email, phone: d.phone,
-                    responsible: d.responsible || {}, notify: d.notify || {}
+                    id: crypto.randomUUID(), // 🔥 YENİ: ID'yi manuel olarak üretiyoruz
+                    person_id: personId, 
+                    name: d.name || null, 
+                    email: d.email || null, 
+                    phone: d.phone || null,
+                    resp_trademark: d.resp_trademark || false, 
+                    resp_patent: d.resp_patent || false, 
+                    resp_design: d.resp_design || false, 
+                    resp_litigation: d.resp_litigation || false, 
+                    resp_finance: d.resp_finance || false,
+                    notify_trademark_to: d.notify_trademark_to || false, 
+                    notify_trademark_cc: d.notify_trademark_cc || false,
+                    notify_patent_to: d.notify_patent_to || false, 
+                    notify_patent_cc: d.notify_patent_cc || false,
+                    notify_design_to: d.notify_design_to || false, 
+                    notify_design_cc: d.notify_design_cc || false,
+                    notify_finance_to: d.notify_finance_to || false, 
+                    notify_finance_cc: d.notify_finance_cc || false
                 }));
-                await supabase.from('persons_related').insert(inserts);
+                const { error } = await supabase.from('persons_related').insert(inserts);
+                if (error) throw error;
             }
             return { success: true };
         } catch(e) {
-            console.error("Related persons save error:", e);
-            return { success: false };
+            console.error("🔴 RELATED PERSONS KAYIT HATASI:", e);
+            return { success: false, error: e.message };
         }
     }
 };
@@ -298,43 +351,27 @@ export const commonService = {
 
 // 4. PORTFÖY (IP RECORDS) SERVİSİ
 export const ipRecordsService = {
-// A) Tüm Portföyü Getir (Sınırsız IndexedDB + 1 Dakika TTL Önbellekli Versiyon)
+    // A) Tüm Portföyü Getir
     async getRecords(forceRefresh = false) {
         const CACHE_KEY = 'ip_records_cache';
-        const TTL_MS = 1 * 60 * 1000; // 1 Dakika (Milisaniye)
+        const TTL_MS = 1 * 60 * 1000; // 1 Dakika
 
-        // 1. SINIRSIZ CACHE VE SÜRE KONTROLÜ
         if (!forceRefresh) {
             const cachedObj = await localCache.get(CACHE_KEY);
             if (cachedObj && cachedObj.timestamp && cachedObj.data) {
                 const isExpired = (Date.now() - cachedObj.timestamp) > TTL_MS;
-                
                 if (!isExpired) {
-                    console.log("⚡ Veriler 0 saniyede IndexedDB'den geldi (Güncel).");
                     return { success: true, data: cachedObj.data, from: 'cache' };
                 }
-                console.log("⏳ 1 Dakikalık süre dolmuş, Supabase'den taze veri çekiliyor...");
             }
-        } else {
-            console.log("🔄 Kullanıcı manuel yenileme başlattı!");
         }
 
-        console.log("☁️ Veriler Supabase'den çekiliyor...");
+        // '*' ile tüm sütunları çekiyoruz ki isim uyuşmazlığı patlamasın
         const { data, error } = await supabase
             .from('ip_records')
             .select(`
-                id, application_number, application_date, registration_number, registration_date, renewal_date, 
-                brand_name, ip_type, official_status, portfolio_status, origin, country_code, nice_classes, 
-                wipo_ir, transaction_hierarchy, brand_image_url, created_at, updated_at,
-                recordOwnerType:details->>recordOwnerType,
-                applicantsJson:details->applicants,
-                bulletinNo:details->>bulletinNo,
-                bulletinDate:details->>bulletinDate,
-                brandInfo:details->brandInfo,
-                bulletins:details->bulletins,
-                ownerName:details->>ownerName,
-                applicantName:details->>applicantName,
-                ip_record_persons ( role, persons ( id, name, person_type ) )
+                *,
+                ip_record_applicants ( persons ( id, name, type ) )
             `)
             .limit(10000)
             .order('created_at', { ascending: false });
@@ -344,43 +381,72 @@ export const ipRecordsService = {
             return { success: false, data: [] };
         }
 
+        // İlk veriyi konsola basıyoruz ki, sorun devam ederse tam tablo yapınızı görebilelim
+        if (data.length > 0) {
+            console.log("🟢 SUPABASE'DEN GELEN İLK HAM KAYIT (Hata ayıklama için):", data[0]);
+        }
+
         const mappedData = data.map(record => {
-            let applicantsArray = record.ip_record_persons
-                ? record.ip_record_persons.filter(rel => rel.role === 'applicant' && rel.persons).map(rel => ({
-                    id: rel.persons.id, name: rel.persons.name, personType: rel.persons.person_type
+            // Başvuru Sahipleri
+            let applicantsArray = record.ip_record_applicants
+                ? record.ip_record_applicants.filter(rel => rel.persons).map(rel => ({
+                    id: rel.persons.id, name: rel.persons.name, personType: rel.persons.type
                 })) : [];
 
-            if (applicantsArray.length === 0 && Array.isArray(record.applicantsJson)) applicantsArray = record.applicantsJson;
+            let detailsObj = record.details || {};
+            
+            // Eğer ilişkisel tablo boşsa eski json listesine bak
+            if (applicantsArray.length === 0) {
+                if (Array.isArray(record.applicants)) applicantsArray = record.applicants;
+                else if (Array.isArray(detailsObj.applicants)) applicantsArray = detailsObj.applicants;
+            }
 
+            // 🔥 DEV GÜNCELLEME: Tüm olası (snake_case ve camelCase) isimlendirmeleri yakalıyoruz!
             return {
-                id: record.id, applicationNumber: record.application_number, applicationDate: record.application_date,
-                registrationNumber: record.registration_number, registrationDate: record.registration_date, renewalDate: record.renewal_date,
-                title: record.brand_name, brandText: record.brand_name, type: record.ip_type, status: record.official_status,
-                recordStatus: record.portfolio_status, portfoyStatus: record.portfolio_status, origin: record.origin, country: record.country_code,
-                niceClasses: record.nice_classes || [], wipoIR: record.wipo_ir, aripoIR: record.wipo_ir, transactionHierarchy: record.transaction_hierarchy,
-                brandImageUrl: record.brand_image_url, trademarkImage: record.brand_image_url, applicants: applicantsArray,
-                recordOwnerType: record.recordOwnerType || 'self', 
-                details: {
-                    recordOwnerType: record.recordOwnerType, bulletinNo: record.bulletinNo, bulletinDate: record.bulletinDate,
-                    brandInfo: record.brandInfo, bulletins: record.bulletins, ownerName: record.ownerName, applicantName: record.applicantName
-                },                
-                createdAt: record.created_at, updatedAt: record.updated_at
+                id: record.id, 
+                applicationNumber: record.application_number || record.applicationNumber || detailsObj.applicationNumber, 
+                applicationDate: record.application_date || record.applicationDate || detailsObj.applicationDate,
+                registrationNumber: record.registration_number || record.registrationNumber || detailsObj.registrationNumber, 
+                registrationDate: record.registration_date || record.registrationDate || detailsObj.registrationDate, 
+                renewalDate: record.renewal_date || record.renewalDate || detailsObj.renewalDate,
+                title: record.title || record.brand_name || record.brandName || detailsObj.title || detailsObj.brandText, 
+                brandText: record.title || record.brand_name || record.brandName || detailsObj.title || detailsObj.brandText, 
+                type: record.type || record.ip_type || record.ipType || detailsObj.type, 
+                status: record.status || record.official_status || record.officialStatus || detailsObj.status,
+                recordStatus: record.portfolio_status || record.portfolioStatus || record.portfoyStatus || detailsObj.portfoyStatus, 
+                portfoyStatus: record.portfolio_status || record.portfolioStatus || record.portfoyStatus || detailsObj.portfoyStatus, 
+                origin: record.origin || detailsObj.origin, 
+                country: record.country_code || record.countryCode || record.country || detailsObj.country,
+                niceClasses: record.nice_classes || record.niceClasses || detailsObj.niceClasses || [], 
+                wipoIR: record.wipo_ir || record.wipoIR || detailsObj.wipoIR, 
+                aripoIR: record.aripo_ir || record.aripoIR || detailsObj.aripoIR, 
+                transactionHierarchy: record.transaction_hierarchy || record.transactionHierarchy || detailsObj.transactionHierarchy,
+                brandImageUrl: record.brand_image_url || record.brandImageUrl || detailsObj.brandImageUrl, 
+                trademarkImage: record.brand_image_url || record.brandImageUrl || detailsObj.brandImageUrl, 
+                
+                // Başvuru sahipleri ve tekil isim yedekleri
+                applicants: applicantsArray,
+                applicantName: record.applicant_name || record.applicantName || record.owner_name || record.ownerName || detailsObj.applicantName || detailsObj.ownerName,
+                
+                recordOwnerType: record.record_owner_type || record.recordOwnerType || detailsObj.recordOwnerType || 'self', 
+                details: detailsObj,                
+                createdAt: record.created_at || record.createdAt, 
+                updatedAt: record.updated_at || record.updatedAt
             };
         });
 
-        // 3. SONUCU SINIRSIZ ÖNBELLEĞE "ZAMAN DAMGASI" İLE YAZ
         await localCache.set(CACHE_KEY, { timestamp: Date.now(), data: mappedData });
 
         return { success: true, data: mappedData, from: 'server' };
     },
 
-    // B) Tek bir markanın detaylarını çeker (Burada * kalmalı çünkü tüm detaylar lazım)
+    // B) Tek Bir Markayı Çeker
     async getRecordById(id) {
         const { data: record, error } = await supabase
             .from('ip_records')
             .select(`
                 *,
-                ip_record_persons ( role, persons ( id, name, person_type, address ) )
+                ip_record_applicants ( persons ( id, name, type, address ) )
             `)
             .eq('id', id)
             .single();
@@ -388,33 +454,51 @@ export const ipRecordsService = {
         if (error) return { success: false, error: error.message };
 
         let detailsObj = record.details || {};
-        let applicantsArray = record.ip_record_persons
-            ? record.ip_record_persons
-                .filter(rel => rel.role === 'applicant' && rel.persons)
+        
+        let applicantsArray = record.ip_record_applicants
+            ? record.ip_record_applicants
+                .filter(rel => rel.persons)
                 .map(rel => ({
-                    id: rel.persons.id, name: rel.persons.name, personType: rel.persons.person_type
+                    id: rel.persons.id, name: rel.persons.name, personType: rel.persons.type, address: rel.persons.address
                 }))
             : [];
 
-        if (applicantsArray.length === 0 && Array.isArray(detailsObj.applicants)) applicantsArray = detailsObj.applicants;
+        if (applicantsArray.length === 0) {
+            if (Array.isArray(record.applicants)) applicantsArray = record.applicants;
+            else if (Array.isArray(detailsObj.applicants)) applicantsArray = detailsObj.applicants;
+        }
 
         const mappedData = {
             ...detailsObj, 
-            id: record.id, applicationNumber: record.application_number, applicationDate: record.application_date,
-            registrationNumber: record.registration_number, registrationDate: record.registration_date, renewalDate: record.renewal_date,
-            title: record.brand_name || detailsObj.title, brandText: record.brand_name || detailsObj.brandText,
-            type: record.ip_type || detailsObj.type, status: record.official_status || detailsObj.status,
-            portfoyStatus: record.portfolio_status || detailsObj.portfoyStatus, origin: record.origin || detailsObj.origin,
-            country: record.country_code || detailsObj.country, wipoIR: record.wipo_ir || detailsObj.wipoIR,
-            brandImageUrl: record.brand_image_url || detailsObj.brandImageUrl, niceClasses: record.nice_classes || detailsObj.niceClasses || [],
-            goodsAndServicesByClass: record.goods_and_services || detailsObj.goodsAndServicesByClass || [],
-            applicants: applicantsArray, createdAt: record.created_at, updatedAt: record.updated_at
+            id: record.id, 
+            applicationNumber: record.application_number || record.applicationNumber || detailsObj.applicationNumber, 
+            applicationDate: record.application_date || record.applicationDate || detailsObj.applicationDate,
+            registrationNumber: record.registration_number || record.registrationNumber || detailsObj.registrationNumber, 
+            registrationDate: record.registration_date || record.registrationDate || detailsObj.registrationDate, 
+            renewalDate: record.renewal_date || record.renewalDate || detailsObj.renewalDate,
+            title: record.title || record.brand_name || record.brandName || detailsObj.title || detailsObj.brandText, 
+            brandText: record.title || record.brand_name || record.brandName || detailsObj.title || detailsObj.brandText, 
+            type: record.type || record.ip_type || record.ipType || detailsObj.type, 
+            status: record.status || record.official_status || record.officialStatus || detailsObj.status,
+            portfoyStatus: record.portfolio_status || record.portfolioStatus || record.portfoyStatus || detailsObj.portfoyStatus, 
+            origin: record.origin || detailsObj.origin,
+            country: record.country_code || record.countryCode || record.country || detailsObj.country, 
+            wipoIR: record.wipo_ir || record.wipoIR || detailsObj.wipoIR,
+            brandImageUrl: record.brand_image_url || record.brandImageUrl || detailsObj.brandImageUrl, 
+            niceClasses: record.nice_classes || record.niceClasses || detailsObj.niceClasses || [],
+            goodsAndServicesByClass: record.goods_and_services || record.goodsAndServicesByClass || detailsObj.goodsAndServicesByClass || [],
+            
+            applicants: applicantsArray, 
+            applicantName: record.applicant_name || record.applicantName || record.owner_name || record.ownerName || detailsObj.applicantName || detailsObj.ownerName,
+
+            createdAt: record.created_at || record.createdAt, 
+            updatedAt: record.updated_at || record.updatedAt
         };
 
         return { success: true, data: mappedData };
     },
 
-    // C) İşlem Geçmişini Çeker (YENİ VE GÜVENLİ FORMAT)
+    // C) İşlem Geçmişini Çeker
     async getRecordTransactions(recordId) {
         const { data, error } = await supabase
             .from('transactions')
@@ -429,143 +513,39 @@ export const ipRecordsService = {
             date: tx.created_at, transactionHierarchy: tx.transaction_hierarchy, parentId: tx.parent_id, ...tx.details 
         }));
         
-        // Arayüzün beklediği "data" formatında döndürüyoruz
         return { success: true, data: mappedTransactions };
     },
 
-    // Eski kullanımlar (legacy) için geriye dönük uyumluluk köprüsü
+    // Geriye dönük uyumluluk
     async getTransactionsForRecord(recordId) {
         const res = await this.getRecordTransactions(recordId);
         return { success: res.success, transactions: res.data, error: res.error };
     },
 
-    async getRecordsByType(type) {
-        const result = await this.getRecords();
-        if(result.success) result.data = result.data.filter(r => r.type === type);
-        return result;
+    async getRecordsByType(typeFilter) {
+        const res = await this.getRecords();
+        if(!res.success) return res;
+        return { success: true, data: res.data.filter(r => r.type === typeFilter) };
     },
+    
+    async deleteParentWithChildren(parentId) {
+        const { error: childrenError } = await supabase.from('ip_records').delete().eq('details->>parentId', parentId);
+        if (childrenError) return { success: false, error: childrenError.message };
 
-    // D) SİLME İŞLEMİ (Cache Temizliği Güncellendi)
-    async deleteParentWithChildren(id) {
-        const { error } = await supabase.from('ip_records').delete().eq('id', id);
+        const { error } = await supabase.from('ip_records').delete().eq('id', parentId);
         if (error) return { success: false, error: error.message };
-        await localCache.remove('ip_records_cache'); 
+
         return { success: true };
     },
 
-    // E) GÜNCELLEME İŞLEMİ (Sütunlar ve Alt Tablolar Düzeltildi)
-    async updateRecord(id, data) {
-        try {
-            const updateData = {
-                title: data.title || data.brandText || null,
-                brand_name: data.brandName || data.title || data.brandText || null, 
-                brand_text: data.brandText || null,
-                application_number: data.applicationNumber || null, 
-                application_date: data.applicationDate || null,
-                registration_number: data.registrationNumber || data.internationalRegNumber || null, 
-                registration_date: data.registrationDate || null,
-                renewal_date: data.renewalDate || null, 
-                brand_type: data.brandType || null, 
-                brand_category: data.brandCategory || null,
-                ip_type: data.ipType || data.type || null, 
-                origin: data.origin || null, 
-                portfolio_status: data.portfoyStatus || data.recordStatus || null,
-                status: data.status || null, 
-                wipo_ir: data.wipoIR || data.aripoIR || data.internationalRegNumber || null,
-                country_code: data.country || null, 
-                brand_image_url: data.brandImageUrl || null, 
-                updated_at: new Date().toISOString()
-            };
-
-            Object.keys(updateData).forEach(key => { if (updateData[key] === undefined) delete updateData[key]; });
-
-            const { error: updateError } = await supabase.from('ip_records').update(updateData).eq('id', id);
-            if (updateError) throw updateError;
-
-            // 1. Sahipleri Güncelle (Önce sil, sonra ekle)
-            if (data.applicants && Array.isArray(data.applicants)) {
-                await supabase.from('ip_record_applicants').delete().eq('ip_record_id', id);
-                if (data.applicants.length > 0) {
-                    const personsToInsert = data.applicants.map((app, i) => ({ ip_record_id: id, person_id: app.id, order_index: i }));
-                    await supabase.from('ip_record_applicants').insert(personsToInsert);
-                }
-            }
-
-            // 2. Sınıfları Güncelle (Önce sil, sonra ekle)
-            if (data.goodsAndServicesByClass && Array.isArray(data.goodsAndServicesByClass)) {
-                await supabase.from('ip_record_classes').delete().eq('ip_record_id', id);
-                if (data.goodsAndServicesByClass.length > 0) {
-                    const cls = data.goodsAndServicesByClass.map(c => ({ ip_record_id: id, class_no: c.classNo, items: c.items || [] }));
-                    await supabase.from('ip_record_classes').insert(cls);
-                }
-            }
-
-            await localCache.remove('ip_records_cache_v2'); 
-            return { success: true };
-        } catch (error) { return { success: false, error: error.message }; }
-    },
-
-    // F) YENİ KAYIT EKLEME (Cache Temizliği Güncellendi)
-    async createRecordFromDataEntry(data) {
-        try {
-            const insertData = {
-                brand_name: data.title || data.brandText || null, application_number: data.applicationNumber || null, application_date: data.applicationDate || null,
-                registration_number: data.registrationNumber || data.internationalRegNumber || null, registration_date: data.registrationDate || null, renewal_date: data.renewalDate || null,
-                brand_type: data.brandType || null, brand_category: data.brandCategory || null, ip_type: data.ipType || data.type || null, origin: data.origin || null,
-                portfolio_status: data.portfoyStatus || data.status || 'active', official_status: data.status || null,
-                nice_classes: data.niceClasses ? data.niceClasses.map(Number).filter(n => !isNaN(n)) : [], goods_and_services: data.goodsAndServicesByClass || null,
-                wipo_ir: data.wipoIR || data.aripoIR || data.internationalRegNumber || null, country_code: data.country || null, parent_id: data.parentId || null,
-                transaction_hierarchy: data.transactionHierarchy || 'parent', brand_image_url: data.brandImageUrl || null, details: data
-            };
-
-            Object.keys(insertData).forEach(key => { if (insertData[key] === undefined) delete insertData[key]; });
-
-            const { data: newRecord, error: insertError } = await supabase.from('ip_records').insert(insertData).select('id').single();
-            if (insertError) throw insertError;
-
-            if (data.applicants && Array.isArray(data.applicants) && data.applicants.length > 0) {
-                const personsToInsert = data.applicants.map(app => ({ ip_record_id: newRecord.id, person_id: app.id, role: 'applicant' }));
-                await supabase.from('ip_record_persons').insert(personsToInsert);
-            }
-
-            await localCache.remove('ip_records_cache'); 
-            return { success: true, id: newRecord.id };
-        } catch (error) { return { success: false, error: error.message }; }
-    },
-
-    // G) İŞLEM (TRANSACTION) EKLEME 
-    async addTransactionToRecord(recordId, txData) {
-        try {
-            const insertData = {
-                ip_record_id: recordId, transaction_type_id: txData.transactionTypeId || txData.type, description: txData.description || 'Yeni İşlem',
-                transaction_hierarchy: txData.transactionHierarchy || 'parent', parent_id: txData.parentId || null, details: txData, created_at: new Date().toISOString()
-            };
-            const { data, error } = await supabase.from('transactions').insert(insertData).select('id').single();
-            if (error) throw error;
-            return { success: true, id: data.id };
-        } catch (error) { return { success: false, error: error.message }; }
-    },
-    // --- EKSİK OLAN ARAMA FONKSİYONU EKLENDİ ---
-    async searchRecords(queryText) {
-        if (!queryText || queryText.length < 3) return { success: true, data: [] };
-        const lowerQuery = queryText.toLowerCase();
+    async updateRecord(id, updateData) {
+        const cleanData = {};
+        Object.keys(updateData).forEach(key => { if (updateData[key] !== undefined) cleanData[key] = updateData[key]; });
+        if (cleanData.portfoyStatus) cleanData.portfolio_status = cleanData.portfoyStatus;
         
-        // Önbellekten veya sunucudan (çok hızlı bir şekilde) tüm portföyü çek
-        const recordsResult = await this.getRecords();
-        if (!recordsResult.success) return { success: false, data: [] };
-
-        // Hafızada süper hızlı filtreleme yap
-        const filtered = recordsResult.data.filter(r => 
-            (r.title && r.title.toLowerCase().includes(lowerQuery)) || 
-            (r.applicationNumber && String(r.applicationNumber).toLowerCase().includes(lowerQuery)) ||
-            (r.registrationNumber && String(r.registrationNumber).toLowerCase().includes(lowerQuery)) ||
-            (r.wipoIR && String(r.wipoIR).toLowerCase().includes(lowerQuery))
-        );
-
-        // En alakalı ilk 20 sonucu döndür
-        return { success: true, data: filtered.slice(0, 20) };
+        const { error } = await supabase.from('ip_records').update(cleanData).eq('id', id);
+        return error ? { success: false, error: error.message } : { success: true };
     }
-
 };
 
 // 5. İZLEME (MONITORING) SERVİSİ
