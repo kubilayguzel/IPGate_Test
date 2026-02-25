@@ -854,6 +854,8 @@ const buildReportData = async (results) => {
     return reportData;
 };
     
+// public/js/trademark-similarity-search.js
+
 const createObjectionTasks = async (results, bulletinNo, ownerId = null) => {
     let createdTaskCount = 0;
     const { data: { session } } = await supabase.auth.getSession();
@@ -861,7 +863,7 @@ const createObjectionTasks = async (results, bulletinNo, ownerId = null) => {
 
     for (const r of results) {
         try {
-            // 1. Mevcut görev kontrolü (Supabase'den)
+            // 1. Mevcut görev kontrolü
             const { data: existingTasks } = await supabase.from('tasks').select('*').eq('task_type', '20');
             let targetOwnerId = ownerId;
             if (!targetOwnerId) {
@@ -873,8 +875,7 @@ const createObjectionTasks = async (results, bulletinNo, ownerId = null) => {
             }
 
             const duplicateTask = existingTasks?.find(doc => {
-                let details = {};
-                try { details = typeof doc.details === 'string' ? JSON.parse(doc.details) : doc.details; } catch(e){}
+                let details = doc.details || {};
                 return (String(details?.targetAppNo) === String(r.applicationNo) && targetOwnerId && String(doc.client_id) === String(targetOwnerId));
             });
             
@@ -895,10 +896,7 @@ const createObjectionTasks = async (results, bulletinNo, ownerId = null) => {
 
             if (taskResponse?.success) {
                 createdTaskCount++;
-                const taskId = taskResponse?.taskId;
-                if (taskId && window.portfolioByOppositionCreator) {
-                    await window.portfolioByOppositionCreator.createThirdPartyPortfolioFromBulletin(taskResponse.bulletinRecordId || r.bulletinId, taskId);
-                }
+                // 🔥 SİLİNEN KISIM: window.portfolioByOppositionCreator çağrısı silindi! (Artık backend yapıyor)
             }
         } catch (e) { console.error("Task creation error:", e); }
     }
