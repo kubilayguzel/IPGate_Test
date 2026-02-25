@@ -55,7 +55,8 @@ export class TaskValidator {
                     hasCountrySelection = !!document.getElementById('countrySelect')?.value;
                 } 
                 else if (['WIPO', 'ARIPO'].includes(originType)) {
-                    const countryList = document.getElementById('selectedCountriesList');
+                    // 🔥 ÇÖZÜM: Yeni arayüzdeki wipoAripoChildList ID'sini kontrol et
+                    const countryList = document.getElementById('wipoAripoChildList');
                     const cnt = countryList ? countryList.querySelectorAll('.selected-item').length : 0;
                     hasCountrySelection = cnt > 0;
                 }
@@ -77,13 +78,15 @@ export class TaskValidator {
             // --- SENARYO 2: DİĞER İŞLEMLER ---
             else {
                 const taskTitle = document.getElementById('taskTitle')?.value?.trim() || selectedTaskType?.alias;
-                const hasIpRecord = !!state.selectedIpRecord;
+                
+                // 🔥 GÜVENLİK YAMASI: Seçili varlık state üzerinden tam doğrulukla çekiliyor
+                const hasIpRecord = (state && state.selectedIpRecord) ? true : false;
                 const assignedTo = document.getElementById('assignedTo')?.value;
                 
                 const tIdStr = asId(selectedTaskType?.id);
                 const isSpecialTask = ['79', '80', '82'].includes(tIdStr);
                 
-                const hasOwner = selectedOwners && selectedOwners.length > 0;
+                const hasOwner = state && state.selectedOwners && state.selectedOwners.length > 0;
                 const isAssetOrOwnerValid = isSpecialTask ? (hasIpRecord || hasOwner) : hasIpRecord;
                 
                 const needsRelated = RELATED_PARTY_REQUIRED.has(tIdStr);
@@ -95,7 +98,7 @@ export class TaskValidator {
                 checks = {
                     'Atanan Kişi': !!assignedTo,
                     'İş Başlığı': !!taskTitle,
-                    'Varlık/Sahip Seçimi': isAssetOrOwnerValid,
+                    'Varlık/Sahip Seçimi': isAssetOrOwnerValid, // <-- Burası hata veriyorsa PORTFÖYDEN ARAMA kısmından marka seçilmemiş demektir
                     'İlgili Taraf': !needsRelated || hasRelated
                 };
 
