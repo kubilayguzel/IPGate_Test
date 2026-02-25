@@ -513,7 +513,7 @@ export const ipRecordsService = {
         return { success: true, data: mappedData };
     },
 
-    // İşlem Geçmişini Çeker
+// C) İşlem Geçmişini Çeker
     async getRecordTransactions(recordId) {
         const { data, error } = await supabase
             .from('transactions')
@@ -523,10 +523,27 @@ export const ipRecordsService = {
 
         if (error) return { success: false, error: error.message };
 
-        const mappedTransactions = data.map(tx => ({
-            id: tx.id, type: tx.transaction_type_id || (tx.details && tx.details.type), timestamp: tx.created_at,
-            date: tx.created_at, transactionHierarchy: tx.transaction_hierarchy, parentId: tx.parent_id, ...tx.details 
-        }));
+        const mappedTransactions = data.map(tx => {
+            const d = tx.details || {};
+            return {
+                ...d, // Eski esnek json yapısını koru
+                ...tx, // Veritabanındaki tüm sütunları dahil et
+                id: tx.id, 
+                type: tx.transaction_type_id || d.type, 
+                timestamp: tx.created_at || d.timestamp,
+                date: tx.created_at || d.date, 
+                transactionHierarchy: tx.transaction_hierarchy || d.transactionHierarchy, 
+                parentId: tx.parent_id || d.parentId,
+                
+                // 🔥 PDF'lerin görünmesini sağlayan eksik bağlantılar eklendi:
+                task_id: tx.task_id || d.triggeringTaskId,
+                triggeringTaskId: tx.task_id || d.triggeringTaskId, 
+                documents: tx.documents || d.documents || [],
+                relatedPdfUrl: tx.related_pdf_url || d.relatedPdfUrl,
+                oppositionPetitionFileUrl: tx.opposition_petition_file_url || d.oppositionPetitionFileUrl,
+                oppositionEpatsPetitionFileUrl: tx.opposition_epats_petition_file_url || d.oppositionEpatsPetitionFileUrl
+            };
+        });
         
         return { success: true, data: mappedTransactions };
     },
