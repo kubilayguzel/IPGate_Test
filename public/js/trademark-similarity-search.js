@@ -854,7 +854,6 @@ const buildReportData = async (results) => {
     return reportData;
 };
     
-// public/js/trademark-similarity-search.js
 
 const createObjectionTasks = async (results, bulletinNo, ownerId = null) => {
     let createdTaskCount = 0;
@@ -863,26 +862,9 @@ const createObjectionTasks = async (results, bulletinNo, ownerId = null) => {
 
     for (const r of results) {
         try {
-            // 1. Mevcut görev kontrolü
-            const { data: existingTasks } = await supabase.from('tasks').select('*').eq('task_type', '20');
-            let targetOwnerId = ownerId;
-            if (!targetOwnerId) {
-                const monitoredTm = monitoringTrademarks.find(tm => tm.id === r.monitoredTrademarkId);
-                if (monitoredTm) {
-                    const ip = await _getIp(monitoredTm.ipRecordId || monitoredTm.sourceRecordId || monitoredTm.id);
-                    targetOwnerId = _getOwnerKey(ip, monitoredTm, allPersons)?.id || null;
-                }
-            }
-
-            const duplicateTask = existingTasks?.find(doc => {
-                let details = doc.details || {};
-                return (String(details?.targetAppNo) === String(r.applicationNo) && targetOwnerId && String(doc.client_id) === String(targetOwnerId));
-            });
-            
-            if (duplicateTask) continue;
-
-            // 2. Görevi oluştur (Edge Function ile)
-            const { data: taskResponse } = await supabase.functions.invoke('create-objection-task', {
+            // Görevi oluştur (Supabase Edge Function)
+            console.log(`⏳ ${r.markName} için itiraz görevi tetikleniyor...`);
+            const { data: taskResponse, error: invokeError } = await supabase.functions.invoke('create-objection-task', {
                 body: {
                     monitoredMarkId: r.monitoredTrademarkId,
                     similarMark: { applicationNo: r.applicationNo, markName: r.markName, niceClasses: r.niceClasses, similarityScore: r.similarityScore },
@@ -894,11 +876,15 @@ const createObjectionTasks = async (results, bulletinNo, ownerId = null) => {
                 }
             });
 
-            if (taskResponse?.success) {
+            if (invokeError) {
+                console.error("❌ Fonksiyon Çalışma Hatası:", invokeError);
+            } else if (!taskResponse?.success) {
+                console.error("❌ Görev Oluşturulamadı:", taskResponse?.error);
+            } else {
+                console.log(`✅ Görev Başarıyla Oluştu: ${taskResponse.taskId}`);
                 createdTaskCount++;
-                // 🔥 SİLİNEN KISIM: window.portfolioByOppositionCreator çağrısı silindi! (Artık backend yapıyor)
             }
-        } catch (e) { console.error("Task creation error:", e); }
+        } catch (e) { console.error("❌ Beklenmeyen Hata:", e); }
     }
     return createdTaskCount;
 };
