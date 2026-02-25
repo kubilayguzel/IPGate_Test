@@ -122,7 +122,6 @@ export async function runTrademarkSearch(monitoredMarks, selectedBulletinId, onP
   } catch (error) { throw error; }
 }
 
-// Büyük veriyi (70.000+) tarayıcıyı dondurmadan Supabase'den indirmek için
 async function getAllResultsInBatches(jobId, onBatchLoaded) {
     let allData = [];
     const BATCH_SIZE = 2000; 
@@ -142,7 +141,20 @@ async function getAllResultsInBatches(jobId, onBatchLoaded) {
             if (error) throw error;
             if (!data || data.length === 0) { keepFetching = false; break; }
 
-            allData = allData.concat(data);
+            // 🚀 DB'den gelen snake_case veriyi, UI'ın beklediği camelCase formata çeviriyoruz!
+            const mappedData = data.map(r => ({
+                id: r.id,
+                objectID: r.id, // Eski Firebase uyumluluğu için
+                monitoredTrademarkId: r.monitored_trademark_id,
+                markName: r.mark_name,
+                applicationNo: r.application_no,
+                niceClasses: r.nice_classes,
+                similarityScore: r.similarity_score,
+                holders: r.holders,
+                imagePath: r.image_path
+            }));
+
+            allData = allData.concat(mappedData);
             lastId = data[data.length - 1].id;
             
             if (onBatchLoaded) onBatchLoaded(allData.length);
