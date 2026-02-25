@@ -3,123 +3,96 @@ import { supabase } from '../../supabase-config.js'; // Kendi dizininize göre y
 
 console.log(">>> run-search.js modülü yüklendi (Supabase & Realtime Versiyon) <<<");
 
+// public/js/trademark-similarity/run-search.js
+
 export async function runTrademarkSearch(monitoredMarks, selectedBulletinId, onProgress) {
-  try {
-    console.log('🚀 Supabase Edge Function çağrılıyor...');
+    try {
+        console.log("🚀 Supabase Edge Function tetikleniyor...", { monitoredMarks: monitoredMarks.length, selectedBulletinId });
 
-    // 1. İşlemi Başlat (Edge Function)
-    const { data, error } = await supabase.functions.invoke('perform-trademark-similarity-search', {
-      body: { monitoredMarks, selectedBulletinId, async: true }
-    });
+        // 🔥 GÜNCELLEME: İsteği 'functions.invoke' ile atıyoruz
+        const { data, error } = await supabase.functions.invoke('perform-trademark-similarity-search', {
+            body: { 
+                monitoredMarks: monitoredMarks, 
+                selectedBulletinId: selectedBulletinId 
+            }
+        });
 
-    if (error) throw error;
-    if (!data || !data.success || !data.jobId) throw new Error('Job başlatılamadı');
+        if (error) {
+            console.error("❌ Edge Function Hatası:", error);
+            throw error;
+        }
 
-    const jobId = data.jobId;
-    const EXPECTED_WORKER_COUNT = data.workerCount || 10; 
-    
-    console.log(`✅ Job başlatıldı: ${jobId} (Beklenen Worker: ${EXPECTED_WORKER_COUNT})`);
+        const jobId = data.jobId;
+        console.log("✅ İş başlatıldı, Job ID:", jobId);
 
-    // 2. Takip Etme Mantığı (Supabase Realtime)
+        // Durum takibi döngüsü (Poling)
+        return await monitorSearchProgress(jobId, onProgress);
+
+    } catch (err) {
+        console.error("Arama başlatma hatası:", err);
+        throw err;
+    }
+}
+
+async function monitorSearchProgress(jobId, onProgress) {
     return new Promise((resolve, reject) => {
-      let mainState = { status: 'queued', currentResults: 0 };
-      let workersState = {}; 
-      let isJobFinished = false;
-      let safetyTimeout;
+        const interval = setInterval(async () => {
+            // search_progress tablosundan durumu kontrol et
+            const { data, error } = await supabase
+                .from('search_progress')
+                .select('*')
+                .eq('id', jobId)
+                .single();
 
-      const cleanup = () => {
-        if (safetyTimeout) clearTimeout(safetyTimeout);
-        supabase.removeAllChannels(); // Realtime dinleyicileri kapat
-      };
+            if (error) {
+                console.error("İlerleme okuma hatası:", error);
+                return;
+            }
 
-      const resetSafetyTimeout = () => {
-          if (safetyTimeout) clearTimeout(safetyTimeout);
-          safetyTimeout = setTimeout(() => {
-              if (!isJobFinished) {
-                  cleanup();
-                  reject(new Error('İşlem zaman aşımına uğradı (Uzun süre işlem yapılmadı)'));
-              }
-          }, 30 * 60 * 1000); 
-      };
-
-      resetSafetyTimeout();
-
-      // --- BİTİŞ KONTROLÜ ---
-      const checkCompletion = async () => {
-          if (isJobFinished) return;
-          const workerKeys = Object.keys(workersState);
-          
-          if (workerKeys.length < EXPECTED_WORKER_COUNT) return;
-          const allCompleted = workerKeys.every(key => workersState[key].status === 'completed');
-
-          if (allCompleted) {
-              isJobFinished = true;
-              console.log(`✅ Tüm workerlar tamamlandı. İndirme başlıyor...`);
-              
-              if (onProgress) onProgress({ status: 'finalizing', message: 'Son veriler yazılıyor...' });
-              await new Promise(r => setTimeout(r, 4000));
-              cleanup(); 
-
-              try {
-                const finalCount = mainState.currentResults || 0;
+            if (data) {
+                const progress = Math.floor((data.current_results / data.total_records) * 100) || 0;
                 
-                // Batch (Parçalı) İndirme
-                const allResults = await getAllResultsInBatches(jobId, (downloadedCount) => {
-                     if (onProgress) {
-                         onProgress({
-                            status: 'downloading',
-                            progress: 100,
-                            currentResults: finalCount,
-                            message: `Veriler alınıyor... ${downloadedCount} / ${finalCount}`
-                         });
-                     }
-                });
-                
-                console.log(`📥 ${allResults.length} adet sonuç başarıyla indirildi.`);
-                resolve(allResults);
-              } catch (err) { reject(new Error("Sonuçlar çekilemedi: " + err.message)); }
-          }
-      };
+                if (onProgress) {
+                    onProgress({
+                        progress: progress,
+                        currentResults: data.current_results
+                    });
+                }
 
-      // --- SUPABASE REALTIME KANALI ---
-      const jobChannel = supabase.channel(`job-${jobId}`);
-
-      // Ana tabloyu dinle
-      jobChannel.on('postgres_changes', { event: '*', schema: 'public', table: 'search_progress', filter: `id=eq.${jobId}` }, (payload) => {
-        mainState.status = payload.new.status || mainState.status;
-        mainState.currentResults = payload.new.current_results || 0; 
-        if (mainState.status === 'error') { cleanup(); reject(new Error(payload.new.error_message || 'Arama hatası')); }
-        updateGlobalProgress(); 
-      });
-
-      // Worker tablosunu dinle
-      jobChannel.on('postgres_changes', { event: '*', schema: 'public', table: 'search_progress_workers', filter: `job_id=eq.${jobId}` }, (payload) => {
-        resetSafetyTimeout();
-        workersState[payload.new.id] = payload.new;
-        updateGlobalProgress();
-        checkCompletion(); 
-      });
-
-      jobChannel.subscribe();
-
-      function updateGlobalProgress() {
-          if (isJobFinished) return;
-          const workerKeys = Object.keys(workersState);
-          let sumProgress = 0;
-          workerKeys.forEach(key => { sumProgress += (workersState[key].progress || 0); });
-          const globalProgress = Math.floor(sumProgress / EXPECTED_WORKER_COUNT);
-
-          if (onProgress) {
-              onProgress({
-                  status: mainState.status === 'queued' ? 'processing' : mainState.status,
-                  progress: globalProgress,
-                  currentResults: mainState.currentResults,
-                  message: null
-              });
-          }
-      }
+                if (data.status === 'completed') {
+                    clearInterval(interval);
+                    // Tüm sonuçları search_progress_results tablosundan çek
+                    const results = await getAllResults(jobId);
+                    resolve(results);
+                } else if (data.status === 'error') {
+                    clearInterval(interval);
+                    reject(new Error(data.error_message || "Arama sırasında hata oluştu."));
+                }
+            }
+        }, 3000); // 3 saniyede bir kontrol et
     });
-  } catch (error) { throw error; }
+}
+
+async function getAllResults(jobId) {
+    const { data, error } = await supabase
+        .from('search_progress_results')
+        .select('*')
+        .eq('job_id', jobId);
+    
+    if (error) throw error;
+    
+    // UI'ın beklediği formata (camelCase) çevir
+    return data.map(r => ({
+        id: r.id,
+        monitoredTrademarkId: r.monitored_trademark_id,
+        markName: r.mark_name,
+        applicationNo: r.application_no,
+        niceClasses: r.nice_classes,
+        similarityScore: r.similarity_score,
+        holders: r.holders,
+        imagePath: r.image_path,
+        isSimilar: true // Arama motorundan gelenler varsayılan benzerdir
+    }));
 }
 
 async function getAllResultsInBatches(jobId, onBatchLoaded) {
