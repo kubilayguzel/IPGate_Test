@@ -9,7 +9,6 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
   <style>
     .main-container { width: 100%; padding: 30px; padding-top: 120px; }
-    /* Bülten arama sayfasından alınan stil */
     .page-header {
       background: rgba(255,255,255,0.95);
       padding: 30px;
@@ -22,10 +21,7 @@
       color: #1e3c72;
       margin-bottom: 10px;
     }
-    .page-subtitle {
-        color: #666;
-        font-size: 1.1em;
-    }
+    .page-subtitle { color: #666; font-size: 1.1em; }
     .tasks-container {
       background: rgba(255,255,255,0.95);
       border-radius: 20px;
@@ -34,148 +30,33 @@
       margin-bottom: 30px;
       overflow-x: auto;
     }
-    .bulletin-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 20px;
-    }
-    .bulletin-table th, .bulletin-table td {
-      border: 1px solid #ddd;
-      padding: 12px;
-      text-align: left;
-    }
-    .bulletin-table th {
-      background-color: #f2f2f2;
-    }
-    .bulletin-table .delete-btn {
-      background-color: #dc3545;
-      color: white;
-      border: none;
-      padding: 8px 12px;
-      border-radius: 5px;
-      cursor: pointer;
-    }
-    .bulletin-table .delete-btn:hover {
-        background-color: #c82333;
-    }
-    .record-count-cell {
-        font-style: italic;
-        color: #666;
-    }
+    .bulletin-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    .bulletin-table th, .bulletin-table td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+    .bulletin-table th { background-color: #f2f2f2; }
+    .bulletin-table .delete-btn { background-color: #dc3545; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; }
+    .bulletin-table .delete-btn:hover { background-color: #c82333; }
     
-    /* Progress Bar Stilleri */
     .delete-progress-overlay { 
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.7);
-        z-index: 9999;
-        display: none;
-        justify-content: center;
-        align-items: center;
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0, 0, 0, 0.7); z-index: 9999; display: none;
+        justify-content: center; align-items: center;
     }
-    
     .delete-progress-container {
-        background: white;
-        padding: 30px;
-        border-radius: 15px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-        min-width: 400px;
-        text-align: center;
+        background: white; padding: 30px; border-radius: 15px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); min-width: 400px; text-align: center;
     }
-    
-    .delete-progress-title {
-        font-size: 1.2em;
-        color: #1e3c72;
-        margin-bottom: 20px;
-        font-weight: 600;
-    }
-    
-    .delete-progress-bar {
-        width: 100%;
-        height: 20px;
-        background: #e1e8ed;
-        border-radius: 10px;
-        overflow: hidden;
-        margin-bottom: 15px;
-    }
-    
-    .delete-progress-fill {
-        height: 100%;
-        background: linear-gradient(45deg, #1e3c72, #2a5298);
-        border-radius: 10px;
-        width: 0%;
-        transition: width 0.3s ease;
-        position: relative;
-    }
-    
-    .delete-progress-text {
-        color: #666;
-        font-size: 0.9em;
-        margin-bottom: 10px;
-    }
-    
-    .delete-progress-details {
-        color: #888;
-        font-size: 0.8em;
-    }
-    /* bulletin-upload.html içindeki progress bar stilleri için */
-    #progressContainer {
-        width: 100%;
-        margin-top: 10px;
-        background: #f0f0f0;
-        border-radius: 10px;
-        overflow: hidden;
-        box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
-    }
+    .delete-progress-title { font-size: 1.2em; color: #1e3c72; margin-bottom: 20px; font-weight: 600; }
+    .delete-progress-bar { width: 100%; height: 20px; background: #e1e8ed; border-radius: 10px; overflow: hidden; margin-bottom: 15px; }
+    .delete-progress-fill { height: 100%; background: linear-gradient(45deg, #1e3c72, #2a5298); border-radius: 10px; width: 0%; transition: width 0.3s ease; }
+    .delete-progress-text { color: #666; font-size: 0.9em; margin-bottom: 10px; }
+    .delete-progress-details { color: #888; font-size: 0.8em; }
 
-    #progressBar {
-        height: 20px;
-        width: 0%;
-        background: linear-gradient(45deg, #1e3c72, #2a5298);
-        border-radius: 10px;
-        transition: width 0.3s ease;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-size: 12px;
-        font-weight: bold;
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
-    }
-
-    .file-upload-area {
-        border: 2px dashed #ccc;
-        border-radius: 10px;
-        padding: 40px 20px;
-        text-align: center;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        background: #f9f9f9;
-    }
-
-    .file-upload-area:hover {
-        border-color: #1e3c72;
-        background: #f0f4f8;
-    }
-
-    .file-upload-area.drag-over {
-        border-color: #1e3c72;
-        background: #e8f4fd;
-    }
-
-    .upload-icon {
-        font-size: 48px;
-        margin-bottom: 10px;
-    }
-
-    .file-upload-area p {
-        margin: 0;
-        color: #666;
-        font-size: 16px;
-    }
+    #progressContainer { width: 100%; margin-top: 10px; background: #f0f0f0; border-radius: 10px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2); }
+    #progressBar { height: 20px; width: 0%; background: linear-gradient(45deg, #1e3c72, #2a5298); border-radius: 10px; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold; }
+    .file-upload-area { border: 2px dashed #ccc; border-radius: 10px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.3s ease; background: #f9f9f9; }
+    .file-upload-area:hover, .file-upload-area.drag-over { border-color: #1e3c72; background: #e8f4fd; }
+    .upload-icon { font-size: 48px; margin-bottom: 10px; }
+    .file-upload-area p { margin: 0; color: #666; font-size: 16px; }
   </style>
 </head>
 <body>
@@ -202,7 +83,7 @@
             </form>
             <div id="uploadStatusTrademark" style="margin-top:20px;"></div>
             <div id="progressContainer" style="display:none; margin-top:10px;">
-                <div id="progressBar" style="height:20px; width:0%; background:#1e3c72;"></div>
+                <div id="progressBar"></div>
             </div>
         </div>
         
@@ -237,254 +118,172 @@
         <div id="deleteProgressDetails" class="delete-progress-details"></div>
     </div>
 </div>
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script type="module">
     import { loadSharedLayout } from './js/layout-loader.js';
+    import { supabase } from './supabase-config.js'; // Firebase yerine doğrudan Supabase
+    import { showNotification } from './utils.js';
+
     loadSharedLayout({ activeMenuLink: 'bulletin-upload.html' });
-</script>
 
-<script>
-// Basit ve garantili çalışacak script
-console.log('🚀 Bülten script başladı');
+    console.log('🚀 Bülten listesi tablosu yükleniyor...');
 
-// Sayfa yüklendikten sonra tabloyu doldur
-setTimeout(async () => {
-    try {
-        console.log('🔄 Tablo dolduruluyor...');
+    async function loadTrademarkBulletins() {
+        const tableBody = document.querySelector("#trademarkBulletinTable tbody");
+        if (!tableBody) return;
         
-        // Firebase modüllerini import et
-        const firebaseModule = await import('./firebase-config.js');
-        const { collection, getDocs, deleteDoc, doc, writeBatch, getCountFromServer, onSnapshot, query, where } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
-        const { getFunctions, httpsCallable } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js');
-        const { showNotification } = await import('./utils.js');
-        // Global erişim için kaydet
-        window.firestoreModules = { onSnapshot, doc };
+        tableBody.innerHTML = '<tr><td colspan="5" class="text-center">Veriler çekiliyor...</td></tr>';
         
-        console.log('✅ Firebase modülleri yüklendi');
-        
-        const db = firebaseModule.db;
-        const app = firebaseModule.app;
-        const functions = getFunctions(app, "europe-west1");
-        
-        // Tabloyu doldur
-        async function loadTrademarkBulletins() {
-            console.log('📋 Bültenler yükleniyor...');
+        try {
+            // Bültenleri Supabase'den çekiyoruz
+            const { data: bulletins, error } = await supabase
+                .from('trademark_bulletins')
+                .select('*')
+                .order('created_at', { ascending: false });
             
-            const tableBody = document.querySelector("#trademarkBulletinTable tbody");
-            if (!tableBody) {
-                console.error('❌ Tablo bulunamadı');
+            if (error) throw error;
+            
+            if (!bulletins || bulletins.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Hiç bülten bulunamadı. Lütfen yükleyin.</td></tr>';
                 return;
             }
             
-            tableBody.innerHTML = '<tr><td colspan="5">Veriler çekiliyor...</td></tr>';
+            tableBody.innerHTML = '';
             
-            try {
-                const bulletinsRef = collection(db, "trademarkBulletins");
-                const snapshot = await getDocs(bulletinsRef);
+            for (const bulletin of bulletins) {
+                const uploadDate = bulletin.created_at ? new Date(bulletin.created_at).toLocaleDateString('tr-TR') : 'Tarih Yok';
                 
-                if (snapshot.empty) {
-                    tableBody.innerHTML = '<tr><td colspan="5">Hiç bülten bulunamadı.</td></tr>';
-                    return;
-                }
+                // Bültene ait kayıt sayısını (Count) hızlıca çek
+                const { count, error: countError } = await supabase
+                    .from('trademark_bulletin_records')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('bulletin_no', bulletin.bulletin_no);
                 
-                console.log(`📦 ${snapshot.size} bülten bulundu`);
+                const recordCount = countError ? '-' : (count || 0);
                 
-                tableBody.innerHTML = '';
-                
-                const allBulletins = [];
-                snapshot.forEach(doc => {
-                    allBulletins.push({ id: doc.id, ...doc.data() });
-                });
-                
-                // Tarihe göre sırala
-                allBulletins.sort((a, b) => {
-                    const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(0);
-                    const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(0);
-                    return dateB - dateA;
-                });
-                
-                // Her bülten için satır ekle
-                for (const bulletin of allBulletins) {
-                    const uploadDate = bulletin.createdAt?.toDate ? 
-                        bulletin.createdAt.toDate().toLocaleDateString('tr-TR') : 'Tarih Yok';
-                    
-                    // PERFORMANS: Sadece COUNT al, kayıtları çekme
-                    let recordCount = 0;
-                    try {
-                        const recordsQuery = query(collection(db, "trademarkBulletinRecords"), where("bulletinId", "==", bulletin.id));
-                        const countSnapshot = await getCountFromServer(recordsQuery);
-                        recordCount = countSnapshot.data().count;
-                        console.log(`📊 ${bulletin.bulletinNo}: ${recordCount} kayıt (sadece count)`);
-                    } catch (countError) {
-                        console.warn(`⚠️ ${bulletin.bulletinNo} count hatası:`, countError);
-                        recordCount = '-';
-                    }
-                    
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = 
-                        '<td>' + (bulletin.bulletinNo || 'No Yok') + '</td>' +
-                        '<td>' + (bulletin.bulletinDate || 'Tarih Yok') + '</td>' +
-                        '<td>' + uploadDate + '</td>' +
-                        '<td>' + recordCount + '</td>' +
-                        '<td><button class="delete-btn" onclick="deleteTrademarkBulletin(\'' + bulletin.id + '\', \'' + (bulletin.bulletinNo || '') + '\')">Hızlı Sil</button></td>';
-                    
-                    tableBody.appendChild(tr);
-                }
-                
-                console.log('✅ Tablo başarıyla dolduruldu');
-                
-            } catch (error) {
-                console.error('❌ Tablo doldurma hatası:', error);
-                tableBody.innerHTML = '<tr><td colspan="5" style="color:red;">Hata: ' + error.message + '</td></tr>';
-                showNotification('Tablo yükleme hatası: ' + error.message, 'error', 8000);
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${bulletin.bulletin_no || 'No Yok'}</strong></td>
+                    <td>${bulletin.bulletin_date || 'Tarih Yok'}</td>
+                    <td>${uploadDate}</td>
+                    <td>${recordCount} Marka</td>
+                    <td><button class="delete-btn" data-id="${bulletin.id}" data-no="${bulletin.bulletin_no}"><i class="fas fa-trash"></i> Hızlı Sil</button></td>
+                `;
+                tableBody.appendChild(tr);
             }
-        }
-        
-        // Progress bar fonksiyonları
-        function showDeleteProgress() {
-            document.getElementById('deleteProgressOverlay').style.display = 'flex';
-        }
-        
-        function hideDeleteProgress() {
-            document.getElementById('deleteProgressOverlay').style.display = 'none';
-        }
-        
-        function updateDeleteProgress(percent, text, details = '') {
-            document.getElementById('deleteProgressFill').style.width = percent + '%';
-            document.getElementById('deleteProgressText').textContent = text;
-            document.getElementById('deleteProgressDetails').textContent = details;
-        }
 
-    // 🔥 YENİ BACKEND DELETE FONKSİYONU - REGION FIX
-
-    window.deleteTrademarkBulletin = async function(bulletinId, bulletinNo) {
-    const userConfirmed = confirm(
-        `⚠️ "${bulletinNo}" numaralı bülteni silmek istediğinizden emin misiniz?\n\n` +
-        `Bu işlem geri alınamaz ve şunları silecek:\n` +
-        `• Ana bülten kaydı\n` +
-        `• Tüm marka kayıtları\n` +
-        `• Tüm görsel dosyalar\n\n` +
-        `İşlem arka planda devam edecek ve ilerlemeyi takip edebilirsiniz.`
-    );
-    
-    if (!userConfirmed) {
-        return;
+            // Silme butonlarına tıklama olayı
+            document.querySelectorAll('.delete-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const id = e.target.closest('button').dataset.id;
+                    const no = e.target.closest('button').dataset.no;
+                    await deleteTrademarkBulletin(id, no);
+                });
+            });
+            
+        } catch (error) {
+            console.error('❌ Tablo doldurma hatası:', error);
+            tableBody.innerHTML = `<tr><td colspan="5" style="color:red;">Hata: ${error.message}</td></tr>`;
+        }
     }
     
-    try {
-        console.log(`🗑️ Asenkron silme işlemi başlatılıyor: ${bulletinNo}`);
-        
-        showDeleteProgress();
-        updateDeleteProgress(10, 'Silme işlemi başlatılıyor...', 'Cloud Function çağrılıyor');
-        
-        const deleteBulletinFunction = httpsCallable(functions, 'deleteBulletinV2');
-        const result = await deleteBulletinFunction({ bulletinId });
-        const data = result.data;
-        
-        if (data.success) {
-            const operationId = data.operationId;
-            console.log('✅ Silme işlemi başlatıldı, operationId:', operationId);
-            
-            updateDeleteProgress(20, 'İşlem başlatıldı', 'İlerleme takip ediliyor...');
-            
-            // İlerleme takibi başlat
-            monitorDeletionProgress(operationId, bulletinNo);
-            
-        } else {
-            throw new Error(data.error || 'Silme işlemi başlatılamadı');
-        }
-        
-    } catch (error) {
-        console.error('❌ Silme başlatma hatası:', error);
-        hideDeleteProgress();
-        showNotification(`❌ Silme işlemi başlatılamadı: ${error.message}`, 'error', 10000);
+    // UI Progress Bar Yardımcıları
+    function showDeleteProgress() { document.getElementById('deleteProgressOverlay').style.display = 'flex'; }
+    function hideDeleteProgress() { document.getElementById('deleteProgressOverlay').style.display = 'none'; }
+    function updateDeleteProgress(percent, text, details = '') {
+        document.getElementById('deleteProgressFill').style.width = percent + '%';
+        document.getElementById('deleteProgressText').textContent = text;
+        document.getElementById('deleteProgressDetails').textContent = details;
     }
-};
-
-    // İlerleme takip fonksiyonu ekleyin
-    function monitorDeletionProgress(operationId, bulletinNo) {
-    const { onSnapshot, doc } = window.firestoreModules || {};
-    
-    if (!onSnapshot || !doc) {
-        console.error('❌ Firestore modülleri bulunamadı');
-        hideDeleteProgress();
-        return;
-    }
-    
-    console.log('👀 İlerleme takibi başlatıldı:', operationId);
-    
-    const statusRef = doc(db, 'operationStatus', operationId);
-    
-    const unsubscribe = onSnapshot(statusRef, (docSnap) => {
-        if (!docSnap.exists()) {
-            console.log('⏳ İşlem durumu henüz hazır değil...');
+    // 🔥 Hızlı, Güvenli ve Storage Temizlikli Silme Fonksiyonu (Supabase)
+    async function deleteTrademarkBulletin(bulletinId, bulletinNo) {
+        if (!confirm(`⚠️ "${bulletinNo}" numaralı bülteni silmek istediğinizden emin misiniz?\nBu işlem veritabanı kayıtlarını ve bültene ait tüm marka görsellerini kalıcı olarak silecektir!`)) {
             return;
         }
         
-        const data = docSnap.data();
-        const { status, message, progress, recordsDeleted, imagesDeleted } = data;
-        
-        console.log('📊 İlerleme güncellendi:', { status, message, progress });
-        
-        // Progress bar güncelle
-        updateDeleteProgress(
-            progress || 0, 
-            message || 'İşlem devam ediyor...', 
-            `Durum: ${status}`
-        );
-        
-        if (status === 'completed') {
-            console.log('🎉 Silme işlemi tamamlandı!');
+        try {
+            showDeleteProgress();
+            
+            // 1. Önbellek (Cache) tablosunu temizle
+            updateDeleteProgress(10, 'Önbellek temizleniyor...', 'Arama kalıntıları siliniyor');
+            await supabase.from('search_results_cache').delete().ilike('bulletin_key', `${bulletinNo}%`);
+
+            // 2. 🔥 YENİ: Storage'dan Görselleri Silme İşlemi (Klasör İçeriğini Temizleme)
+            updateDeleteProgress(30, 'Görseller siliniyor...', 'Bu işlem dosya sayısına göre biraz sürebilir');
+            const folderPath = `bulletins/trademark_${bulletinNo}_images`;
+            let keepDeleting = true;
+
+            // Klasördeki dosyaları 500'erli paketler halinde bulup siliyoruz
+            while (keepDeleting) {
+                const { data: files, error: listError } = await supabase.storage
+                    .from('brand_images')
+                    .list(folderPath, { limit: 500, offset: 0 });
+
+                if (listError) {
+                    console.error("Görsel listeleme hatası:", listError);
+                    break;
+                }
+
+                if (!files || files.length === 0) {
+                    keepDeleting = false;
+                    break;
+                }
+
+                const filesToRemove = files.map(file => `${folderPath}/${file.name}`);
+                
+                if (filesToRemove.length > 0) {
+                    const { error: removeError } = await supabase.storage
+                        .from('brand_images')
+                        .remove(filesToRemove);
+
+                    if (removeError) {
+                        console.error("Görsel silme hatası:", removeError);
+                        break;
+                    }
+                }
+
+                // Eğer 500'den az dosya geldiyse demek ki hepsi silinmiştir
+                if (files.length < 500) {
+                    keepDeleting = false;
+                }
+            }
+
+            // 3. O bültene ait marka veritabanı kayıtlarını sil
+            updateDeleteProgress(70, 'Kayıtlar siliniyor...', 'Veritabanındaki marka bilgileri siliniyor');
+            const { error: recordsError } = await supabase
+                .from('trademark_bulletin_records')
+                .delete()
+                .eq('bulletin_no', bulletinNo);
+                
+            if (recordsError) throw recordsError;
+            
+            // 4. Ana bülten kaydını sil
+            updateDeleteProgress(90, 'Ana bülten siliniyor...', 'Bülten kaydı kaldırılıyor');
+            const { error: bulletinError } = await supabase
+                .from('trademark_bulletins')
+                .delete()
+                .eq('id', bulletinId);
+                
+            if (bulletinError) throw bulletinError;
+
+            updateDeleteProgress(100, 'Tamamlandı!', 'Tüm veriler ve görseller başarıyla silindi');
+            showNotification(`🎉 Bülten ${bulletinNo} ve tüm görselleri başarıyla silindi!`, 'success');
             
             setTimeout(() => {
                 hideDeleteProgress();
-                
-                const successMessage = `🎉 Bülten ${bulletinNo} başarıyla silindi!\n` +
-                    `• Kayıtlar: ${recordsDeleted || 0} ✅\n` +
-                    `• Görseller: ${imagesDeleted || 0} ✅`;
-                
-                showNotification(successMessage, 'success', 8000);
-                
-                // Tabloyu yenile
                 loadTrademarkBulletins();
-            }, 2000);
+            }, 1500);
             
-            unsubscribe(); // Listener'ı kapat
-            
-        } else if (status === 'error') {
-            console.error('❌ Silme işlemi hatası:', message);
-            
+        } catch (error) {
+            console.error('❌ Silme hatası:', error);
             hideDeleteProgress();
-            showNotification(`❌ Silme işlemi hatası: ${message}`, 'error', 10000);
-            
-            unsubscribe();
-        }
-    }, (error) => {
-        console.error('❌ İlerleme takip hatası:', error);
-        hideDeleteProgress();
-        showNotification('❌ İlerleme takibi hatası: ' + error.message, 'error');
-    });
-}
-    // İlk yükleme
-    await loadTrademarkBulletins();     
-    } catch (error) {
-        console.error('❌ Script hatası:', error);
-        
-        // showNotification ile hata göster
-        try {
-            const { showNotification } = await import('./utils.js');
-            showNotification('Script hatası: ' + error.message, 'error', 10000);
-        } catch (importError) {
-            // Fallback: tabloya hata yazdır
-            const tableBody = document.querySelector("#trademarkBulletinTable tbody");
-            if (tableBody) {
-                tableBody.innerHTML = '<tr><td colspan="5" style="color:red;">Script hatası: ' + error.message + '</td></tr>';
-            }
+            showNotification(`❌ Hata: ${error.message}`, 'error');
         }
     }
-}, 1500); // 1.5 saniye bekle
-
+    // Sayfa açıldığında tabloyu otomatik yükle
+    setTimeout(loadTrademarkBulletins, 500);
 </script>
+
 <script type="module" src="js/bulletin-upload.js"></script>
 
 </body>
