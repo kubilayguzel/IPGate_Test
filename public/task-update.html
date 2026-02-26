@@ -30,7 +30,7 @@
 
             <form id="taskDetailForm">
                 <div class="row">
-                    <div class="col-lg-8">
+                    <div class="col-12">
                         
                         <div class="section-card">
                             <h3 class="section-title">Genel Bilgiler</h3>
@@ -80,6 +80,24 @@
                                     <input type="text" id="deliveryDate" class="form-input" placeholder="gg.aa.yyyy" data-datepicker>
                                 </div>
                             </div>
+                        </div>
+
+                        <div class="section-card">
+                            <h3 class="section-title">İlgili Varlık</h3>
+                            <div class="search-input-wrapper">
+                                <input type="text" id="relatedIpRecordSearch" class="form-input" placeholder="Marka/Patent ara...">
+                                <div id="relatedIpRecordSearchResults" class="search-results-list" style="display: none;"></div>
+                            </div>
+                            <div id="selectedIpRecordDisplay" class="search-result-display" style="display: none;"></div>
+                        </div>
+
+                        <div class="section-card">
+                            <h3 class="section-title">İlgili Taraf</h3>
+                            <div class="search-input-wrapper">
+                                <input type="text" id="relatedPartySearch" class="form-input" placeholder="Kişi/Firma ara...">
+                                <div id="relatedPartySearchResults" class="search-results-list" style="display: none;"></div>
+                            </div>
+                            <div id="selectedRelatedPartyDisplay" class="search-result-display" style="display: none;"></div>
                         </div>
 
                         <div class="section-card">
@@ -154,29 +172,9 @@
                         </div>
 
                     </div>
-
-                    <div class="col-lg-4">
-                        
-                        <div class="section-card">
-                            <h3 class="section-title">İlgili Varlık</h3>
-                            <div class="search-input-wrapper">
-                                <input type="text" id="relatedIpRecordSearch" class="form-input" placeholder="Marka/Patent ara...">
-                                <div id="relatedIpRecordSearchResults" class="search-results-list" style="display: none;"></div>
-                            </div>
-                            <div id="selectedIpRecordDisplay" class="search-result-display" style="display: none;"></div>
-                        </div>
-
-                        <div class="section-card">
-                            <h3 class="section-title">İlgili Taraf</h3>
-                            <div class="search-input-wrapper">
-                                <input type="text" id="relatedPartySearch" class="form-input" placeholder="Kişi/Firma ara...">
-                                <div id="relatedPartySearchResults" class="search-results-list" style="display: none;"></div>
-                            </div>
-                            <div id="selectedRelatedPartyDisplay" class="search-result-display" style="display: none;"></div>
-                        </div>
-
-                    </div>
-                </div> <div class="form-actions-footer bg-white p-4 rounded shadow-sm mt-4 border d-flex justify-content-end align-items-center" style="gap: 15px;">
+                </div> 
+                
+                <div class="form-actions-footer bg-white p-4 rounded shadow-sm mt-4 border d-flex justify-content-end align-items-center" style="gap: 15px;">
                     <button type="button" class="btn btn-secondary btn-lg" id="cancelEditBtn">
                         <i class="fas fa-times mr-2"></i>İptal
                     </button>
