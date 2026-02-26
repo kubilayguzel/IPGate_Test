@@ -552,39 +552,51 @@ const updateOwnerBasedPagination = () => {
 };
 
 const applyMonitoringListFilters = () => {
-    const [ownerFilter, niceFilter, brandFilter] = [document.getElementById('ownerSearch')?.value || '', document.getElementById('niceClassSearch')?.value || '', document.getElementById('brandNameSearch')?.value || ''].map(s => s.toLowerCase());
+    const [ownerFilter, niceFilter, brandFilter] = [
+        document.getElementById('ownerSearch')?.value || '', 
+        document.getElementById('niceClassSearch')?.value || '', 
+        document.getElementById('brandNameSearch')?.value || ''
+    ].map(s => s.toLowerCase().trim());
     
     filteredMonitoringTrademarks = monitoringTrademarks.filter(data => {
-        // 🚀 Her seferinde hesaplamak yerine, baştan hesapladığımız ownerInfo'yu kullanıyoruz
-        const ownerName = data.ownerInfo.name.toLowerCase();
-        const niceClasses = _uniqNice(data).toLowerCase();
-        const markName = (data.title || data.markName || '').toLowerCase();
-        return (!ownerFilter || ownerName.includes(ownerFilter)) && (!niceFilter || niceClasses.includes(niceFilter)) && (!brandFilter || markName.includes(brandFilter));
+        // 🚀 Her seferinde .toLowerCase() hesaplamak yerine peşin hesaplanmış özellikleri kullanır (0 milisaniye)
+        return (!ownerFilter || data._searchOwner.includes(ownerFilter)) && 
+               (!niceFilter || data._searchNice.includes(niceFilter)) && 
+               (!brandFilter || data._searchBrand.includes(brandFilter));
     });
     
     cachedGroupedData = null; 
-    renderMonitoringList(); // Listeyi oluştur
-    updateMonitoringCount(); // Hızlı sayım
+    renderMonitoringList(); 
+    updateMonitoringCount(); 
     updateOwnerBasedPagination(); 
     
-    checkCacheAndToggleButtonStates();
+    // 🔥 AĞIR DB SORGUSU YAPAN FONKSİYON SİLİNDİ. Sadece butonların disable/enable durumunu UI üzerinden çözüyoruz.
+    const startSearchBtn = document.getElementById('startSearchBtn');
+    const btnGenerateReport = document.getElementById('btnGenerateReportAndNotifyGlobal');
+    if (filteredMonitoringTrademarks.length === 0) {
+        if (startSearchBtn) startSearchBtn.disabled = true;
+        if (btnGenerateReport) btnGenerateReport.disabled = true;
+    } else {
+        const bulletinSelect = document.getElementById('bulletinSelect');
+        if (bulletinSelect?.value && startSearchBtn && allSimilarResults.length === 0) {
+            const hasOriginal = bulletinSelect.options[bulletinSelect.selectedIndex]?.dataset?.hasOriginalBulletin === 'true';
+            startSearchBtn.disabled = !hasOriginal;
+        }
+    }
+    
     if (pagination) { pagination.goToPage(1); renderCurrentPageOfResults(); }
 };
 
 const loadInitialData = async () => {
     await loadSharedLayout({ activeMenuLink: 'trademark-similarity-search.html' });
     
-    // Kişiler tablosu ufaktır, hızlıca çekilebilir (Raporlarda isim eşleştirmesi için)
     const { data: personsResult } = await supabase.from('persons').select('*');
     if (personsResult) allPersons = personsResult;
     
     await loadBulletinOptions();
 
-    // 🚀 KRİTİK HIZLANDIRMA: Tüm 'ip_records' tablosunu (on binlerce kayıt) çekmeyi İPTAL ETTİK!
-    // Sadece İzlenen Markaları çekiyoruz. (Düz tablo olduğu için bu 50-100 milisaniye sürer)
     const { data: monitoringData } = await supabase.from('monitoring_trademarks').select('*');
 
-    // 🔥 DÜZELTME: Verinin Array mi yoksa String mi olduğunu kontrol eden akıllı dönüştürücü
     const ensureArray = (val) => {
         if (!val) return [];
         if (Array.isArray(val)) return val;
@@ -595,25 +607,21 @@ const loadInitialData = async () => {
     if (monitoringData) {
         monitoringTrademarks = monitoringData.map(d => {
             const tmData = {
-                id: d.id, 
-                title: d.mark_name, 
-                markName: d.mark_name, 
-                applicationNo: d.application_no, 
-                applicationNumber: d.application_no,
-                ipRecordId: d.ip_record_id, 
-                ownerName: d.owner_name,
-                // 🔥 DÜZELTME: .split() yerine ensureArray kullanıldı
-                brandTextSearch: ensureArray(d.brand_text_search),
-                niceClassSearch: ensureArray(d.nice_class_search),
-                niceClasses: ensureArray(d.nice_classes),
-                imagePath: d.image_path, 
+                id: d.id, title: d.mark_name, markName: d.mark_name, applicationNo: d.application_no, 
+                applicationNumber: d.application_no, ipRecordId: d.ip_record_id, ownerName: d.owner_name,
+                brandTextSearch: ensureArray(d.brand_text_search), niceClassSearch: ensureArray(d.nice_class_search),
+                niceClasses: ensureArray(d.nice_classes), imagePath: d.image_path, 
                 applicants: d.owner_name ? [{ name: d.owner_name }] : []
             };
             
-            // 🚀 SÜPER HIZLI GRUPLAMA: Sahip bilgisini doğrudan düz (flat) veriden alıp objeye gömüyoruz.
             let ownerName = d.owner_name && d.owner_name.trim() !== '' && d.owner_name !== '-' ? d.owner_name : 'Bilinmeyen Sahip';
             let ownerId = d.ip_record_id || `owner_${ownerName.toLowerCase().replace(/[^a-z0-9]/gi, '').substring(0, 20)}`;
             tmData.ownerInfo = { key: ownerId, id: ownerId, name: ownerName };
+            
+            // 🔥 SÜPER HIZLANDIRICI: Filtre aramaları için her şeyi en baştan hesapla ve küçük harfle kaydet
+            tmData._searchOwner = ownerName.toLowerCase();
+            tmData._searchNice = _uniqNice(tmData).toLowerCase();
+            tmData._searchBrand = (tmData.title || tmData.markName || '').toLowerCase();
             
             return tmData;
         });
@@ -1489,11 +1497,34 @@ function setupEditCriteriaModal() {
         const modal = document.getElementById('editCriteriaModal');
         const brandTextArray = Array.from(modal.querySelector('#brandTextSearchList').querySelectorAll('.list-item-text')).map(el => el.textContent);
         const niceClassArray = Array.from(modal.querySelector('#niceClassSearchList').querySelectorAll('.list-item-text')).map(el => parseInt(el.textContent));
+        const markId = modal.dataset.markId;
+
+        // 1. Veritabanını Güncelle
+        const { error } = await supabase.from('monitoring_trademarks').update({ 
+            brand_text_search: brandTextArray.join(', '), 
+            nice_class_search: niceClassArray.join(', ') 
+        }).eq('id', markId);
         
-        // Supabase doğrudan Update
-        const { error } = await supabase.from('monitoring_trademarks').update({ brand_text_search: brandTextArray.join(', '), nice_class_search: niceClassArray.join(', ') }).eq('id', modal.dataset.markId);
-        if (!error) { showNotification('İzleme kriterleri güncellendi.', 'success'); $('#editCriteriaModal').modal('hide'); loadInitialData(); }
-        else showNotification('Hata oluştu', 'error');
+        if (!error) { 
+            showNotification('İzleme kriterleri güncellendi.', 'success'); 
+            $('#editCriteriaModal').modal('hide'); 
+            
+            // 🔥 TUTUCU CACHE YIKICI: Veritabanından tüm markaları baştan çekmek (loadInitialData) YERİNE, 
+            // sadece anlık bellekteki markayı bulup nokta atışı güncelliyoruz!
+            const tmIndex = monitoringTrademarks.findIndex(t => String(t.id) === String(markId));
+            if (tmIndex !== -1) {
+                monitoringTrademarks[tmIndex].brandTextSearch = brandTextArray;
+                monitoringTrademarks[tmIndex].niceClassSearch = niceClassArray;
+                // Arama indeksini anında tazele
+                monitoringTrademarks[tmIndex]._searchNice = _uniqNice(monitoringTrademarks[tmIndex]).toLowerCase();
+            }
+            
+            // Ekranı yeni verilere göre ışık hızında tekrar çiz
+            applyMonitoringListFilters(); 
+            
+        } else {
+            showNotification('Hata oluştu', 'error');
+        }
     });
 }
 
