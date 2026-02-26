@@ -1246,58 +1246,43 @@ const buildReportData = async (results) => {
     return reportData;
 };
     
-
-const createObjectionTasks = async (results, bulletinNo, ownerId = null) => {
+const createObjectionTasks = async (results, bulletinNo) => {
     let createdTaskCount = 0;
     const { data: { session } } = await supabase.auth.getSession();
     const callerEmail = session?.user?.email || 'anonim@evreka.com';
-
-    // Rapor verileri için bülten tarihini çekiyoruz
-    const bulletinKey = document.getElementById('bulletinSelect')?.value;
-    let realBulletinDateStr = null;
-    if (bulletinNo) {
-        const { data: bData } = await supabase.from('trademark_bulletins').select('bulletin_date').eq('bulletin_no', bulletinNo).limit(1).single();
-        if (bData && bData.bulletin_date) realBulletinDateStr = bData.bulletin_date;
-    }
 
     for (const r of results) {
         try {
             console.log(`⏳ ${r.markName} için itiraz görevi tetikleniyor...`);
             
-            // 1. Rakip (Third Party) Portföy Kaydını Oluştur
-            let thirdPartyIpRecordId = null;
-            try {
-                // Not: portfolioByOppositionCreator'ın globalde veya import ile tanımlı olduğundan emin olun
-                const portfolioResult = await window.portfolioByOppositionCreator.createThirdPartyPortfolioFromBulletin(r.bulletinId || r.id, null);
-                if (portfolioResult && portfolioResult.success) {
-                    thirdPartyIpRecordId = portfolioResult.recordId;
-                }
-            } catch (portfolioErr) {
-                console.warn("⚠️ Rakip portföy oluşturulurken hata:", portfolioErr);
-            }
-
-            // 2. Görevi (Task 20) ve İşlemi (Transaction) Oluştur
+            // 🔥 Rakip portföy, transaction ve task üretme işlemi TAMAMEN backend'e devredildi! 
+            // 406 Hatası kökünden engellendi.
             const { data: taskResponse, error: invokeError } = await supabase.functions.invoke('create-objection-task', {
                 body: {
                     monitoredMarkId: r.monitoredTrademarkId,
-                    thirdPartyIpRecordId: thirdPartyIpRecordId, // Rakibin ID'si Edge Function'a gidiyor
-                    similarMark: { applicationNo: r.applicationNo, markName: r.markName, niceClasses: r.niceClasses, similarityScore: r.similarityScore },
+                    similarMark: { 
+                        applicationNo: r.applicationNo, 
+                        markName: r.markName, 
+                        niceClasses: r.niceClasses, 
+                        similarityScore: r.similarityScore,
+                        applicationDate: r.applicationDate,
+                        imagePath: r.imagePath || r.image_path,
+                        holders: r.holders
+                    },
                     similarMarkName: r.markName, 
-                    bulletinNo, 
-                    callerEmail,
+                    bulletinNo: bulletinNo, 
+                    callerEmail: callerEmail,
                     bulletinRecordData: {
-                        bulletinId: r.bulletinId, bulletinNo: bulletinNo, markName: r.markName, applicationNo: r.applicationNo,
-                        applicationDate: r.applicationDate, imagePath: r.imagePath, niceClasses: r.niceClasses, holders: r.holders || []
+                        bulletinId: r.bulletinId || r.id, 
+                        imagePath: r.imagePath || r.image_path
                     }
                 }
             });
 
-            if (invokeError) {
-                console.error("❌ Fonksiyon Çalışma Hatası:", invokeError);
-            } else if (!taskResponse?.success) {
-                console.error("❌ Görev Oluşturulamadı:", taskResponse?.error);
+            if (invokeError || !taskResponse?.success) {
+                console.error("❌ Görev Oluşturulamadı:", invokeError || taskResponse?.error);
             } else {
-                console.log(`✅ Görev Başarıyla Oluştu: ${taskResponse.taskId}`);
+                console.log(`✅ Görev, 3. Taraf Portföy ve Transaction Başarıyla Oluştu. Task ID: ${taskResponse.taskId}`);
                 createdTaskCount++;
             }
         } catch (e) { console.error("❌ Beklenmeyen Hata:", e); }
@@ -1339,8 +1324,7 @@ const handleReportGeneration = async (event, options = {}) => {
         let createdTaskCount = 0;
         if (createTasks) {
             console.log(`[RAPOR GÖREV] İtiraz görevleri oluşturuluyor...`);
-            // Yayına İtiraz İşleri (Tip 20) ve Rakip Portföyler burada oluşturuluyor
-            createdTaskCount = await createObjectionTasks(filteredResults, bulletinNo, ownerId);
+            createdTaskCount = await createObjectionTasks(filteredResults, bulletinNo);
         }
 
         console.log(`[RAPOR VERİ] PDF/Word için veriler hazırlanıyor...`);
@@ -1363,30 +1347,88 @@ const handleReportGeneration = async (event, options = {}) => {
             link.download = isGlobal ? `Toplu_Rapor.zip` : `${ownerName.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 25)}_Rapor.zip`;
             document.body.appendChild(link); link.click(); document.body.removeChild(link);
 
-            // 🔥 TİP 66 TAMAMEN SİLİNDİ! 
-            // Sadece tek bir adet "Müvekkil Onayı Bekliyor" statüsünde Mail Taslağı bırakıyoruz.
+            // Sadece tek bir adet Mail Taslağı bırakıyoruz (Şablon Kullanarak)
             if (createTasks && reportData.length > 0) {
                 try {
                     const firstMark = reportData[0].monitoredMark;
                     const targetRecordId = filteredResults[0].monitoredTrademarkId;
                     
-                    let finalClientId = firstMark.clientId;
-                    if (finalClientId && String(finalClientId).startsWith('owner_')) finalClientId = null;
+                    // Gerçek Client ID'yi Bul
+                    let finalClientId = null;
+                    if (targetRecordId) {
+                        const { data: applicantData } = await supabase
+                            .from('ip_record_applicants')
+                            .select('person_id')
+                            .eq('ip_record_id', targetRecordId)
+                            .order('order_index', { ascending: true })
+                            .limit(1)
+                            .maybeSingle();
 
+                        if (applicantData && applicantData.person_id) {
+                            finalClientId = applicantData.person_id;
+                        }
+                    }
+
+                    // 🔥 CRASH FIX: Bülten Tarihini burada (Mail atarken) tekrar çekip tanımlıyoruz!
+                    let realBulletinDateStr = null;
+                    const { data: bData } = await supabase.from('trademark_bulletins').select('bulletin_date').eq('bulletin_no', bulletinNo).limit(1).maybeSingle();
+                    if (bData && bData.bulletin_date) {
+                        realBulletinDateStr = bData.bulletin_date;
+                    }
+
+                    // Resmi Son Tarihi JS Üzerinden Hesapla (Şablon İçin)
+                    let objectionDeadline = "-";
+                    if (realBulletinDateStr) {
+                        const bDate = new Date(realBulletinDateStr);
+                        if (!isNaN(bDate.getTime())) {
+                            bDate.setMonth(bDate.getMonth() + 2);
+                            let iter = 0;
+                            while ((bDate.getDay() === 0 || bDate.getDay() === 6) && iter < 30) {
+                                bDate.setDate(bDate.getDate() + 1);
+                                iter++;
+                            }
+                            objectionDeadline = `${String(bDate.getDate()).padStart(2, '0')}.${String(bDate.getMonth() + 1).padStart(2, '0')}.${bDate.getFullYear()}`;
+                        }
+                    }
+
+                    // ŞABLONU ÇEK VE DEĞİŞKENLERİ YERLEŞTİR
+                    let subject = `${bulletinNo} Sayılı Bülten İzleme Raporu`;
+                    let body = "<p>Sayın İlgili,</p><p>Marka izleme raporunuz ekte sunulmuştur.</p>";
+
+                    const { data: tmplData } = await supabase.from('mail_templates').select('*').eq('id', 'tmpl_watchnotice').maybeSingle();
+                    
+                    if (tmplData) {
+                        subject = tmplData.subject || subject;
+                        body = tmplData.body || body;
+
+                        const replacements = {
+                            "{{bulletinNo}}": String(bulletinNo),
+                            "{{muvekkil_adi}}": firstMark.ownerName || "Sayın İlgili",
+                            "{{objection_deadline}}": objectionDeadline
+                        };
+
+                        for (const [key, val] of Object.entries(replacements)) {
+                            subject = subject.split(key).join(val);
+                            body = body.split(key).join(val);
+                        }
+                    }
+
+                    // VERİTABANINA KAYDET
                     await supabase.from('mail_notifications').insert({
                         related_ip_record_id: targetRecordId,
                         client_id: finalClientId,
                         bulletin_no: String(bulletinNo),
                         applicant_name: firstMark.ownerName,
-                        subject: `${bulletinNo} Sayılı Bülten İzleme Raporu`,
-                        body: "<p>Sayın İlgili,</p><p>Marka izleme raporunuz ekte sunulmuştur.</p>",
+                        subject: subject,
+                        body: body,
+                        template_id: "tmpl_watchnotice",
                         status: "awaiting_client_approval", 
                         notification_type: "marka",
                         source: "bulletin_watch_system",
                         is_draft: true
                     });
                     
-                    console.log("✅ Taslak Mail Başarıyla Oluşturuldu!");
+                    console.log("✅ Taslak Mail Şablon Kullanılarak Başarıyla Oluşturuldu!");
 
                 } catch (e) { console.error("Mail oluşturma hatası:", e); }
 
