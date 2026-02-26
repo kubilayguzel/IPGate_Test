@@ -108,8 +108,8 @@ const _getBrandImageByAppNo = async (appNo) => {
     if (!appNo || appNo === '-') return '';
     if (_storageUrlCache.has(appNo)) return _storageUrlCache.get(appNo);
 
-    // 🔥 EKSİK OLAN SATIR EKLENDİ: Boşlukları tolere etmek için güvenli ID oluşturuyoruz
-    const safeAppNo = appNo.toString().replace(/\s+/g, '%');
+    // Boşlukları temizle ve güvenli arama formatına getir
+    const safeAppNo = appNo.toString().trim().replace(/\s+/g, '%');
 
     try {
         // 1. Önce bülten kayıtlarında ara (Sadece resmi olanları getir)
@@ -127,14 +127,17 @@ const _getBrandImageByAppNo = async (appNo) => {
         }
 
         // 2. Bulamazsa Portföyde ara
-        const { data: ipRec } = await supabase
+        // 🔥 KRİTİK DÜZELTME: Tabloda olmayan 'details' kolonu sorgudan çıkartıldı (400 Bad Request hatasını çözer)
+        const { data: ipRec, error: ipErr } = await supabase
             .from('ip_records')
-            .select('brand_image_url, details')
+            .select('brand_image_url') 
             .ilike('application_number', `%${safeAppNo}%`) 
             .limit(1);
+            
+        if (ipErr) throw ipErr;
 
         if (ipRec && ipRec.length > 0) {
-            const foundImage = ipRec[0].brand_image_url || ipRec[0].details?.brandImage;
+            const foundImage = ipRec[0].brand_image_url;
             if (foundImage) {
                 const url = _normalizeImageSrc(foundImage);
                 _storageUrlCache.set(appNo, url);
@@ -142,7 +145,7 @@ const _getBrandImageByAppNo = async (appNo) => {
             }
         }
     } catch (err) {
-        console.warn("Görsel aranırken hata oluştu (AppNo: " + appNo + "):", err);
+        console.warn("Görsel aranırken hata oluştu (AppNo: " + appNo + "):", err.message || err);
     }
 
     _storageUrlCache.set(appNo, '');
@@ -387,11 +390,28 @@ const attachLazyLoadListeners = () => {
                 const group = currentGroupedData[container.dataset.ownerKey];
                 if (group && group.trademarks) {
                     container.innerHTML = `<table class="table table-sm nested-table"><thead><tr><th></th><th class="col-nest-img">Görsel</th><th class="col-nest-name">Marka Adı</th><th class="col-nest-appno">Başvuru No</th><th class="col-nest-nice">Nice Sınıfı</th><th class="col-nest-date">B. Tarihi</th></tr></thead><tbody>
-                        ${group.trademarks.map(({ tm, ip }) => {
-                            const [name, img, appNo, nices, date] = [_pickName(ip, tm), _pickImg(ip, tm), _pickAppNo(ip, tm), _uniqNice(ip || tm), _pickAppDate(ip, tm)];
-                            return `<tr class="trademark-detail-row"><td class="td-nested-toggle"></td><td class="td-nested-img">${img ? `<div class="tm-img-box tm-img-box-sm"><img class="trademark-image-thumbnail-large" src="${img}" loading="lazy" alt="Marka"></div>` : `<div class="tm-img-box tm-img-box-sm tm-placeholder">-</div>`}</td><td class="td-nested-name"><strong>${name}</strong></td><td class="td-nested-appno">${appNo}</td><td class="td-nested-nice">${nices || '-'}</td><td class="td-nested-date">${date}</td></tr>`;
+                            ${group.trademarks.map(({ tm, ip }) => {
+                            const [name, rawImg, appNo, nices, date] = [_pickName(ip, tm), _pickImg(ip, tm), _pickAppNo(ip, tm), _uniqNice(ip || tm), _pickAppDate(ip, tm)];
+                            const img = _normalizeImageSrc(rawImg); // 🔥 DÜZELTME: Link formata çevrildi
+                            
+                            return `<tr class="trademark-detail-row"><td class="td-nested-toggle"></td><td class="td-nested-img">${img ? `<div class="tm-img-box tm-img-box-sm"><img class="trademark-image-thumbnail-large" src="${img}" loading="lazy" alt="Marka"></div>` : `<div class="tm-img-box tm-img-box-sm tm-placeholder left-panel-lazy-img" data-appno="${appNo}">-</div>`}</td><td class="td-nested-name"><strong>${name}</strong></td><td class="td-nested-appno">${appNo}</td><td class="td-nested-nice">${nices || '-'}</td><td class="td-nested-date">${date}</td></tr>`;
                         }).join('')}</tbody></table>`;
                     container.dataset.loaded = 'true';
+
+                    // 🔥 DÜZELTME: Sol paneldeki eksik resimleri arka planda Supabase'den çek
+                    setTimeout(() => {
+                        container.querySelectorAll('.left-panel-lazy-img').forEach(async (el) => {
+                            const appNo = el.dataset.appno;
+                            if (appNo && appNo !== '-') {
+                                try {
+                                    const fetchedUrl = await _getBrandImageByAppNo(appNo);
+                                    if (fetchedUrl) {
+                                        el.parentElement.innerHTML = `<div class="tm-img-box tm-img-box-sm"><img class="trademark-image-thumbnail-large" src="${fetchedUrl}" loading="lazy" alt="Marka"></div>`;
+                                    }
+                                } catch (e) {}
+                            }
+                        });
+                    }, 50);
                 }
             }
         }
@@ -482,9 +502,9 @@ const renderCurrentPageOfResults = () => {
             return;
         }
 
-        const [headerName, headerImg, appNo] = [_pickName(null, tmMeta), _pickImg(null, tmMeta), _pickAppNo(null, tmMeta)];
+        const [headerName, rawHeaderImg, appNo] = [_pickName(null, tmMeta), _pickImg(null, tmMeta), _pickAppNo(null, tmMeta)];
+        const headerImg = _normalizeImageSrc(rawHeaderImg); // 🔥 DÜZELTME: Link formata çevrildi
         const modalData = { id: tmMeta.id, ipRecordId: tmMeta.ipRecordId, markName: headerName, applicationNumber: appNo, owner: tmMeta.ownerName, niceClasses: getNiceClassNumbers(tmMeta), brandImageUrl: headerImg, brandTextSearch: tmMeta.brandTextSearch || [], niceClassSearch: tmMeta.niceClassSearch || [] };
-        
         const imageHtml = headerImg ? `<div class="group-trademark-image"><div class="tm-img-box tm-img-box-sm"><img src="${headerImg}" class="group-header-img"></div></div>` : `<div class="group-trademark-image" data-header-appno="${appNo}"><div class="tm-img-box tm-img-box-sm tm-placeholder">?</div></div>`;
         const groupHeaderRow = document.createElement('tr');
         groupHeaderRow.className = 'group-header';
@@ -564,6 +584,14 @@ const loadInitialData = async () => {
     // Sadece İzlenen Markaları çekiyoruz. (Düz tablo olduğu için bu 50-100 milisaniye sürer)
     const { data: monitoringData } = await supabase.from('monitoring_trademarks').select('*');
 
+    // 🔥 DÜZELTME: Verinin Array mi yoksa String mi olduğunu kontrol eden akıllı dönüştürücü
+    const ensureArray = (val) => {
+        if (!val) return [];
+        if (Array.isArray(val)) return val;
+        if (typeof val === 'string') return val.split(',').map(s => s.trim()).filter(Boolean);
+        return [val];
+    };
+
     if (monitoringData) {
         monitoringTrademarks = monitoringData.map(d => {
             const tmData = {
@@ -574,9 +602,10 @@ const loadInitialData = async () => {
                 applicationNumber: d.application_no,
                 ipRecordId: d.ip_record_id, 
                 ownerName: d.owner_name,
-                brandTextSearch: d.brand_text_search ? d.brand_text_search.split(',').map(s=>s.trim()) : [],
-                niceClassSearch: d.nice_class_search ? d.nice_class_search.split(',').map(s=>s.trim()) : [],
-                niceClasses: d.nice_classes ? d.nice_classes.split(',').map(s=>s.trim()) : [],
+                // 🔥 DÜZELTME: .split() yerine ensureArray kullanıldı
+                brandTextSearch: ensureArray(d.brand_text_search),
+                niceClassSearch: ensureArray(d.nice_class_search),
+                niceClasses: ensureArray(d.nice_classes),
                 imagePath: d.image_path, 
                 applicants: d.owner_name ? [{ name: d.owner_name }] : []
             };
@@ -621,9 +650,22 @@ const loadBulletinOptions = async () => {
     if (cacheData) {
         cacheData.forEach(rec => {
             if(!rec.bulletin_key) return;
+            
+            // 🔥 DÜZELTME 1: "GLOBAL" kelimesi içeren (manuel) kayıtları bültenmiş gibi listeye ekleme
+            if (String(rec.bulletin_key).includes('GLOBAL')) return;
+
             const parts = String(rec.bulletin_key).split('_');
             const normalizedKey = `${parts[0]}_${(parts[1] || '').replace(/\D/g, '')}`;
-            if (!allBulletins.has(normalizedKey)) allBulletins.set(normalizedKey, { bulletinNo: parts[0], bulletinKey: normalizedKey, hasOriginalBulletin: false, displayName: `${parts[0]} (Sadece Arama)` });
+            
+            if (!allBulletins.has(normalizedKey)) {
+                // 🔥 DÜZELTME 2: (Sadece Arama) yerine (Bellek) ibaresi kullanılıyor
+                allBulletins.set(normalizedKey, { 
+                    bulletinNo: parts[0], 
+                    bulletinKey: normalizedKey, 
+                    hasOriginalBulletin: false, 
+                    displayName: `${parts[0]} (Bellek)` 
+                });
+            }
         });
     }
 
