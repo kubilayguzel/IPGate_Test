@@ -617,6 +617,41 @@ export class DocumentReviewManager {
         }
     }
 
+    // 🔥 YENİ: İŞLEM KAYDETME YARDIMCISI (Eksik Metod eklendi)
+    async _addTransaction(recordId, txData) {
+        const txId = generateUUID();
+        const payload = {
+            id: txId,
+            ip_record_id: recordId,
+            transaction_type_id: String(txData.type),
+            transaction_hierarchy: txData.transactionHierarchy || 'parent',
+            parent_id: txData.parentId || null,
+            description: txData.description || '',
+            note: txData.notes || null,
+            transaction_date: txData.date || txData.timestamp || new Date().toISOString(),
+            user_id: txData.userId || this.currentUser?.uid,
+            user_email: txData.userEmail || this.currentUser?.email,
+            user_name: txData.userName || this.currentUser?.displayName || 'Kullanıcı',
+            created_at: new Date().toISOString()
+        };
+        
+        const { error } = await supabase.from('transactions').insert(payload);
+        if (error) return { success: false, error: error.message };
+
+        if (txData.documents && txData.documents.length > 0) {
+            const docInserts = txData.documents.map(d => ({
+                transaction_id: txId,
+                document_name: d.name,
+                document_url: d.url || d.downloadURL,
+                document_type: d.type || 'application/pdf',
+                document_designation: d.documentDesignation || 'Evrak',
+                uploaded_at: d.uploadedAt || new Date().toISOString()
+            }));
+            await supabase.from('transaction_documents').insert(docInserts);
+        }
+        return { success: true, id: txId };
+    }
+
     async handleSave() {
         if (!this.matchedRecord) { alert('Lütfen önce bir kayıt ile eşleştirin.'); return; }
         const parentTxId = document.getElementById('parentTransactionSelect').value;
@@ -728,26 +763,19 @@ export class DocumentReviewManager {
                     description: newParentDesc,
                     transactionHierarchy: 'parent',
                     oppositionOwner: ownerInput,
-                    oppositionPetitionFileUrl: oppositionFileUrl,
-                    oppositionEpatsPetitionFileUrl: oppositionEpatsFileUrl,
+                    documents: [{
+                        name: oppositionFileName,
+                        url: oppositionFileUrl,
+                        documentDesignation: 'İtiraz Dilekçesi'
+                    }],
                     timestamp: new Date().toISOString()
                 };
-                const newParentResult = await ipRecordsService.addTransactionToRecord(this.matchedRecord.id, newParentData);
+                
+                const newParentResult = await this._addTransaction(this.matchedRecord.id, newParentData);
                 if (newParentResult.success) newParentTxId = newParentResult.id;
             }
 
             const finalParentId = newParentTxId || parentTxId;
-
-            const transactionData = {
-                type: childTypeId,
-                transactionHierarchy: 'child',
-                parentId: finalParentId,
-                description: childTypeObj.alias || childTypeObj.name,
-                date: deliveryDateStr ? new Date(deliveryDateStr).toISOString() : new Date().toISOString(),
-            };
-
-            const txResult = await ipRecordsService.addTransactionToRecord(this.matchedRecord.id, transactionData);
-            const childTransactionId = txResult.id;
 
             // 🔥 GÜNCELLENMİŞ TAŞIMA KODU (Yol Temizleyici Eklendi)
             let finalPdfUrl = this.pdfData.fileUrl || this.pdfData.download_url;
@@ -760,7 +788,7 @@ export class DocumentReviewManager {
                 if (sourcePath.startsWith('http')) {
                     const urlParts = sourcePath.split('/unindexed_pdfs/');
                     if (urlParts.length > 1) {
-                        sourcePath = urlParts[1]; // Sadece userid/dosyaismi.pdf kısmını alıyoruz
+                        sourcePath = urlParts[1]; 
                     }
                 }
                 
@@ -770,7 +798,6 @@ export class DocumentReviewManager {
                 const cleanName = (this.pdfData.fileName || 'evrak.pdf').replace(/[^a-zA-Z0-9.\-_]/g, '_');
                 const targetPath = `indexed_pdfs/${this.matchedRecord.id}/${Date.now()}_${cleanName}`;
                 
-                // Kaynak yolu tam temizlenmiş haliyle gönder
                 const { error: moveError } = await supabase.storage.from(STORAGE_BUCKET).move(sourcePath, targetPath);
                 
                 if (!moveError) {
@@ -783,53 +810,27 @@ export class DocumentReviewManager {
                 }
             }
 
-            // Dosyaları Transaction içine JSON olarak güncelle
-            if (txResult.success && (finalPdfUrl || (String(childTypeId) === '27' && oppositionFileUrl))) {
-                const { data: existingTx } = await supabase.from('transactions').select('details').eq('id', childTransactionId).single();
-                let currentDocs = existingTx?.details?.documents || [];
-                
-                if (finalPdfUrl) {
-                    currentDocs.push({
-                        id: generateUUID(),
-                        name: this.pdfData.fileName || 'Resmi Yazı.pdf',
-                        downloadURL: finalPdfUrl, // 🔥 Artık yeni url'yi (indexed_pdfs içindeki) kullanıyor
-                        type: 'application/pdf',
-                        documentDesignation: 'Resmi Yazı',
-                        uploadedAt: new Date().toISOString()
-                    });
-                }
-                
-                if (String(childTypeId) === '27' && oppositionFileUrl) {
-                    currentDocs.push({
-                        id: generateUUID(),
-                        name: oppositionFileName || 'opposition_petition.pdf',
-                        downloadURL: oppositionFileUrl,
-                        type: 'application/pdf',
-                        documentDesignation: 'İtiraz Dilekçesi',
-                        uploadedAt: new Date().toISOString()
-                    });
-                    if (oppositionEpatsFileUrl) {
-                        currentDocs.push({
-                            id: generateUUID(),
-                            name: oppositionEpatsFileName || 'opposition_epats_petition.pdf',
-                            downloadURL: oppositionEpatsFileUrl,
-                            type: 'application/pdf',
-                            documentDesignation: 'Karşı ePATS Dilekçesi',
-                            uploadedAt: new Date().toISOString()
-                        });
-                    }
-                }
-                
-                await supabase.from('transactions').update({
-                    details: { ...(existingTx?.details || {}), documents: currentDocs }
-                }).eq('id', childTransactionId);
-            }
+            const transactionData = {
+                type: childTypeId,
+                transactionHierarchy: 'child',
+                parentId: finalParentId,
+                description: childTypeObj.alias || childTypeObj.name,
+                date: deliveryDateStr ? new Date(deliveryDateStr).toISOString() : new Date().toISOString(),
+                documents: [{
+                    name: this.pdfData.fileName || 'Resmi Yazı.pdf',
+                    url: finalPdfUrl,
+                    documentDesignation: 'Resmi Yazı'
+                }]
+            };
+
+            const txResult = await this._addTransaction(this.matchedRecord.id, transactionData);
+            const childTransactionId = txResult.id;
 
             // İş Tetikleme (Task)
             let shouldTriggerTask = false;
             const recordType = (this.matchedRecord.recordOwnerType === 'self') ? 'Portföy' : '3. Taraf';
             
-            const parentTypeId = String(parentTx?.type || ''); 
+            const pTypeIdStr = String(parentTx?.type || ''); 
             const childTypeIdStr = String(childTypeId);
             
             const taskTriggerMatrix = {
@@ -838,15 +839,15 @@ export class DocumentReviewManager {
             };
             let skipFallback = false;
 
-            if (taskTriggerMatrix[parentTypeId]) {
+            if (taskTriggerMatrix[pTypeIdStr]) {
                 const allGovernedChildren = [
-                    ...(taskTriggerMatrix[parentTypeId]["Portföy"] || []),
-                    ...(taskTriggerMatrix[parentTypeId]["3. Taraf"] || [])
+                    ...(taskTriggerMatrix[pTypeIdStr]["Portföy"] || []),
+                    ...(taskTriggerMatrix[pTypeIdStr]["3. Taraf"] || [])
                 ];
 
                 if (allGovernedChildren.includes(childTypeIdStr)) {
                     skipFallback = true; 
-                    if (taskTriggerMatrix[parentTypeId][recordType] && taskTriggerMatrix[parentTypeId][recordType].includes(childTypeIdStr)) {
+                    if (taskTriggerMatrix[pTypeIdStr][recordType] && taskTriggerMatrix[pTypeIdStr][recordType].includes(childTypeIdStr)) {
                         shouldTriggerTask = true;
                     }
                 }
@@ -947,42 +948,21 @@ export class DocumentReviewManager {
 
                 for (const tType of tasksToCreate) {
                     let taskDesc = notes || `Otomatik oluşturulan görev.`;
-                    
-                    // 1. Varsayılan (Standart) Ayarlar (Eski sisteme sadık)
                     let taskStatus = 'awaiting_client_approval';
-                    let currentAssignedUser = { uid: SELCAN_UID, email: SELCAN_EMAIL }; // Sabit Selcan Hanım
+                    let currentAssignedUser = { uid: SELCAN_UID, email: SELCAN_EMAIL }; 
 
-                    // 2. İSTİSNA: Eğer tetiklenen iş Type 66 (Değerlendirme) ise kuralı değiştir
                     if (String(tType) === "66") {
                         taskDesc = "Müvekkil değerlendirme ayarı açık olduğu için ek olarak tetiklendi.";
-                        taskStatus = 'open'; // İstisna: Açık statüsünde oluşsun
+                        taskStatus = 'open'; 
                         
                         try {
-                            // Supabase'den task_assignments (Görev Atamaları) tablosundaki gerçek kuralı çek
-                            const { data: assignmentRule } = await supabase
-                                .from('task_assignments')
-                                .select('assignee_ids')
-                                .eq('id', '66')
-                                .single();
-
+                            const { data: assignmentRule } = await supabase.from('task_assignments').select('assignee_ids').eq('id', '66').single();
                             if (assignmentRule && assignmentRule.assignee_ids && assignmentRule.assignee_ids.length > 0) {
-                                const targetUid = assignmentRule.assignee_ids[0]; // İlk atanan kişi (Örn: Ali'nin UID'si)
-                                
-                                // Hedef kullanıcının e-posta adresini users tablosundan çek
-                                const { data: userData } = await supabase
-                                    .from('users')
-                                    .select('email')
-                                    .eq('id', targetUid)
-                                    .single();
-                                    
-                                currentAssignedUser = {
-                                    uid: targetUid,
-                                    email: userData ? userData.email : 'bilinmiyor@evreka.com'
-                                };
+                                const targetUid = assignmentRule.assignee_ids[0]; 
+                                const { data: userData } = await supabase.from('users').select('email').eq('id', targetUid).single();
+                                currentAssignedUser = { uid: targetUid, email: userData ? userData.email : 'bilinmiyor@evreka.com' };
                             }
-                        } catch (err) {
-                            console.warn("Type 66 atama kuralı alınamadı, varsayılana dönülüyor:", err);
-                        }
+                        } catch (err) {}
                     }
 
                     const taskData = {
@@ -1002,9 +982,9 @@ export class DocumentReviewManager {
                         officialDueDate: officialDueDate.toISOString(),
                         createdAt: new Date().toISOString(),
                         updatedAt: new Date().toISOString(),
-                        status: taskStatus, // 🔥 Dinamik Statü (66 için open, diğerleri için awaiting_client_approval)
+                        status: taskStatus, 
                         priority: 'medium',
-                        assignedTo_uid: currentAssignedUser.uid, // 🔥 Dinamik Atama (66 için Ali, diğerleri için Selcan)
+                        assignedTo_uid: currentAssignedUser.uid, 
                         assignedTo_email: currentAssignedUser.email, 
                         createdBy: { uid: this.currentUser.uid, email: this.currentUser.email },
                         taskOwner: taskOwner.length > 0 ? taskOwner : null,
@@ -1032,7 +1012,7 @@ export class DocumentReviewManager {
                             timestamp: new Date().toISOString()
                         };
                         if (targetHierarchy === 'child') triggeredTransactionData.parentId = finalParentId;
-                        await ipRecordsService.addTransactionToRecord(this.matchedRecord.id, triggeredTransactionData);
+                        await this._addTransaction(this.matchedRecord.id, triggeredTransactionData);
                     }
                 }
             }
@@ -1046,58 +1026,35 @@ export class DocumentReviewManager {
                 } catch (err) {}
             }
 
-                await supabase.from(UNINDEXED_PDFS_COLLECTION).update({
+            // PDF durumunu Indexed yap
+            await supabase.from(UNINDEXED_PDFS_COLLECTION).update({
                 status: 'indexed',
-                download_url: finalPdfUrl, // Ana sütunu yeni linkle güncelle
+                download_url: finalPdfUrl, 
                 details: {
                     ...(this.pdfData.details || {}),
-                    file_path: finalPdfPath, // JSON içindeki yolu yeni klasörle değiştir
+                    file_path: finalPdfPath, 
                     indexed_at: new Date().toISOString(),
                     final_transaction_id: childTransactionId,
                     matched_record_id: this.matchedRecord.id
                 }
             }).eq('id', String(this.pdfId));
 
-            // --- MEVCUT KOD: Supabase PDF Statüsü Güncelleme ---
-                await supabase.from(UNINDEXED_PDFS_COLLECTION).update({
-                    status: 'indexed',
-                    download_url: finalPdfUrl,
-                    details: {
-                        ...(this.pdfData.details || {}),
-                        file_path: finalPdfPath,
-                        indexed_at: new Date().toISOString(),
-                        final_transaction_id: childTransactionId,
-                        matched_record_id: this.matchedRecord.id
-                    }
-                }).eq('id', String(this.pdfId));
-
-            // --- MÜVEKKİL BİLDİRİMİNİ TETİKLE (SUPABASE EDGE FUNCTION) ---
+            // --- MÜVEKKİL BİLDİRİMİNİ TETİKLE ---
             try {
-                console.log(`📤 Bildirim Taslağı Oluşturuluyor. Record: ${this.matchedRecord.id}, Type: ${childTypeId}`);
-
-                // UI'dan tarih verilerini al (zaten handleSave içinde yukarılarda hesaplanıyor)
                 const tebligTarihiStr = document.getElementById('detectedDate').value; 
                 const sonItirazTarihiStr = document.getElementById('calculatedDeadlineDisplay')?.value || '';
 
-                const { data: funcData, error: funcError } = await supabase.functions.invoke('send-indexing-notification', {
+                await supabase.functions.invoke('send-indexing-notification', {
                     body: {
                         recordId: this.matchedRecord.id, 
                         childTypeId: childTypeId,
-                        
-                        // 🔥 YENİ EKLENEN KISIM: Tarihleri ve belge IDsini fonksiyona gönderiyoruz
                         tebligTarihi: tebligTarihiStr,
                         sonItirazTarihi: sonItirazTarihiStr,
                         pdfId: this.pdfId 
                     }
                 });
-
-                if (funcError) throw funcError;
-                console.log("🔔 Bildirim Taslağı başarıyla veritabanına eklendi:", funcData);
-            } catch (notifyErr) {
-                console.error("⚠️ Bildirim oluşturulurken hata oluştu:", notifyErr);
-            }
-            // --- TETİKLEYİCİ SONU ---
-
+            } catch (notifyErr) {}
+            
             showNotification('İşlem başarıyla tamamlandı!', 'success');
             setTimeout(() => window.location.href = 'bulk-indexing-page.html', 1500);
 
@@ -1148,46 +1105,47 @@ export class DocumentReviewManager {
         }
     }
 
+    // 🔥 DÜZELTME: Doğrudan veritabanı araması
     async handleManualSearch(query) {
-        const resultsContainer = document.getElementById('manualSearchResults');
-        if (!query || query.length < 3) { resultsContainer.style.display = 'none'; return; }
-        const result = await ipRecordsService.searchRecords(query);
-        if (result.success) this.renderSearchResults(result.data);
-    }
-
-    renderSearchResults(results) {
         const container = document.getElementById('manualSearchResults');
-        if (!container) return;
+        if (!query || query.length < 3) { container.style.display = 'none'; return; }
         
-        container.innerHTML = '';
-        container.style.display = results.length ? 'block' : 'none';
-        if (!results.length) { container.innerHTML = '<div class="p-2 text-muted italic">Sonuç bulunamadı.</div>'; return; }
+        const { data } = await supabase.from('ip_records').select('*')
+            .or(`title.ilike.%${query}%,brand_name.ilike.%${query}%,application_number.ilike.%${query}%`)
+            .limit(10);
+            
+        if (!data || data.length === 0) {
+            container.innerHTML = '<div class="p-2 text-muted italic">Sonuç bulunamadı.</div>';
+            container.style.display = 'block';
+            return;
+        }
 
-        container.innerHTML = results.map(r => {
-            const countryName = this.countryMap.get(r.country) || r.country || '-';
-            const detailText = `${r.applicationNumber || r.internationalRegNumber || r.wipoIR || '-'} • ${r.origin || 'WIPO'} • ${countryName}`;
+        container.innerHTML = data.map(r => {
+            const countryName = this.countryMap.get(r.country_code || r.country) || r.country_code || r.country || '-';
+            const detailText = `${r.application_number || r.wipo_ir || '-'} • ${r.origin || 'WIPO'} • ${countryName}`;
             
             return `
                 <div class="search-result-item p-2 border-bottom" style="cursor:pointer" data-id="${r.id}">
-                    <div class="font-weight-bold text-primary" style="font-size:0.9rem;">${r.title || r.markName || '(İsimsiz)'}</div>
+                    <div class="font-weight-bold text-primary" style="font-size:0.9rem;">${r.title || r.brand_name || '(İsimsiz)'}</div>
                     <div class="small text-muted" style="font-size:0.75rem;">${detailText}</div>
                 </div>`;
         }).join('');
-
+            
         container.querySelectorAll('.search-result-item').forEach(el => {
             el.onclick = () => {
-                const selected = results.find(rec => rec.id === el.dataset.id);
+                const selected = data.find(rec => rec.id === el.dataset.id);
                 if (selected) this.selectRecordWithHierarchy(selected);
                 container.style.display = 'none';
             };
         });
+        container.style.display = 'block';
     }
 
     async selectRecordWithHierarchy(record) {
         if (!record) return;
 
         const origin = (record.origin || '').toUpperCase();
-        const hierarchy = (record.transactionHierarchy || 'parent').toLowerCase();
+        const hierarchy = (record.transactionHierarchy || record.transaction_hierarchy || 'parent').toLowerCase();
         const isInternational = ['WIPO', 'ARIPO', 'WO', 'AP'].some(o => origin.includes(o));
         const isParent = hierarchy === 'parent';
 
@@ -1196,9 +1154,8 @@ export class DocumentReviewManager {
             
             try {
                 const parentId = record.id;
-                const parentIR = String(record.internationalRegNumber || record.wipoIR || '').replace(/\D/g, '');
+                const parentIR = String(record.internationalRegNumber || record.wipo_ir || '').replace(/\D/g, '');
                 
-                // 🔥 YENİ KÖPRÜ: Alt kayıtları bulmak için JSON içindeki parentId alanına bakılır
                 const { data: childrenData } = await supabase.from('ip_records')
                                         .select('*')
                                         .eq('transaction_hierarchy', 'child');
@@ -1230,7 +1187,7 @@ export class DocumentReviewManager {
         [parent, ...children].forEach(rec => {
             const isParent = rec.id === parent.id;
             const recDetails = rec.details || rec;
-            const country = isParent ? 'Uluslararası' : (this.countryMap.get(rec.country || recDetails.country) || rec.country || recDetails.country || '-');
+            const country = isParent ? 'Uluslararası' : (this.countryMap.get(rec.country_code || rec.country || recDetails.country) || rec.country_code || rec.country || recDetails.country || '-');
             
             const item = document.createElement('button');
             item.className = "list-group-item list-group-item-action d-flex justify-content-between align-items-center mb-2 border rounded shadow-sm";
