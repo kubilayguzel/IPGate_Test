@@ -96,7 +96,7 @@ async function monitorSearchProgress(jobId, onProgress) {
 async function fetchResults(jobId, onProgress) {
     let allResults = [];
     let offset = 0;
-    const limit = 1000;
+    const limit = 20000;
     let hasMore = true;
 
     while (hasMore) {
@@ -120,12 +120,14 @@ async function fetchResults(jobId, onProgress) {
                 objectID: item.id,
                 jobId: item.job_id,
                 monitoredTrademarkId: item.monitored_trademark_id,
-                markName: item.mark_name,
-                applicationNo: item.application_no,
+                markName: item.similar_mark_name || item.mark_name, // Kalıcı veya Geçici tablodan gelmesine göre
+                applicationNo: item.similar_application_no || item.application_no,
                 niceClasses: item.nice_classes,
                 similarityScore: item.similarity_score,
                 holders: item.holders,
-                imagePath: item.image_path
+                imagePath: item.image_path,
+                // 🔥 DÜZELTME 3: Yeni arama sonuçlarında da bu alanı netleştirelim
+                isSimilar: false
             }));
             
             allResults = allResults.concat(mappedData);
