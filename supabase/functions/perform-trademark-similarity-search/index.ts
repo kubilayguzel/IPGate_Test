@@ -24,12 +24,18 @@ const RELATED_CLASSES_MAP: Record<string, string[]> = {
     "36": ["35", "37", "39"]
 };
 
+// 🔥 1. FARK: %100 ORİJİNAL SÖZLÜK (HİÇBİR EKSİK YOK)
 const GENERIC_WORDS = [
-    'ltd', 'şti', 'aş', 'anonim', 'şirketi', 'şirket', 'limited', 'inc', 'corp', 'co', 'company', 'group', 'grup',
-    'sanayi', 'ticaret', 'turizm', 'tekstil', 'gıda', 'inşaat', 'danışmanlık', 'hizmet', 'hizmetleri', 'bilişim', 'teknoloji',
-    'mühendislik', 'üretim', 'imalat', 'tasarım', 'dizayn', 'grafik', 'web', 'yazılım', 'donanım', 'elektronik', 'makina',
-    'ürün', 'products', 'services', 'çözüm', 'sistem', 'malzeme', 'ekipman', 'cihaz', 'araç', 'yedek', 'parça', 'aksesuar',
-    'meşhur', 'ünlü', 'tarihi', 'geleneksel', 'klasik', 'yeni', 'taze', 'özel', 'premium', 'lüks', 'kalite', 'uygun'
+    'ltd', 'şti', 'aş', 'anonim', 'şirketi', 'şirket', 'limited', 'inc', 'corp', 'corporation', 'co', 'company', 'llc', 'group', 'grup',
+    'sanayi', 'ticaret', 'turizm', 'tekstil', 'gıda', 'inşaat', 'danışmanlık', 'hizmet', 'hizmetleri', 'bilişim', 'teknoloji', 'sigorta', 'yayıncılık', 'mobilya', 'otomotiv', 'tarım', 'enerji', 'petrol', 'kimya', 'kozmetik', 'ilaç', 'medikal', 'sağlık', 'eğitim', 'spor', 'müzik', 'film', 'medya', 'reklam', 'pazarlama', 'lojistik', 'nakliyat', 'kargo', 'finans', 'bankacılık', 'emlak', 'gayrimenkul', 'madencilik', 'metal', 'plastik', 'cam', 'seramik', 'ahşap',
+    'mühendislik', 'proje', 'taahhüt', 'ithalat', 'ihracat', 'üretim', 'imalat', 'veteriner', 'petshop', 'polikliniği', 'hastane', 'klinik', 'müşavirlik', 'muhasebe', 'hukuk', 'avukatlık', 'mimarlık', 'peyzaj', 'tasarım', 'dizayn', 'design', 'grafik', 'web', 'yazılım', 'software', 'donanım', 'hardware', 'elektronik', 'elektrik', 'makina', 'makine', 'endüstri', 'fabrika', 'laboratuvar', 'araştırma', 'geliştirme', 'ofis',
+    'ürün', 'products', 'services', 'solutions', 'çözüm', 'sistem', 'systems', 'teknolojileri', 'malzeme', 'materials', 'ekipman', 'equipment', 'cihaz', 'device', 'araç', 'tools', 'yedek', 'parça', 'parts', 'aksesuar', 'accessories', 'gereç',
+    'meşhur', 'ünlü', 'famous', 'since', 'est', 'established', 'tarihi', 'historical', 'geleneksel', 'traditional', 'klasik', 'classic', 'yeni', 'new', 'fresh', 'taze', 'özel', 'special', 'premium', 'lüks', 'luxury', 'kalite', 'quality', 'uygun',
+    'turkey', 'türkiye', 'international', 'uluslararası',
+    'realestate', 'emlak', 'konut', 'housing', 'arsa', 'ticari', 'commercial', 'office', 'plaza', 'shopping', 'alışveriş', 'residence', 'rezidans', 'villa', 'apartment', 'daire',
+    'online', 'digital', 'dijital', 'internet', 'app', 'mobile', 'mobil', 'network', 'ağ', 'server', 'sunucu', 'hosting', 'domain', 'platform', 'social', 'sosyal', 'media', 'medya',
+    'yemek', 'restaurant', 'restoran', 'cafe', 'kahve', 'coffee', 'çay', 'tea', 'fırın', 'bakery', 'ekmek', 'bread', 'pasta', 'börek', 'pizza', 'burger', 'kebap', 'döner', 'pide', 'lahmacun', 'balık', 'fish', 'et', 'meat', 'tavuk', 'chicken', 'sebze', 'vegetable', 'meyve', 'fruit', 'süt', 'milk', 'peynir', 'cheese', 'yoğurt', 'yogurt', 'dondurma', 'şeker', 'sugar', 'bal', 'reçel', 'jam', 'konserve', 'canned', 'organic', 'organik', 'doğal', 'natural',
+    've', 'ile', 'için', 'bir', 'bu', 'da', 'de', 'ki', 'mi', 'mı', 'mu', 'mü', 'sadece', 'tek', 'en', 'çok', 'az', 'üst', 'alt', 'eski'
 ];
 
 function removeTurkishSuffixes(word: string) {
@@ -40,6 +46,7 @@ function removeTurkishSuffixes(word: string) {
     return word;
 }
 
+// 🔥 2. FARK: TEK KELİME KORUMASI EKLENDİ
 function cleanMarkName(name: string, removeGenericWords = true) {
     if (!name) return '';
     let cleaned = String(name).toLocaleLowerCase('tr-TR').replace(/[^a-z0-9ğüşöçı\s]/g, '').replace(/\s+/g, ' ').trim();
@@ -52,9 +59,14 @@ function cleanMarkName(name: string, removeGenericWords = true) {
     return cleaned.trim();
 }
 
+// 🔥 3. FARK: %100 ORİJİNAL GÖRSEL HARİTA (SAYILAR DAHİL)
 const visualMap: Record<string, string[]> = {
     "a": ["e", "o"], "b": ["d", "p"], "c": ["ç", "s"], "ç": ["c", "s"], "d": ["b", "p"], "e": ["a", "o"], "f": ["t"],
-    "g": ["ğ", "q"], "ğ": ["g", "q"], "h": ["n"], "i": ["l", "j", "ı"], "ı": ["i"], "j": ["i", "y"], "k": ["q", "x"]
+    "g": ["ğ", "q"], "ğ": ["g", "q"], "h": ["n"], "i": ["l", "j", "ı"], "ı": ["i"], "j": ["i", "y"], "k": ["q", "x"],
+    "l": ["i", "1"], "m": ["n"], "n": ["m", "r"], "o": ["a", "0", "ö"], "ö": ["o"], "p": ["b", "q"], "q": ["g", "k"],
+    "r": ["n"], "s": ["ş", "c", "z"], "ş": ["s", "z"], "t": ["f"], "u": ["ü", "v"], "ü": ["u", "v"], "v": ["u", "ü", "w"],
+    "w": ["v"], "x": ["ks"], "y": ["j"], "z": ["s", "ş"], "0": ["o"], "1": ["l", "i"], "ks": ["x"], "Q": ["O","0"],
+    "O": ["Q", "0"], "I": ["l", "1"], "L": ["I", "1"], "Z": ["2"], "S": ["5"], "B": ["8"], "D": ["O"]
 };
 
 function visualMismatchPenalty(a: string, b: string) {
@@ -251,7 +263,12 @@ serve(async (req) => {
                 const alternatives = Array.isArray(mark.brandTextSearch) ? mark.brandTextSearch : [];
                 const searchTerms = [primaryName, ...alternatives]
                     .filter(t => t && String(t).trim().length > 0 && String(t) !== "undefined")
-                    .map(term => ({ term, cleanedSearchName: cleanMarkName(String(term)) }));
+                    .map(term => {
+                        const termStr = String(term);
+                        // 🔥 ORİJİNAL KURAL: Tek kelimeyse temizleme yapma, çok kelimeyse jenerikleri at.
+                        const isMultiWord = termStr.trim().split(/\s+/).length > 1;
+                        return { term: termStr, cleanedSearchName: cleanMarkName(termStr, isMultiWord) };
+                    });
                 
                 const makeArray = (val: any) => {
                     if (!val) return [];
@@ -273,11 +290,9 @@ serve(async (req) => {
                 const blueSet = new Set<string>();
 
                 greenSet.forEach(c => { if (RELATED_CLASSES_MAP[c]) RELATED_CLASSES_MAP[c].forEach(rel => blueSet.add(rel)); });
-                const bypassClassFilter = greenSet.size === 0 && orangeSet.size === 0;
-
                 const appDate = mark.applicationDate || mark.application_date || null;
 
-                return { ...mark, primaryName, searchTerms, applicationDate: appDate, greenSet, orangeSet, blueSet, bypassClassFilter };
+                return { ...mark, primaryName, searchTerms, applicationDate: appDate, greenSet, orangeSet, blueSet };
             });
 
             const { data: hits, error } = await supabase
@@ -295,7 +310,6 @@ serve(async (req) => {
                 const { data: activeWorkers } = await supabase.from('search_progress_workers').select('id').eq('job_id', jobId).eq('status', 'processing');
                 if (!activeWorkers || activeWorkers.length === 0) {
                     await supabase.from('search_progress').update({ status: 'completed' }).eq('id', jobId);
-                    console.log(`🎉 TÜM İŞÇİLER BİTİRDİ! Ana Job ${jobId} tamamlandı.`);
                 }
                 return new Response(JSON.stringify({ success: true, finished: true }), { headers: corsHeaders });
             }
@@ -328,18 +342,24 @@ serve(async (req) => {
                 };
                 
                 const hitClasses = rawHitClasses.map(cleanClass).filter(Boolean);
-                const cleanedHitName = cleanMarkName(hit.mark_name || ''); 
+                
+                // 🔥 ORİJİNAL KURAL: Bülten markası çok kelimeliyse temizle, tekse temizleme.
+                const isHitMultiWord = String(hit.mark_name || '').trim().split(/\s+/).length > 1;
+                const cleanedHitName = cleanMarkName(hit.mark_name || '', isHitMultiWord); 
 
                 for (const mark of preparedMarks) {
                     const isValidDate = isValidBasedOnDate(hit.application_date, mark.applicationDate);
                     if (!isValidDate) continue;
 
-                    let hasPoolMatch = mark.bypassClassFilter; 
+                    // 🔥 ORİJİNAL KURAL: Firebase'deki gibi, eğer markanın hiç sınıfı yoksa OTOMATİK OLARAK ELENİR!
+                    let hasPoolMatch = false; 
 
+                    const classColors: Record<string, string> = {};
                     hitClasses.forEach((hc: string) => {
-                        if (mark.greenSet.has(hc)) { hasPoolMatch = true; }
-                        else if (mark.orangeSet.has(hc)) { hasPoolMatch = true; }
-                        else if (mark.blueSet.has(hc)) { hasPoolMatch = true; }
+                        if (mark.greenSet.has(hc)) { classColors[hc] = 'green'; hasPoolMatch = true; }
+                        else if (mark.orangeSet.has(hc)) { classColors[hc] = 'orange'; hasPoolMatch = true; }
+                        else if (mark.blueSet.has(hc)) { classColors[hc] = 'blue'; hasPoolMatch = true; }
+                        else { classColors[hc] = 'gray'; }
                     });
 
                     for (const searchItem of mark.searchTerms) {
@@ -353,73 +373,33 @@ serve(async (req) => {
 
                         if (finalScore < 0.5 && positionalExactMatchScore < 0.5 && !isExactPrefixSuffix) continue;
 
-                        // UI TABLOSU İÇİN (Ekranda listelenecekler)
+                        let holdersData = hit.holders;
+                        if (typeof holdersData === 'string') { holdersData = holdersData.split(',').map((h: string) => h.trim()); }
+
                         uiResults.push({
-                            job_id: jobId, 
-                            monitored_trademark_id: mark.id, 
-                            mark_name: hit.mark_name,
-                            application_no: hit.application_no, 
-                            nice_classes: hit.nice_classes, 
-                            similarity_score: finalScore,
-                            holders: hit.holders, // Veritabanındaki Array veya Text hali neyse o
-                            image_path: hit.image_path
+                            job_id: jobId, monitored_trademark_id: mark.id, mark_name: hit.mark_name,
+                            application_no: hit.application_no, nice_classes: hit.nice_classes, similarity_score: finalScore,
+                            holders: holdersData, image_path: hit.image_path
                         });
 
-                        // 🔥 DÜZELTME: KALICI TABLO İÇİN ŞEMAYA %100 UYUMLU KAYIT (Crash çözen kısım)
-                        let holdersTextStr = "";
-                        if (Array.isArray(hit.holders)) {
-                            holdersTextStr = hit.holders.join(', '); // Eğer dizi geldiyse metne çevir
-                        } else {
-                            holdersTextStr = String(hit.holders || ''); // Değilse string'e zorla
-                        }
+                        let holdersTextStr = Array.isArray(hit.holders) ? hit.holders.join(', ') : String(hit.holders || '');
 
                         permanentRecords.push({
-                            bulletin_id: selectedBulletinId, 
-                            bulletin_no: bulletinNo,
-                            monitored_trademark_id: mark.id,
-                            similar_mark_name: hit.mark_name,
-                            similar_application_no: hit.application_no,
-                            similarity_score: finalScore, 
-                            positional_exact_match_score: positionalExactMatchScore,
-                            is_earlier: false, 
-                            matched_term: searchItem.term, 
-                            source: 'new',
-                            holders: holdersTextStr, // ✅ Artık kesinlikle TEXT formatında!
-                            nice_classes: hit.nice_classes || '', 
-                            image_path: hit.image_path || ''
+                            bulletin_id: selectedBulletinId, bulletin_no: bulletinNo, monitored_trademark_id: mark.id,
+                            similar_mark_name: hit.mark_name, similar_application_no: hit.application_no,
+                            similarity_score: finalScore, positional_exact_match_score: positionalExactMatchScore,
+                            is_earlier: false, matched_term: searchItem.term, source: 'new',
+                            holders: holdersTextStr, nice_classes: hit.nice_classes || '', image_path: hit.image_path || ''
                         });
                         break;
                     }
                 }
             }
 
-            // 🔥 AĞIR LOGLAMA (X-RAY) EKLENDİ
-            if (uiResults.length > 0 || permanentRecords.length > 0) {
-                console.log(`\n--- DB YAZMA İŞLEMİ BAŞLIYOR ---`);
-                console.log(`Arayüze Yazılacaklar: ${uiResults.length} kayıt`);
-                console.log(`Kalıcı Tabloya Yazılacaklar: ${permanentRecords.length} kayıt`);
-
-                // 1. Arayüz Sonuçlarını Yaz
-                if (uiResults.length > 0) {
-                    const { error: uiError } = await supabase.from('search_progress_results').insert(uiResults);
-                    if (uiError) {
-                        console.error(`❌ UI TABLOSU (search_progress_results) HATASI:`, uiError);
-                    } else {
-                        console.log(`✅ UI Tablosuna yazıldı.`);
-                    }
-                }
-
-                // 2. Kalıcı Tabloya Yaz (Sorunlu olduğu düşünülen kısım)
-                if (permanentRecords.length > 0) {
-                    const { error: permError } = await supabase.from('monitoring_trademark_records').insert(permanentRecords);
-                    if (permError) {
-                        console.error(`❌ KALICI TABLO (monitoring_trademark_records) YAZMA HATASI:`, permError);
-                    } else {
-                        console.log(`✅ Kalıcı Tabloya başarıyla yazıldı!`);
-                    }
-                }
-
-                // Sayaç Güncelleme
+            if (uiResults.length > 0) {
+                await supabase.from('search_progress_results').insert(uiResults);
+                await supabase.from('monitoring_trademark_records').insert(permanentRecords);
+                
                 const { data: jobData } = await supabase.from('search_progress').select('current_results').eq('id', jobId).single();
                 await supabase.from('search_progress').update({ current_results: (jobData?.current_results || 0) + uiResults.length }).eq('id', jobId);
             }
@@ -452,7 +432,6 @@ serve(async (req) => {
 
         await supabase.from('search_progress').insert({ id: jobId, status: 'processing', current_results: 0, total_records: totalRecords });
         
-        // 🔥 TAM GÜÇ: 10 İŞÇİ
         const WORKER_COUNT = 10;
         const chunkSize = Math.ceil(monitoredMarks.length / WORKER_COUNT);
         
