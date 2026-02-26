@@ -608,7 +608,7 @@ const loadInitialData = async () => {
         monitoringTrademarks = monitoringData.map(d => {
             const tmData = {
                 id: d.id, title: d.mark_name, markName: d.mark_name, applicationNo: d.application_no, 
-                applicationNumber: d.application_no, ipRecordId: d.ip_record_id, ownerName: d.owner_name,
+                applicationNumber: d.application_no, applicationDate: d.application_date, ipRecordId: d.ip_record_id, ownerName: d.owner_name,
                 brandTextSearch: ensureArray(d.brand_text_search), niceClassSearch: ensureArray(d.nice_class_search),
                 niceClasses: ensureArray(d.nice_classes), imagePath: d.image_path, 
                 applicants: d.owner_name ? [{ name: d.owner_name }] : []
@@ -1101,44 +1101,67 @@ const handleNoteCellClick = (cell) => {
 
 const buildReportData = async (results) => {
     const reportData = [];
-    
+    const bulletinKey = document.getElementById('bulletinSelect')?.value;
+    const bulletinNo = bulletinKey ? bulletinKey.split('_')[0] : null;
+
+    let realBulletinDateStr = null;
+    if (bulletinNo) {
+        const { data: bData } = await supabase.from('trademark_bulletins').select('bulletin_date').eq('bulletin_no', bulletinNo).limit(1).single();
+        if (bData && bData.bulletin_date) realBulletinDateStr = bData.bulletin_date;
+    }
+
+    let calculatedDeadline = "-";
+    if (realBulletinDateStr) {
+        const bDate = new Date(realBulletinDateStr);
+        if (!isNaN(bDate.getTime())) {
+            bDate.setMonth(bDate.getMonth() + 2);
+            let iter = 0;
+            while ((bDate.getDay() === 0 || bDate.getDay() === 6) && iter < 30) {
+                bDate.setDate(bDate.getDate() + 1);
+                iter++;
+            }
+            calculatedDeadline = `${String(bDate.getDate()).padStart(2, '0')}.${String(bDate.getMonth() + 1).padStart(2, '0')}.${bDate.getFullYear()}`;
+        }
+    }
+
     for (const r of results) {
         const monitoredTm = monitoringTrademarks.find(mt => mt.id === r.monitoredTrademarkId) || {};
         let ipData = null;
-        let bulletinDateValue = "-";
 
-        // 1. İlişkili IP Kaydını Çek (Supabase'den)
         const appNoToSearch = monitoredTm.applicationNumber || monitoredTm.applicationNo;
         if (appNoToSearch) {
             const { data: ipSnap } = await supabase.from('ip_records').select('*').eq('application_number', appNoToSearch).limit(1).single();
             if (ipSnap) ipData = ipSnap;
         }
         if (!ipData && (monitoredTm.ipRecordId || monitoredTm.sourceRecordId)) {
-            const { data: ipDoc } = await supabase.from('ip_records').select('*').eq('id', monitoredTm.ipRecordId || monitoredTm.sourceRecordId).single();
+            const { data: ipDoc } = await supabase.from('ip_records').select('*').eq('id', monitoredTm.ipRecordId || monitoredTm.sourceRecordId).limit(1).single();
             if (ipDoc) ipData = ipDoc;
         }
 
-        // 1.5. Bültendeki Markanın (Hit) Tam Bilgisini Çek
+        // 🔥 ARTIK AĞIR VERİTABANI SORGUSU YOK! Veriyi doğrudan r (results) objesinden çekiyoruz.
         let hitHolders = r.holders || [];
-        if (!hitHolders || hitHolders.length === 0) {
-            const hitDocId = r.objectID || r.id; 
-            if (hitDocId) {
-                const { data: hitDoc } = await supabase.from('trademark_bulletin_records').select('holders').eq('id', hitDocId).single();
-                if (hitDoc) hitHolders = hitDoc.holders || [];
-            } else if (r.applicationNo) {
-                const { data: hitSnap } = await supabase.from('trademark_bulletin_records').select('holders').eq('application_no', r.applicationNo).limit(1).single();
-                if (hitSnap) hitHolders = hitSnap.holders || [];
-            }
+        let hitAppDate = r.applicationDate || "-"; // Doğrudan tablodan okunan tarih!
+        let hitAppNo = r.applicationNo || "-";
+        let hitNice = r.niceClasses || [];
+
+        // Bülten Markasının (Benzer) tarih formatını güzelleştir
+        if (hitAppDate !== "-") {
+            const hd = new Date(hitAppDate);
+            if (!isNaN(hd.getTime())) hitAppDate = `${String(hd.getDate()).padStart(2, '0')}.${String(hd.getMonth() + 1).padStart(2, '0')}.${hd.getFullYear()}`;
         }
 
-        // 2. Bülten Tarihi
-        if (r.bulletinId) {
-            const parts = String(r.bulletinId).split('_');
-            if (parts.length > 1 && parts[1].length >= 8) bulletinDateValue = parts[1].replace(/(\d{2})(\d{2})(\d{4})/, '$1.$2.$3');
-            else bulletinDateValue = r.bulletinDate || "-";
-        } else { bulletinDateValue = r.bulletinDate || "-"; }
+        let mClasses = [];
+        let rawClasses = ipData?.nice_classes || ipData?.niceClasses || monitoredTm?.niceClasses || monitoredTm?.nice_classes;
+        if (!rawClasses && ipData?.goodsAndServicesByClass) {
+            rawClasses = ipData.goodsAndServicesByClass.map(c => c.classNo || c);
+        }
+        if (typeof rawClasses === 'string') {
+            mClasses = rawClasses.split(/[,\s]+/).filter(Boolean);
+        } else if (Array.isArray(rawClasses)) {
+            mClasses = rawClasses.map(c => typeof c === 'object' ? (c.classNo || c.class_no) : c).filter(Boolean);
+        }
+        mClasses = Array.from(new Set(mClasses)).sort((a, b) => Number(a) - Number(b));
 
-        // 3. Sahip Bilgisi
         let ownerNameStr = "-";
         if (ipData?.applicants && typeof ipData.applicants === 'string') try { ipData.applicants = JSON.parse(ipData.applicants); } catch(e){}
         if (ipData?.applicants && Array.isArray(ipData.applicants) && ipData.applicants.length > 0) {
@@ -1148,26 +1171,31 @@ const buildReportData = async (results) => {
         }
         const monitoredClientId = _getOwnerKey(ipData, monitoredTm, allPersons).id;
 
-        // 4. Diğer Bilgiler
         const monitoredName = ipData?.title || ipData?.mark_name || monitoredTm?.title || monitoredTm?.markName || "Marka Adı Yok";
-        const monitoredImg = _normalizeImageSrc(monitoredTm?.imagePath || ipData?.image_path || '');
+        const monitoredImg = _normalizeImageSrc(ipData?.brand_image_url || ipData?.image_path || monitoredTm?.imagePath || '');
         const monitoredAppNo = ipData?.application_number || monitoredTm?.applicationNo || "-";
         const monitoredAppDate = _pickAppDate(ipData, monitoredTm);
-        const monitoredClasses = _uniqNice(ipData || monitoredTm).split(', ');
 
         let hitOwnerStr = "-";
         if (Array.isArray(hitHolders) && hitHolders.length > 0) hitOwnerStr = hitHolders.map(h => h.name || h.holderName || h.id || h).filter(Boolean).join(', ');
         else if (typeof hitHolders === 'string' && hitHolders.trim() !== '') hitOwnerStr = hitHolders;
 
+        let realBulletinDateDisplay = "-";
+        if (realBulletinDateStr) {
+            const bd = new Date(realBulletinDateStr);
+            if (!isNaN(bd.getTime())) realBulletinDateDisplay = `${String(bd.getDate()).padStart(2, '0')}.${String(bd.getMonth() + 1).padStart(2, '0')}.${bd.getFullYear()}`;
+        }
+
         reportData.push({
             monitoredMark: {
                 clientId: monitoredClientId, name: monitoredName, markName: monitoredName, imagePath: monitoredImg,
-                ownerName: ownerNameStr, applicationNo: monitoredAppNo, applicationDate: monitoredAppDate, niceClasses: monitoredClasses
+                ownerName: ownerNameStr, applicationNo: monitoredAppNo, applicationDate: monitoredAppDate, niceClasses: mClasses
             },
             similarMark: {
-                name: r.markName, markName: r.markName, imagePath: _normalizeImageSrc(r.imagePath || ''), niceClasses: r.niceClasses || [],
-                applicationNo: r.applicationNo || "-", applicationDate: r.applicationDate || "-", bulletinDate: bulletinDateValue,
-                similarity: r.similarityScore, holders: hitHolders, ownerName: hitOwnerStr || "-", bs: r.bs || null, note: r.note || null
+                name: r.markName, markName: r.markName, imagePath: _normalizeImageSrc(r.imagePath || ''), niceClasses: hitNice,
+                applicationNo: hitAppNo, applicationDate: hitAppDate, bulletinDate: realBulletinDateDisplay,
+                similarity: r.similarityScore, holders: hitHolders, ownerName: hitOwnerStr || "-", bs: r.bs || null, note: r.note || null,
+                calculatedDeadline: calculatedDeadline 
             }
         });
     }
@@ -1220,30 +1248,43 @@ const handleReportGeneration = async (event, options = {}) => {
     const bulletinNo = String(bulletinKey).split('_')[0];
 
     try {
+        console.log(`[RAPOR BAŞLADI] ${ownerName || 'Toplu'} için süreç tetiklendi...`);
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> İşleniyor...';
 
-        let filteredResults;
+        let filteredResults = [];
+        
         if (isGlobal) {
             filteredResults = allSimilarResults.filter(r => r.isSimilar === true && r?.monitoredTrademarkId && r?.applicationNo && r?.markName);
         } else {
-            const ownerMonitoredIds = [];
-            for (const tm of monitoringTrademarks) {
-                const ip = await _getIp(tm.ipRecordId || tm.sourceRecordId || tm.id);
-                if (_getOwnerKey(ip, tm, allPersons).id === ownerId) ownerMonitoredIds.push(tm.id);
-            }
+            // 🔥 KRİTİK HIZLANDIRMA: 2000 veritabanı sorgusu silindi! 
+            // Bunun yerine peşin hesapladığımız ownerInfo hafızadan 1 milisaniyede süzülüyor.
+            const ownerMonitoredIds = monitoringTrademarks
+                .filter(tm => tm.ownerInfo && tm.ownerInfo.id === ownerId)
+                .map(tm => tm.id);
+                
             filteredResults = allSimilarResults.filter(r => ownerMonitoredIds.includes(r.monitoredTrademarkId) && r.isSimilar === true);
         }
 
+        console.log(`[RAPOR FİLTRE] Raporlanacak 'Benzer' (Yeşil) marka sayısı: ${filteredResults.length}`);
+
         if (filteredResults.length === 0) {
-            showNotification(isGlobal ? 'Benzer sonuç bulunamadı.' : `${ownerName} için benzer sonuç bulunamadı.`, 'warning'); return;
+            const msg = isGlobal ? "Sistemde 'Benzer' (Yeşil renkli) olarak işaretlenmiş hiçbir sonuç bulunamadı." 
+                                 : `${ownerName} için 'Benzer' (Yeşil renkli) sonuç bulunamadı. Lütfen önce listeden ilgili markaları 'Benzer' yapın.`;
+            showNotification(msg, 'warning'); 
+            return;
         }
 
         let createdTaskCount = 0;
-        if (createTasks) createdTaskCount = await createObjectionTasks(filteredResults, bulletinNo, ownerId);
+        if (createTasks) {
+            console.log(`[RAPOR GÖREV] İtiraz görevleri oluşturuluyor...`);
+            createdTaskCount = await createObjectionTasks(filteredResults, bulletinNo, ownerId);
+        }
 
+        console.log(`[RAPOR VERİ] PDF/Word için veriler hazırlanıyor...`);
         const reportData = await buildReportData(filteredResults);
 
+        console.log(`[RAPOR EDGE FUNCTION] Supabase'e rapor oluşturma emri gönderiliyor...`);
         // Supabase Edge Function çağrısı
         const { data: response, error } = await supabase.functions.invoke('generate-similarity-report', { 
             body: { results: reportData, bulletinNo: bulletinNo, isGlobalRequest: isGlobal }
@@ -1252,6 +1293,7 @@ const handleReportGeneration = async (event, options = {}) => {
         if (error) throw error;
 
         if (response?.success) {
+            console.log(`[RAPOR BAŞARILI] Rapor oluşturuldu ve indiriliyor!`);
             const message = createTasks ? `Rapor oluşturuldu. ${createdTaskCount > 0 ? `Oluşturulan itiraz görevi: ${createdTaskCount} adet.` : ''}` : 'Rapor oluşturuldu.';
             showNotification(message, 'success');
 
@@ -1262,7 +1304,6 @@ const handleReportGeneration = async (event, options = {}) => {
             link.download = isGlobal ? `Toplu_Rapor.zip` : `${safeDownloadName}_Rapor.zip`;
             document.body.appendChild(link); link.click(); document.body.removeChild(link);
 
-            // 🔥 SUPABASE GÖREV YAMASI BAŞLANGICI
             if (createTasks) {
                 for (const tmData of reportData) {
                     try {
@@ -1280,7 +1321,6 @@ const handleReportGeneration = async (event, options = {}) => {
 
                         if (mailError) throw mailError;
 
-                        // type: 66 "Değerlendirme İşlemi" (Mail onayı) için task oluşturuyoruz
                         const taskPayload = {
                             title: `Bülten Benzerlik Bildirimi - ${tmData.monitoredMark?.name}`,
                             description: `Bülten İtiraz Süreci için benzerlik raporu hazırlandı. Taslak maili inceleyip müvekkile gönderiniz.`,
@@ -1291,13 +1331,11 @@ const handleReportGeneration = async (event, options = {}) => {
                             iprecord_title: tmData.monitoredMark?.name,
                             mail_notification_id: mailData.id,
                             bulletin_no: bulletinNo,
-                            assigned_to_user_id: "dqk6yRN7Kwgf6HIJldLt9Uz77RU2", // Selcan Hanım
+                            assigned_to_user_id: "dqk6yRN7Kwgf6HIJldLt9Uz77RU2", 
                             assigned_to_email: "selcanakoglu@evrekapatent.com"
                         };
 
-                        // `taskService.createTask` doğrudan SQL Sayaçları ve UUID ile uğraşır
                         await taskService.createTask(taskPayload);
-
                     } catch (e) { console.error("Görev oluşturma hatası:", e); }
                 }
 
@@ -1305,15 +1343,15 @@ const handleReportGeneration = async (event, options = {}) => {
                 await new Promise(resolve => setTimeout(resolve, 150));
                 await renderMonitoringList();
             }
-            // 🔥 SUPABASE GÖREV YAMASI BİTİŞİ
             
         } else {
             showNotification('Rapor oluşturma hatası.', 'error');
         }
     } catch (err) {
+        console.error("[RAPOR HATASI]:", err);
         showNotification('Kritik hata oluştu!', 'error');
     } finally {
-        SimpleLoading.hide();
+        if (typeof SimpleLoading !== 'undefined') SimpleLoading.hide();
         btn.disabled = false;
         btn.innerHTML = createTasks ? '<i class="fas fa-paper-plane"></i> Rapor + Bildir' : '<i class="fas fa-file-pdf"></i> Rapor';
     }
