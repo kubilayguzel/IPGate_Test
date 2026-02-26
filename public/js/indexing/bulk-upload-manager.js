@@ -141,7 +141,6 @@ export class BulkIndexingModule {
         }
 
         document.addEventListener('click', (e) => {
-            // 🔥 YENİ: HTML'deki asıl buton class'ı olan 'notification-tab-btn' eklendi (yakın element tıklamaları da kapsandı)
             const tabBtn = e.target.closest('.notification-tab-btn') || e.target.closest('.file-tab-btn');
             if (tabBtn) {
                 const targetPane = tabBtn.getAttribute('data-target');
@@ -307,7 +306,6 @@ export class BulkIndexingModule {
                     });
 
                     if (!alreadyInPortfolio) {
-                        // Objeyi DataManager'in beklediği formata (CamelCase) çevir
                         filteredBulletins.push({ 
                             id: data.id, 
                             markName: data.brand_name,
@@ -639,6 +637,41 @@ export class BulkIndexingModule {
         }
     }
 
+    // 🔥 YENİ: İŞLEM KAYDETME YARDIMCISI
+    async _addTransaction(recordId, txData) {
+        const txId = generateUUID();
+        const payload = {
+            id: txId,
+            ip_record_id: recordId,
+            transaction_type_id: String(txData.type),
+            transaction_hierarchy: txData.transactionHierarchy || 'parent',
+            parent_id: txData.parentId || null,
+            description: txData.description || '',
+            note: txData.notes || null,
+            transaction_date: txData.date || txData.timestamp || new Date().toISOString(),
+            user_id: txData.userId || this.currentUser?.uid,
+            user_email: txData.userEmail || this.currentUser?.email,
+            user_name: txData.userName || this.currentUser?.displayName || 'Kullanıcı',
+            created_at: new Date().toISOString()
+        };
+        
+        const { error } = await supabase.from('transactions').insert(payload);
+        if (error) return { success: false, error: error.message };
+
+        if (txData.documents && txData.documents.length > 0) {
+            const docInserts = txData.documents.map(d => ({
+                transaction_id: txId,
+                document_name: d.name,
+                document_url: d.url || d.downloadURL,
+                document_type: d.type || 'application/pdf',
+                document_designation: d.documentDesignation || 'Evrak',
+                uploaded_at: d.uploadedAt || new Date().toISOString()
+            }));
+            await supabase.from('transaction_documents').insert(docInserts);
+        }
+        return { success: true, id: txId };
+    }
+
     // --- MANUEL İŞLEM KAYDETME (SUPABASE ENTEGRE) ---
     async handleManualTransactionSubmit() {
         const parentTypeId = document.getElementById('specificManualTransactionType')?.value;
@@ -679,7 +712,7 @@ export class BulkIndexingModule {
                     createdAt: new Date().toISOString()
                 };
                 
-                const recRes = await ipRecordsService.createRecord(newRecordData);
+                const recRes = await ipRecordsService.createRecordFromDataEntry(newRecordData);
                 if (!recRes.success) throw new Error("Bülten portföye eklenemedi.");
                 const newRecordId = recRes.id;
 
@@ -694,7 +727,7 @@ export class BulkIndexingModule {
                     userName: this.currentUser.displayName || this.currentUser.email || 'Kullanıcı',
                     userEmail: this.currentUser.email
                 };
-                await ipRecordsService.addTransactionToRecord(newRecordId, rootTxData);
+                await this._addTransaction(newRecordId, rootTxData);
 
                 this.selectedRecordManual.id = newRecordId;
                 this.selectedRecordManual._isBulletin = false; 
@@ -745,7 +778,7 @@ export class BulkIndexingModule {
                     userEmail: this.currentUser.email
                 };
                 
-                const pResult = await ipRecordsService.addTransactionToRecord(this.selectedRecordManual.id, newParentData);
+                const pResult = await this._addTransaction(this.selectedRecordManual.id, newParentData);
                 if (pResult.success) finalParentId = pResult.id;
             } 
             else {
@@ -759,7 +792,7 @@ export class BulkIndexingModule {
                         userId: this.currentUser.uid,
                         userEmail: this.currentUser.email
                     };
-                    const pResult = await ipRecordsService.addTransactionToRecord(this.selectedRecordManual.id, newParentData);
+                    const pResult = await this._addTransaction(this.selectedRecordManual.id, newParentData);
                     if (pResult.success) finalParentId = pResult.id;
                 } else if (isChild && existingParentId) {
                     finalParentId = existingParentId;
@@ -773,7 +806,7 @@ export class BulkIndexingModule {
             const transactionData = {
                 type: targetTypeId,
                 transactionHierarchy: isChild ? 'child' : 'parent',
-                deliveryDate: deliveryDateStr ? new Date(deliveryDateStr).toISOString() : null,
+                date: deliveryDateStr ? new Date(deliveryDateStr).toISOString() : null,
                 description: typeObj ? (typeObj.alias || typeObj.name) : (notes || ''),
                 notes: notes || '',
                 timestamp: new Date().toISOString(),
@@ -787,10 +820,7 @@ export class BulkIndexingModule {
                 transactionData.parentId = finalParentId;
             }
 
-            const result = await ipRecordsService.addTransactionToRecord(
-                this.selectedRecordManual.id, 
-                transactionData
-            );
+            const result = await this._addTransaction(this.selectedRecordManual.id, transactionData);
 
             if (!result.success) throw new Error(result.error || 'İşlem oluşturulamadı');
             
@@ -910,7 +940,6 @@ export class BulkIndexingModule {
                 }
             }
             
-            // Database'e Ekle (Snake Case Sütunlar)
             const pdfData = {
                 id: id,
                 file_name: file.name,
@@ -920,11 +949,8 @@ export class BulkIndexingModule {
                 user_email: this.currentUser.email,
                 status: 'pending',
                 dosya_no: extractedAppNumber || null,
-                // 🔥 source: 'manual' buradan GİTTİ!
-                
-                // 🔥 Sütunu olmayan tüm veriler JSON kalkanı içinde:
                 details: {
-                    source: 'manual', // BURAYA GELDİ
+                    source: 'manual', 
                     file_path: storagePath,
                     file_size: file.size,
                     is_etebs: false,
@@ -966,7 +992,7 @@ export class BulkIndexingModule {
             this.processFetchedFiles(data || []);
         };
 
-        fetchFiles(); // İlk açılışta çek
+        fetchFiles(); 
 
         this.unsubscribe = supabase.channel('unindexed_pdfs_changes')
             .on('postgres_changes', { 
@@ -986,7 +1012,7 @@ export class BulkIndexingModule {
         }
 
         const files = data.map(doc => {
-            const dDetails = doc.details || {}; // Güvenli JSON kalkanı
+            const dDetails = doc.details || {}; 
 
             let fileObj = {
                 id: doc.id,
@@ -997,11 +1023,8 @@ export class BulkIndexingModule {
                 applicationNo: dDetails.extracted_app_number || doc.extracted_app_number,
                 extractedAppNumber: dDetails.extracted_app_number || doc.extracted_app_number,
                 matchedRecordId: doc.matched_record_id,
-                
-                // 🔥 Veriler details içinden okunuyor
                 matchedRecordDisplay: dDetails.matched_record_display || doc.matched_record_display,
                 recordOwnerType: dDetails.record_owner_type || doc.record_owner_type,
-                
                 status: doc.status,
                 source: dDetails.source || doc.source,
                 uploadedAt: doc.created_at ? new Date(doc.created_at) : new Date()
@@ -1009,7 +1032,6 @@ export class BulkIndexingModule {
 
             const searchKey = fileObj.dosyaNo || fileObj.applicationNo;
 
-            // Otomatik Eşleşme Denemesi
             if (searchKey && this.allRecords.length > 0 && !fileObj.matchedRecordId) {
                 const matchResult = this.matcher.findMatch(searchKey, this.allRecords);
                 if (matchResult) {
@@ -1017,12 +1039,10 @@ export class BulkIndexingModule {
                     fileObj.matchedRecordDisplay = this.matcher.getDisplayLabel(matchResult.record) + ` - ${matchResult.record.title}`;
                     fileObj.recordOwnerType = matchResult.record.recordOwnerType || 'self';
                     
-                    // 🔥 Güncelleme yaparken de SADECE details sütununa yazıyoruz
                     supabase.from(UNINDEXED_PDFS_COLLECTION).update({
-                        // matched_record_id kök dizinden silindi
                         details: {
-                            ...dDetails, // Eski JSON verilerini ezmemek için kopyalıyoruz
-                            matched_record_id: fileObj.matchedRecordId, // BURAYA GELDİ
+                            ...dDetails, 
+                            matched_record_id: fileObj.matchedRecordId, 
                             matched_record_display: fileObj.matchedRecordDisplay,
                             record_owner_type: fileObj.recordOwnerType
                         }
@@ -1037,25 +1057,14 @@ export class BulkIndexingModule {
     }
 
     updateUI() {
-        // Silinmemiş tüm dosyaları al
         const allFiles = this.uploadedFiles.filter(f => f.status !== 'removed');
-        
-        // 1. Durumu 'pending' (Bekleyen) olanları ayır
         const pendingFiles = allFiles.filter(f => f.status === 'pending');
-        
-        // 2. Bekleyenleri kendi içinde 'Eşleşen' ve 'Eşleşmeyen' olarak ikiye böl
         const matchedFiles = pendingFiles.filter(f => f.matchedRecordId || f.autoMatched);
         const unmatchedFiles = pendingFiles.filter(f => !f.matchedRecordId && !f.autoMatched);
-        
-        // 3. Durumu 'indexed' (İndekslenen) olanları ayır
         const indexedFiles = allFiles.filter(f => f.status === 'indexed');
 
-        console.log(`📊 Arayüz Güncellemesi: ${matchedFiles.length} Eşleşen, ${unmatchedFiles.length} Eşleşmeyen, ${indexedFiles.length} İndekslenen.`);
-
-        // 🔥 HTML'DEKİ GERÇEK BADGE (SAYAÇ) ID'LERİNİ GÜNCELLİYORUZ
         this.setBadge('matchedTabBadge', matchedFiles.length);
         this.setBadge('unmatchedTabBadge', unmatchedFiles.length);
-        // HTML'de indexed için badge varsa diye önlem:
         this.setBadge('indexedTabBadge', indexedFiles.length); 
     }
 
@@ -1108,12 +1117,10 @@ export class BulkIndexingModule {
     }
 
     switchFileTab(targetPane, clickedBtn) {
-        // Tüm butonlardan 'active' sınıfını temizle
         document.querySelectorAll('.notification-tab-btn, .file-tab-btn').forEach(btn => {
             btn.classList.remove('active');
         });
         
-        // Tıklanan butonu aktif yap
         if (clickedBtn) {
             clickedBtn.classList.add('active');
         } else {
@@ -1121,13 +1128,11 @@ export class BulkIndexingModule {
             if (btn) btn.classList.add('active');
         }
 
-        // Tüm HTML pane (kutu) içeriklerini gizle
         document.querySelectorAll('.notification-tab-pane, .file-tab-pane').forEach(pane => {
             pane.classList.remove('active');
-            pane.style.display = 'none'; // Güvenlik için CSS dışında manuel gizleme
+            pane.style.display = 'none'; 
         });
         
-        // Sadece hedef sekmeyi göster
         const activePane = document.getElementById(targetPane);
         if(activePane) {
             activePane.classList.add('active');
@@ -1135,21 +1140,18 @@ export class BulkIndexingModule {
         }
     }
 
-    // 🔥 SUPABASE SİLME İŞLEMİ
     async deleteFilePermanently(fileId) {
         if (!confirm('Dosyayı silmek istiyor musunuz?')) return;
         try {
             const fileToDelete = this.uploadedFiles.find(f => f.id === fileId);
             if (!fileToDelete) return;
 
-            // Önce Storage'dan sil
             if (fileToDelete.filePath) {
                 try {
                     await supabase.storage.from(STORAGE_BUCKET).remove([fileToDelete.filePath]);
                 } catch (e) { console.warn('Storage silme hatası:', e); }
             }
             
-            // Sonra veritabanından sil
             const { error } = await supabase.from(UNINDEXED_PDFS_COLLECTION).delete().eq('id', fileId);
             if (error) throw error;
             
