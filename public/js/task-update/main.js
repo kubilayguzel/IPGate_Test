@@ -103,22 +103,50 @@ class TaskUpdateController {
         this.taskData = await this.dataManager.getTaskById(this.taskId);
         this.currentDocuments = this.taskData.documents || [];
 
-        this.selectedIpRecordId = this.taskData.relatedIpRecordId || null;
-        this.selectedPersonId = this.taskData.relatedPartyId || this.taskData.opponentId || null; 
+        this.selectedIpRecordId = this.taskData.relatedIpRecordId || this.taskData.related_ip_record_id || null;
+        
+        // 🔥 İlgili Taraf Çözümlemesi (JSONB, String veya Objelerden Ayıklama)
+        let ownerId = this.taskData.relatedPartyId || this.taskData.related_party_id || this.taskData.opponentId || this.taskData.opponent_id;
+        
+        if (!ownerId) {
+            let owners = this.taskData.task_owner || this.taskData.taskOwner;
+            if (typeof owners === 'string') {
+                try { owners = JSON.parse(owners); } catch (e) {}
+            }
+            if (Array.isArray(owners) && owners.length > 0) ownerId = owners[0];
+        }
+        this.selectedPersonId = ownerId || null;
 
         this.uiManager.fillForm(this.taskData, this.masterData.users);
         this.uiManager.renderDocuments(this.currentDocuments);
         this.renderAccruals();
         
         if (this.selectedIpRecordId) {
-            const rec = this.masterData.ipRecords.find(r => String(r.id) === String(this.selectedIpRecordId));
+            let rec = this.masterData.ipRecords.find(r => String(r.id) === String(this.selectedIpRecordId));
+            if (!rec) {
+                // Veritabanında silinmişse bile UI boş kalmasın
+                rec = { 
+                    id: this.selectedIpRecordId, 
+                    title: this.taskData.iprecordTitle || this.taskData.relatedIpRecordTitle || 'Kayıtlı Olmayan Varlık', 
+                    applicationNumber: this.taskData.iprecordApplicationNo 
+                };
+            }
             this.uiManager.renderSelectedIpRecord(rec);
         }
+        
         if (this.selectedPersonId) {
-            const p = this.masterData.persons.find(x => String(x.id) === String(this.selectedPersonId));
+            let p = this.masterData.persons.find(x => String(x.id) === String(this.selectedPersonId));
+            if (!p) {
+                // Veritabanında silinmişse veya çekilememişse yedek isimleri kullan
+                p = { 
+                    id: this.selectedPersonId, 
+                    name: this.taskData.relatedPartyName || this.taskData.related_party_name || this.taskData.opponentName || this.taskData.opponent_name || this.taskData.iprecordApplicantName || 'Kayıtlı Olmayan Taraf'
+                };
+            }
             this.uiManager.renderSelectedPerson(p);
         }
 
+        this.statusBeforeEpatsUpload = this.taskData.status_before_epats_upload || null;
         this.lockFieldsIfApplicationTask();
     }
 
@@ -220,7 +248,7 @@ class TaskUpdateController {
     }
 
     handleRenewalLogic() {
-        const record = this.masterData.ipRecords.find(r => r.id === this.selectedIpRecordId);
+        const record = this.masterData.ipRecords.find(r => String(r.id) === String(this.selectedIpRecordId));
         if (!record) return;
         if ((record.origin || '').toUpperCase() === 'TÜRKPATENT' && record.renewalDate) {
             const nextRenewalDate = new Date(record.renewalDate);
@@ -237,7 +265,7 @@ class TaskUpdateController {
         items.slice(0, 10).forEach(item => {
             const div = document.createElement('div');
             div.className = 'search-result-item';
-            div.textContent = type === 'ipRecord' ? item.title : item.name;
+            div.textContent = type === 'ipRecord' ? (item.title || item.brandName) : item.name;
             div.onclick = () => {
                 if (type === 'ipRecord') {
                     this.selectedIpRecordId = item.id;
@@ -257,15 +285,25 @@ class TaskUpdateController {
         if (!files.length) return;
         for (const file of files) {
             const id = this.generateUUID();
-            const path = `task_documents/${id}_${file.name}`;
+            
+            // 🔥 ÇÖZÜM: Dosya adındaki boşluk ve Türkçe/özel karakterleri temizle
+            const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            const path = `task_documents/${this.taskId}/${id}_${cleanFileName}`;
+            
             try {
                 const url = await this.dataManager.uploadFile(file, path);
                 this.currentDocuments.push({
-                    id, name: file.name, url, storagePath: path, size: file.size, uploadedAt: new Date().toISOString()
+                    id, 
+                    name: file.name, // Orijinal adı UI'da göstermek için tutuyoruz
+                    url, 
+                    storagePath: path, 
+                    size: file.size, 
+                    uploadedAt: new Date().toISOString()
                 });
             } catch (e) { console.error(e); }
         }
         this.uiManager.renderDocuments(this.currentDocuments);
+        await this.dataManager.updateTask(this.taskId, { documents: this.currentDocuments });
     }
 
     async removeDocument(id) {
@@ -274,33 +312,81 @@ class TaskUpdateController {
         if (doc && doc.storagePath) await this.dataManager.deleteFileFromStorage(doc.storagePath);
         this.currentDocuments = this.currentDocuments.filter(d => d.id !== id);
         this.uiManager.renderDocuments(this.currentDocuments);
+        await this.dataManager.updateTask(this.taskId, { documents: this.currentDocuments });
     }
 
     async uploadEpatsDocument(file) {
         if (!file) return;
+        
+        const existingEpats = this.currentDocuments.find(d => d.type === 'epats_document');
+        if (!existingEpats) {
+            this.statusBeforeEpatsUpload = document.getElementById('taskStatus').value;
+        }
+
+        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+            showNotification('PDF taranıyor, evrak bilgileri okunuyor...', 'info');
+            
+            this.extractEpatsInfoFromFile(file).then(info => {
+                if (info) {
+                    const noInput = document.getElementById('turkpatentEvrakNo');
+                    const dateInput = document.getElementById('epatsDocumentDate');
+
+                    let msg = [];
+                    if (info.evrakNo && noInput && !noInput.value) {
+                        noInput.value = info.evrakNo;
+                        msg.push('Evrak No');
+                    }
+                    if (info.documentDate && dateInput && !dateInput.value) {
+                        dateInput.value = info.documentDate;
+                        if (dateInput._flatpickr) {
+                            dateInput._flatpickr.setDate(info.documentDate, true);
+                        }
+                        msg.push('Tarih');
+                    }
+
+                    if (msg.length > 0) {
+                        showNotification(`✅ PDF'ten otomatik dolduruldu: ${msg.join(', ')}`, 'success');
+                    }
+                }
+            });
+        }
+
         const id = this.generateUUID();
-        const path = `epats_documents/${id}_${file.name}`;
+        
+        // 🔥 ÇÖZÜM: Dosya adındaki boşluk ve Türkçe/özel karakterleri temizle
+        const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const path = `epats_documents/${id}_${cleanFileName}`;
         
         try {
             const url = await this.dataManager.uploadFile(file, path);
             const epatsDoc = {
-                id, name: file.name, url, downloadURL: url, storagePath: path, size: file.size,
-                uploadedAt: new Date().toISOString(), type: 'epats_document'
+                id, 
+                name: file.name, // Arayüzde düzgün görünmesi için orijinal isim kalır
+                url, 
+                downloadURL: url, 
+                storagePath: path, 
+                size: file.size,
+                uploadedAt: new Date().toISOString(), 
+                type: 'epats_document'
             };
+
             this.currentDocuments = this.currentDocuments.filter(d => d.type !== 'epats_document');
             this.currentDocuments.push(epatsDoc);
+
             this.uiManager.renderDocuments(this.currentDocuments);
 
             const statusSelect = document.getElementById('taskStatus');
             if(statusSelect) statusSelect.value = 'completed'; 
-            
+
             const taskType = String(this.taskData.taskType);
             if (taskType === '22') this.handleRenewalLogic();
-            if (this.isApplicationTask(taskType) && window.$) {
+            if (this.isApplicationTask(taskType) && typeof $ !== 'undefined') {
                 this.uiManager.ensureApplicationDataModal();
                 setTimeout(() => $('#applicationDataModal').modal({ backdrop: 'static', keyboard: false, show: true }), 100);
             }
-        } catch (e) { showNotification('Dosya yüklenirken hata oluştu', 'error'); }
+        } catch (e) {
+            showNotification('Dosya yüklenirken hata oluştu: ' + e.message, 'error');
+        }
     }
     
     async removeEpatsDocument() {
@@ -364,21 +450,54 @@ class TaskUpdateController {
         if (window.$) $('#accrualModal').modal('show');
     }
 
+    // 🔥 YENİ: JSONB objelerini veya dizilerini okuyup düzgün metne çeviren formatlayıcı
+    formatCurrency(amountData) {
+        if (!amountData) return '0 TRY';
+        
+        // Eğer dizi (array) olarak gelirse (Örn: birden çok döviz)
+        if (Array.isArray(amountData)) {
+            if (amountData.length === 0) return '0 TRY';
+            return amountData.map(x => `${x.amount || 0} ${x.currency || 'TRY'}`).join(' + ');
+        }
+        
+        // Eğer obje olarak gelirse
+        if (typeof amountData === 'object') {
+            return `${amountData.amount || 0} ${amountData.currency || 'TRY'}`;
+        }
+        
+        // Sadece düz sayı ise
+        return `${amountData} TRY`;
+    }
+
+    // 🔥 GÜNCELLENDİ: formatCurrency kullanılarak ekrana basılıyor
     async renderAccruals() {
         const accruals = await this.dataManager.getAccrualsByTaskId(this.taskId);
         const container = document.getElementById('accrualsContainer');
+        
         if (!accruals || accruals.length === 0) {
             container.innerHTML = `<div class="text-center p-3 text-muted border rounded bg-light"><i class="fas fa-receipt mr-2"></i>Kayıt bulunamadı.</div>`;
             return;
         }
+
         container.innerHTML = `
             <div class="row w-100 m-0">
-                ${accruals.map(a => `
-                    <div class="col-12 mb-3">
+                ${accruals.map(a => {
+                    // Objeyi güvenle formatla
+                    const amountStr = this.formatCurrency(a.totalAmount || a.total_amount);
+                    
+                    // Duruma göre renk belirle
+                    let statusColor = '#f39c12'; 
+                    let statusText = 'Ödenmedi';
+                    if(a.status === 'paid') { statusColor = '#27ae60'; statusText = 'Ödendi'; }
+                    else if(a.status === 'cancelled') { statusColor = '#95a5a6'; statusText = 'İptal'; }
+
+                    return `
+                    <div class="col-12 mb-3 px-0">
                         <div class="card shadow-sm border-light w-100 h-100">
                             <div class="card-body">
                                 <div class="d-flex justify-content-between align-items-center mb-3">
-                                    <h5 class="mb-0 font-weight-bold text-dark">${a.totalAmount} TRY</h5>
+                                    <h5 class="mb-0 font-weight-bold text-dark">${amountStr}</h5>
+                                    <span class="badge badge-pill text-white" style="background-color: ${statusColor}; font-size: 0.8rem;">${statusText}</span>
                                 </div>
                                 <div class="text-right">
                                     <button class="btn btn-sm btn-outline-primary edit-accrual-btn" data-id="${a.id}">
@@ -387,7 +506,8 @@ class TaskUpdateController {
                                 </div>
                             </div>
                         </div>
-                    </div>`).join('')}
+                    </div>`;
+                }).join('')}
             </div>`;
     }
 
@@ -401,10 +521,19 @@ class TaskUpdateController {
             this.currentDocuments[epatsDocIndex].documentDate = evrakDate;
         }
 
+        const currentUser = authService.getCurrentUser();
+        const newHistoryEntry = {
+            action: "Görev güncellendi",
+            timestamp: new Date().toISOString(),
+            userEmail: currentUser?.email || 'Bilinmiyor'
+        };
+        const history = this.taskData.history ? [...this.taskData.history] : [];
+        history.push(newHistoryEntry);
+
         const officialDateVal = document.getElementById('taskDueDate').value;
         const operationalDateVal = document.getElementById('deliveryDate').value;
 
-        // 🔥 GÜÇLÜ KAYIT: İlgili Taraf ve Dokümanlar eksiksiz yollanıyor
+        // Supabase için doğru isimlendirmelerle veriyi yolluyoruz
         const updateData = {
             status: document.getElementById('taskStatus').value,
             title: document.getElementById('taskTitle').value,
@@ -413,6 +542,7 @@ class TaskUpdateController {
             relatedIpRecordId: this.selectedIpRecordId,
             relatedPartyId: this.selectedPersonId, 
             documents: this.currentDocuments,
+            history: history,
             officialDueDate: officialDateVal ? new Date(officialDateVal).toISOString() : null,
             dueDate: operationalDateVal ? new Date(operationalDateVal).toISOString() : null,
             operationalDueDate: operationalDateVal ? new Date(operationalDateVal).toISOString() : null
@@ -427,7 +557,9 @@ class TaskUpdateController {
                     if (transId) await this.dataManager.updateTransaction(this.selectedIpRecordId, transId, { documents: this.currentDocuments });
                 } catch (err) { console.error("Senkronizasyon hatası:", err); }
             }
+            
             showNotification('Değişiklikler başarıyla kaydedildi.', 'success');
+            localStorage.setItem('crossTabUpdatedTaskId', this.taskId);
             setTimeout(() => { window.location.href = 'task-management.html'; }, 1000); 
         } else {
             showNotification('Hata: ' + res.error, 'error');
