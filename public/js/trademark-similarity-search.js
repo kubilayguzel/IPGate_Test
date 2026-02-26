@@ -689,13 +689,11 @@ const formatCacheData = (r) => ({
     isSimilar: r.is_similar, holders: r.holders, note: r.note, bs: r.bs_value, imagePath: r.image_path, source: 'cache'
 });
 
-
 const loadDataFromCache = async (bulletinKey) => {
     const noRecordsMessage = document.getElementById('noRecordsMessage');
     const infoMessageContainer = document.getElementById('infoMessageContainer');
     
     try {
-        // 1. IŞIK HIZI: Önce toplam kayıt sayısını soruyoruz
         const { count, error: countErr } = await supabase
             .from('monitoring_trademark_records')
             .select('*', { count: 'exact', head: true })
@@ -706,8 +704,7 @@ const loadDataFromCache = async (bulletinKey) => {
         let cachedResults = [];
 
         if (count > 0) {
-            // 2. PARALEL İNDİRME: Tüm veriyi 1000'erli paketler halinde AYNI ANDA çekiyoruz!
-            const limit = 1000;
+            const limit = 20000;
             const fetchPromises = [];
             
             for (let offset = 0; offset < count; offset += limit) {
@@ -719,7 +716,6 @@ const loadDataFromCache = async (bulletinKey) => {
                 );
             }
 
-            // Bekleme yok, tüm istekler aynı anda biter (30 saniye yerine 1-2 saniye sürer)
             const responses = await Promise.all(fetchPromises);
             
             responses.forEach(res => {
@@ -735,6 +731,14 @@ const loadDataFromCache = async (bulletinKey) => {
                         holders: item.holders,
                         imagePath: item.image_path,
                         bulletinId: item.bulletin_id,
+                        
+                        // 🔥 İŞTE SORUNUN ÇÖZÜMÜ BURASI:
+                        // Veritabanındaki 'is_similar' değerini alıp arayüze 'isSimilar' olarak öğretiyoruz.
+                        // Eğer değer false değilse (true veya undefined ise) her zaman "Benzer" (true) kabul et!
+                        isSimilar: item.is_similar === true, 
+                        
+                        bs: item.bs_value || '', 
+                        note: item.note || '',   
                         source: 'cache'
                     }));
                     cachedResults = cachedResults.concat(mappedData);
@@ -912,6 +916,7 @@ const performSearch = async () => {
         if (resultsFromCF?.length > 0) {
             const processedResults = resultsFromCF.map(hit => ({ ...hit,
                 source: 'new',
+                isSimilar: false, // 🔥 YENİ EKLENEN SATIR: Yeni aramalarda gelen sonuçların hepsi "Benzemez" butonuna sahip olur.
                 monitoredTrademark: filteredMonitoringTrademarks.find(tm => tm.id === hit.monitoredTrademarkId)?.title || hit.markName
             }));
 
@@ -1022,21 +1027,43 @@ const groupAndSortResults = async () => {
 };
 
 const handleSimilarityToggle = async (event) => {
-    const { resultId } = event.target.dataset;
+    const btn = event.target;
+    const { resultId } = btn.dataset;
+    
     const currentHit = allSimilarResults.find(r => r.objectID === resultId || r.id === resultId);
     if (!currentHit) return;
 
-    // Eğer false değilse false yap, false ise true yap
-    const newStatus = currentHit.isSimilar !== false ? false : true;
-    
-    // 🔥 Eski tablo adı düzeltildi
-    const { error } = await supabase.from('monitoring_trademark_records').update({ is_similar: newStatus }).eq('id', resultId);
-    
-    if (!error) {
-        currentHit.isSimilar = newStatus;
-        event.target.textContent = newStatus ? 'Benzer' : 'Benzemez';
-        event.target.classList.toggle('similar', newStatus);
-        event.target.classList.toggle('not-similar', !newStatus);
+    // 🔥 DÜZELTME 2: Ağ isteği bitene kadar butonu pasife al (Çift tıklama koruması)
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+    try {
+        // Eğer false ise true, true/undefined ise false yap
+        const newStatus = currentHit.isSimilar === false ? true : false;
+        
+        const { error } = await supabase
+            .from('monitoring_trademark_records')
+            .update({ is_similar: newStatus })
+            .eq('id', resultId);
+        
+        if (!error) {
+            // Arayüz verisini güncelle
+            currentHit.isSimilar = newStatus;
+            
+            // Butonun görüntüsünü yenile
+            btn.textContent = newStatus ? 'Benzer' : 'Benzemez';
+            btn.className = `action-btn ${newStatus ? 'similar' : 'not-similar'}`;
+        } else {
+            console.error("Güncelleme hatası:", error);
+            showNotification('Durum güncellenemedi', 'error');
+            // Hata olursa eski haline döndür
+            btn.textContent = currentHit.isSimilar ? 'Benzer' : 'Benzemez';
+        }
+    } finally {
+        // Butonu tekrar aktifleştir
+        btn.disabled = false;
+        btn.style.opacity = '1';
     }
 };
 
