@@ -1,6 +1,6 @@
 // public/js/trademark-similarity-search.js
 
-import { supabase } from '../supabase-config.js'; // 🔥 Tamamen Supabase'e geçildi
+import { supabase, taskService } from '../supabase-config.js'; // 🔥 taskService import edildi
 import { runTrademarkSearch } from './trademark-similarity/run-search.js';
 import Pagination from './pagination.js';
 import { loadSharedLayout } from './layout-loader.js';
@@ -277,18 +277,32 @@ const refreshTriggeredStatus = async (bulletinNo) => {
     try {
         taskTriggeredStatus.clear();
         if (!bulletinNo) return;
-        // YENİ: Firebase yerine Supabase'den görev kontrolü
-        const { data: tasks } = await supabase.from('tasks').select('*').eq('task_type', '20').eq('status', 'awaiting_client_approval');
+        
+        // 🔥 SUPABASE YAMASI: tasks tablosunda doğrudan JSONB veya ana kolonlardan arama yapılır
+        const { data: tasks } = await supabase.from('tasks')
+            .select('id, bulletin_no, client_id, details')
+            .eq('task_type', '66')
+            .in('status', ['open', 'awaiting_client_approval']);
+            
         if (!tasks || tasks.length === 0) return;
         
         tasks.forEach(t => {
-            let details = {};
-            try { details = typeof t.details === 'string' ? JSON.parse(t.details) : (t.details || {}); } catch(e){}
-            if (String(details?.bulletinNo || t.bulletin_no || '') === String(bulletinNo)) {
-                if (t.client_id) taskTriggeredStatus.set(t.client_id, 'Evet');
+            let detailsObj = t.details || {};
+            // JSON string gelirse parse et
+            if (typeof detailsObj === 'string') {
+                try { detailsObj = JSON.parse(detailsObj); } catch(e){}
+            }
+            
+            const taskBulletin = t.bulletin_no || detailsObj.bulletinNo || '';
+            const clientId = t.client_id || detailsObj.relatedParty?.id || '';
+            
+            if (String(taskBulletin) === String(bulletinNo) && clientId) {
+                taskTriggeredStatus.set(String(clientId), 'Evet');
             }
         });
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+        console.error("Görev durumu kontrol hatası:", e); 
+    }
 };
 
 // --- 5. RENDER FUNCTIONS ---
@@ -775,7 +789,7 @@ const handleNoteCellClick = (cell) => {
 };
 
 // ============================================================================
-// RAPOR OLUŞTURMA (SUPABASE EDGE FUNCTIONS)
+// RAPOR OLUŞTURMA VE GÖREV TETİKLEME (SUPABASE YAMASI BURADA)
 // ============================================================================
 
 const buildReportData = async (results) => {
@@ -937,22 +951,62 @@ const handleReportGeneration = async (event, options = {}) => {
             const blob = new Blob([Uint8Array.from(atob(response.file), c => c.charCodeAt(0))], { type: 'application/zip' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            // 🔥 DÜZELTME: Dosya ismini maksimum 25 karakterle sınırlandırdık ki Windows hata vermesin
             const safeDownloadName = (ownerName || 'Rapor').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 25);
             link.download = isGlobal ? `Toplu_Rapor.zip` : `${safeDownloadName}_Rapor.zip`;
             document.body.appendChild(link); link.click(); document.body.removeChild(link);
 
-            if (createTasks && createdTaskCount > 0) {
+            // 🔥 SUPABASE GÖREV YAMASI BAŞLANGICI
+            if (createTasks) {
+                for (const tmData of reportData) {
+                    try {
+                        const targetRecordId = filteredResults.find(r => r.monitoredTrademarkId)?.monitoredTrademarkId || null;
+                        
+                        // Önce Mail Taslağını Kaydet
+                        const { data: mailData, error: mailError } = await supabase.from('mail_notifications').insert({
+                            id: crypto.randomUUID(), 
+                            record_id: targetRecordId,
+                            subject: `Marka Bülten Benzerlik Bildirimi - ${tmData.monitoredMark?.name}`,
+                            body: "Müvekkil raporu başarıyla oluşturuldu.",
+                            status: "draft",
+                            created_at: new Date().toISOString()
+                        }).select('id').single();
+
+                        if (mailError) throw mailError;
+
+                        // type: 66 "Değerlendirme İşlemi" (Mail onayı) için task oluşturuyoruz
+                        const taskPayload = {
+                            title: `Bülten Benzerlik Bildirimi - ${tmData.monitoredMark?.name}`,
+                            description: `Bülten İtiraz Süreci için benzerlik raporu hazırlandı. Taslak maili inceleyip müvekkile gönderiniz.`,
+                            task_type: "66", 
+                            status: "open",
+                            priority: "high",
+                            ip_record_id: targetRecordId,
+                            iprecord_title: tmData.monitoredMark?.name,
+                            mail_notification_id: mailData.id,
+                            bulletin_no: bulletinNo,
+                            assigned_to_user_id: "dqk6yRN7Kwgf6HIJldLt9Uz77RU2", // Selcan Hanım
+                            assigned_to_email: "selcanakoglu@evrekapatent.com"
+                        };
+
+                        // `taskService.createTask` doğrudan SQL Sayaçları ve UUID ile uğraşır
+                        await taskService.createTask(taskPayload);
+
+                    } catch (e) { console.error("Görev oluşturma hatası:", e); }
+                }
+
                 await refreshTriggeredStatus(bulletinNo);
                 await new Promise(resolve => setTimeout(resolve, 150));
                 await renderMonitoringList();
             }
+            // 🔥 SUPABASE GÖREV YAMASI BİTİŞİ
+            
         } else {
             showNotification('Rapor oluşturma hatası.', 'error');
         }
     } catch (err) {
         showNotification('Kritik hata oluştu!', 'error');
     } finally {
+        SimpleLoading.hide();
         btn.disabled = false;
         btn.innerHTML = createTasks ? '<i class="fas fa-paper-plane"></i> Rapor + Bildir' : '<i class="fas fa-file-pdf"></i> Rapor';
     }
@@ -996,8 +1050,6 @@ const queryTpRecordForManualAdd = async () => {
     
     SimpleLoading.show('Sorgulanıyor...', 'Veritabanında aranıyor...');
     try {
-        // 🔥 .single() KALDIRILDI! 
-        // .eq yerine .ilike kullanıldı ki "2025/123" ile "2025 / 123" gibi ufak farklar patlamasın.
         const { data, error } = await supabase
             .from('trademark_bulletin_records')
             .select('*')
@@ -1006,7 +1058,6 @@ const queryTpRecordForManualAdd = async () => {
 
         if (error) throw error;
 
-        // Dönen verinin içi boş mu kontrolü yapıyoruz (406 Hatasını engelleyen kısım burası)
         if (!data || data.length === 0) {
             SimpleLoading.hide(); 
             showNotification('Kayıt bulunamadı. Numaraları kontrol edin.', 'error');
@@ -1016,7 +1067,6 @@ const queryTpRecordForManualAdd = async () => {
             return;
         }
 
-        // Bulunan ilk kaydı alıyoruz
         const record = data[0];
 
         tpSearchResultData = { 
@@ -1063,7 +1113,6 @@ const saveManualResultEntry = async () => {
     if (sourceType === 'tp') {
         if (!tpSearchResultData) return;
         
-        // Holders (Sahipler) bilgisini her ihtimale karşı düz metne (string) çeviriyoruz
         let flatHolders = tpSearchResultData.holders;
         if (Array.isArray(flatHolders)) {
             flatHolders = flatHolders.map(h => h.name || h.holderName || h).join(', ');
@@ -1098,7 +1147,6 @@ const saveManualResultEntry = async () => {
 
     SimpleLoading.show('Kaydediliyor...', 'Sonuç ekleniyor...');
     
-    // 🚀 HATA ÇÖZÜMÜ: Gönderilen veriyi DİZİ [ ] içine alarak gönderiyoruz.
     const { error } = await supabase.from('search_results_cache').insert([resultPayload]);
     
     SimpleLoading.hide();
