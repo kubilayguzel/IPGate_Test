@@ -682,6 +682,7 @@ const formatCacheData = (r) => ({
     isSimilar: r.is_similar, holders: r.holders, note: r.note, bs: r.bs_value, imagePath: r.image_path, source: 'cache'
 });
 
+
 const loadDataFromCache = async (bulletinKey) => {
     const noRecordsMessage = document.getElementById('noRecordsMessage');
     const infoMessageContainer = document.getElementById('infoMessageContainer');
