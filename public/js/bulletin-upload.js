@@ -56,6 +56,16 @@ function setupUploadEvents() {
   }
 
   // --- SQL Parse Yardımcıları ---
+  function formatDateForSupabase(dateStr) {
+      if (!dateStr) return null;
+      const s = String(dateStr).trim();
+      const match = s.match(/^(\d{1,2})[\/\.](\d{1,2})[\/\.](\d{4})$/);
+      if (match) {
+          return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+      }
+      return s; 
+  }
+
   function parseValuesFromRaw(raw) {
       const values = [];
       let current = "";
@@ -87,9 +97,8 @@ function setupUploadEvents() {
     
     try {
       if (progressContainer) progressContainer.style.display = "block";
-      updateProgress(0, "ZIP dosyası tarayıcıda açılıyor (Bu işlem bilgisayar hızınıza göre biraz sürebilir)...");
+      updateProgress(0, "ZIP dosyası tarayıcıda açılıyor...");
 
-      // 1. Tarayıcıda ZIP dosyasını belleğe al
       const zip = await JSZip.loadAsync(selectedFile);
       
       let bulletinNo = "Unknown";
@@ -99,7 +108,6 @@ function setupUploadEvents() {
 
       updateProgress(5, "Dosyalar taranıyor...");
 
-      // 2. ZIP içindeki dosyaları sınıflandır
       for (const [filename, zipEntry] of Object.entries(zip.files)) {
         if (zipEntry.dir) continue;
         const lowerName = filename.toLowerCase();
@@ -121,7 +129,6 @@ function setupUploadEvents() {
 
       updateProgress(10, `Bülten No: ${bulletinNo} | Veriler Çözümleniyor...`);
 
-      // 3. SQL Dosyasını Parse Et
       const recordsMap = new Map();
       let startIndex = 0;
 
@@ -142,22 +149,47 @@ function setupUploadEvents() {
 
           const appNo = rawValues[0];
           if (!recordsMap.has(appNo)) {
-              recordsMap.set(appNo, { application_no: appNo, bulletin_no: bulletinNo, holders: [] });
+              recordsMap.set(appNo, { application_no: appNo, bulletin_no: bulletinNo, holders: [], goodsObjects: [] });
           }
           const record = recordsMap.get(appNo);
 
           if (table === "TRADEMARK") {
-              record.application_date = rawValues[1];
+              record.application_date = formatDateForSupabase(rawValues[1]);
               record.mark_name = rawValues[4] || rawValues[5];
               record.nice_classes = rawValues[6];
           } else if (table === "HOLDER") {
               const holderName = rawValues[2];
               if (holderName) record.holders.push(holderName);
+          } else if (table === "GOODS") {
+              // 🔥 DÜZELTME BURADA: Sınıf Numarası (Class No) için doğru indeks (2) seçildi!
+              let classNo = "";
+              let classText = "";
+
+              if (rawValues.length >= 4) {
+                  // İdeal Format: ['2025/123', '1', '35', 'Reklamcılık...']
+                  classNo = rawValues[2] ? String(rawValues[2]).trim() : '';
+                  classText = rawValues[3] ? String(rawValues[3]).trim() : '';
+              } else if (rawValues.length === 3) {
+                  // Olası Eksik Format
+                  classNo = rawValues[1] ? String(rawValues[1]).trim() : '';
+                  classText = rawValues[2] ? String(rawValues[2]).trim() : '';
+              } else {
+                  // Kurtarma (Fallback)
+                  classText = rawValues.reduce((a, b) => (b && b.length > a.length) ? b : a, "");
+              }
+
+              if (classText && classText !== "") {
+                  record.goodsObjects.push({
+                      classNo: classNo,
+                      classText: classText
+                  });
+              }
           }
       }
 
-      // Veritabanı Kayıtlarını Hazırla
       const finalRecords = [];
+      const finalGoods = [];
+
       recordsMap.forEach((r) => {
           if (r.mark_name) {
               const safeAppNo = r.application_no.replace(/\//g, '_').replace(/-/g, '_');
@@ -167,7 +199,6 @@ function setupUploadEvents() {
                   image_path = `bulletins/trademark_${bulletinNo}_images/${imgMatch.name.split('/').pop()}`;
               }
 
-              // 🔥 DÜZELTME: Sabit/deterministik ID. (Aynı dosya iki kez yüklenirse kopyalamak yerine ezer)
               const deterministicId = `bull_${bulletinNo}_app_${safeAppNo}`;
 
               finalRecords.push({
@@ -178,34 +209,53 @@ function setupUploadEvents() {
                   application_date: r.application_date,
                   nice_classes: r.nice_classes,
                   holders: r.holders.join(', '),
-                  image_path: image_path
+                  image_path: image_path,
+                  created_at: new Date().toISOString()
+              });
+
+              r.goodsObjects.forEach((g, idx) => {
+                  finalGoods.push({
+                      id: `${deterministicId}_class_${g.classNo}_${idx}`, 
+                      application_no: r.application_no,
+                      bulletin_no: r.bulletin_no,
+                      class_no: g.classNo,
+                      class_text: g.classText,
+                      created_at: new Date().toISOString()
+                  });
               });
           }
       });
 
-      // Ana Bülteni Ekle
       const bulletinDbId = `bulletin_main_${bulletinNo}`;
-      await supabase.from('trademark_bulletins').upsert({ 
+      const { error: bulletinError } = await supabase.from('trademark_bulletins').upsert({ 
           id: bulletinDbId, 
           bulletin_no: bulletinNo, 
-          bulletin_date: bulletinDate 
-      });
+          bulletin_date: formatDateForSupabase(bulletinDate),
+          created_at: new Date().toISOString()
+      }, { onConflict: 'bulletin_no' }); // 🔥 Hata çıkmasını önleyen güvenlik katmanı
+      
+      if (bulletinError) {
+          throw new Error("Ana bülten kaydı oluşturulamadı: " + bulletinError.message);
+      }
 
-      // 4. Verileri Supabase'e Yaz (1000'li Parçalar)
       updateProgress(15, `Veritabanına ${finalRecords.length} marka aktarılıyor...`);
       for (let i = 0; i < finalRecords.length; i += 1000) {
           const chunk = finalRecords.slice(i, i + 1000);
           const { error } = await supabase.from('trademark_bulletin_records').upsert(chunk);
-          if (error) {
-              console.error("Veritabanı yazma hatası:", error);
-              throw error; // Döngüyü durdur
-          }
-          
+          if (error) throw error;
           let pct = 15 + Math.floor((i / finalRecords.length) * 15);
-          updateProgress(pct, `Metin Verileri Kaydediliyor: ${Math.min(i + 1000, finalRecords.length)} / ${finalRecords.length}`);
+          updateProgress(pct, `Markalar Kaydediliyor: ${Math.min(i + 1000, finalRecords.length)} / ${finalRecords.length}`);
       }
 
-      // --- KURŞUN GEÇİRMEZ (FAIL-SAFE) YÜKLEME FONKSİYONU ---
+      if (finalGoods.length > 0) {
+          updateProgress(25, `Veritabanına ${finalGoods.length} eşya listesi aktarılıyor...`);
+          for (let i = 0; i < finalGoods.length; i += 1000) {
+              const chunk = finalGoods.slice(i, i + 1000);
+              const { error } = await supabase.from('trademark_bulletin_goods').upsert(chunk);
+              if (error) console.error("Goods (Eşya) veritabanı yazma hatası:", error);
+          }
+      }
+
       async function uploadImageWithRetrySafe(destPath, imgData, contentType, retries = 3) {
           for (let i = 0; i < retries; i++) {
               try {
@@ -213,9 +263,7 @@ function setupUploadEvents() {
                       contentType: contentType,
                       upsert: true 
                   });
-                  
                   if (!error) return true; 
-                  
                   await new Promise(res => setTimeout(res, 500 * (i + 1))); 
               } catch (err) {
                   await new Promise(res => setTimeout(res, 500 * (i + 1))); 
@@ -224,9 +272,8 @@ function setupUploadEvents() {
           return false; 
       }
 
-      // 5. Görselleri Storage'a Yükle (Dengeli ve Asla Çökmeyen Paketler)
-      updateProgress(30, "Görseller Storage'a aktarılıyor. (Lütfen sekmeyi kapatmayın)...");
-      const CHUNK_SIZE = 25; 
+      updateProgress(35, "Görseller Storage'a aktarılıyor. (Lütfen sekmeyi kapatmayın)...");
+      const CHUNK_SIZE = 40; 
       let uploadedCount = 0;
 
       for (let i = 0; i < imageFiles.length; i += CHUNK_SIZE) {
@@ -240,13 +287,11 @@ function setupUploadEvents() {
                   const contentType = imgName.endsWith('.png') ? 'image/png' : 'image/jpeg';
                   
                   await uploadImageWithRetrySafe(destPath, imgData, contentType);
-              } catch (blobErr) {
-                  console.error("Dosya okuma hatası, atlanıyor...", blobErr);
-              }
+              } catch (blobErr) {}
           }));
           
           uploadedCount += chunk.length;
-          let pct = 30 + Math.floor((uploadedCount / imageFiles.length) * 70);
+          let pct = 35 + Math.floor((uploadedCount / imageFiles.length) * 65);
           updateProgress(pct, `Görseller Yükleniyor: ${Math.min(uploadedCount, imageFiles.length)} / ${imageFiles.length}`);
       }
 
