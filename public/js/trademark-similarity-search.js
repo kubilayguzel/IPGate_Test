@@ -156,16 +156,24 @@ const imageObserver = new IntersectionObserver((entries, observer) => {
     entries.forEach(async (entry) => {
         if (entry.isIntersecting) {
             const container = entry.target;
-            const hitData = JSON.parse(container.dataset.hitData);
-            observer.unobserve(container);
             try {
+                // 🔥 KESİN ÇÖZÜM: HTML'i bozmamak için şifrelenmiş veriyi güvenle çözüyoruz
+                const hitData = JSON.parse(decodeURIComponent(container.dataset.hitData));
+                observer.unobserve(container);
+                
                 let imgUrl = hitData.brandImageUrl || '';
+                
+                // 1. ÖNCELİK: Doğrudan records'daki image_path'i kullan (Bülten Görseli)
                 if (!imgUrl && hitData.imagePath) imgUrl = _normalizeImageSrc(hitData.imagePath);
+                
+                // 2. YEDEK PLÂN: Eğer image_path boşsa, veritabanından Application No ile bul
                 if (!imgUrl && hitData.applicationNo) imgUrl = await _getBrandImageByAppNo(hitData.applicationNo);
                 
                 if (imgUrl) container.innerHTML = `<div class="tm-img-box tm-img-box-lg"><img src="${imgUrl}" loading="lazy" alt="Marka" class="trademark-image-thumbnail-large"></div>`;
                 else container.innerHTML = `<div class="tm-img-box tm-img-box-lg"><div class="tm-placeholder">-</div></div>`;
-            } catch (err) { container.innerHTML = `<div class="tm-img-box tm-img-box-lg"><div class="tm-placeholder">?</div></div>`; }
+            } catch (err) { 
+                container.innerHTML = `<div class="tm-img-box tm-img-box-lg"><div class="tm-placeholder">?</div></div>`; 
+            }
         }
     });
 }, { rootMargin: '100px 0px', threshold: 0.01 });
@@ -281,33 +289,25 @@ const refreshTriggeredStatus = async (bulletinNo) => {
         taskTriggeredStatus.clear();
         if (!bulletinNo) return;
         
-        // 🔥 SUPABASE YAMASI: tasks tablosunda doğrudan JSONB veya ana kolonlardan arama yapılır
-        const { data: tasks } = await supabase.from('tasks')
-            .select('id, bulletin_no, client_id, details')
+        // 🔥 Şemaya %100 Uyumlu Sorgu
+        const { data: tasks, error } = await supabase.from('tasks')
+            .select('client_id, bulletin_no')
             .eq('task_type', '66')
-            .in('status', ['open', 'awaiting_client_approval']);
+            .in('status', ['open', 'awaiting_client_approval'])
+            .eq('bulletin_no', String(bulletinNo)); // Doğrudan kolondan arar!
             
+        if (error) throw error;
         if (!tasks || tasks.length === 0) return;
         
         tasks.forEach(t => {
-            let detailsObj = t.details || {};
-            // JSON string gelirse parse et
-            if (typeof detailsObj === 'string') {
-                try { detailsObj = JSON.parse(detailsObj); } catch(e){}
-            }
-            
-            const taskBulletin = t.bulletin_no || detailsObj.bulletinNo || '';
-            const clientId = t.client_id || detailsObj.relatedParty?.id || '';
-            
-            if (String(taskBulletin) === String(bulletinNo) && clientId) {
-                taskTriggeredStatus.set(String(clientId), 'Evet');
+            if (t.client_id) {
+                taskTriggeredStatus.set(String(t.client_id), 'Evet');
             }
         });
     } catch (e) { 
         console.error("Görev durumu kontrol hatası:", e); 
     }
 };
-
 // --- 5. RENDER FUNCTIONS ---
 const renderMonitoringList = () => {
     const tbody = document.getElementById('monitoringListBody');
@@ -443,12 +443,19 @@ const createResultRow = (hit, rowIndex) => {
     }).join('');
 
     const row = document.createElement('tr');
-    const minimalHitData = JSON.stringify({ imagePath: hit.imagePath, brandImageUrl: hit.brandImageUrl, applicationNo: hit.applicationNo });
+    
+    // 🔥 KESİN ÇÖZÜM: HTML etiketlerini (Tırnaklar, Boşluklar) kırmaması için encode edildi.
+    // hit.image_path eşleşmesini de garanti altına aldık.
+    const minimalHitData = encodeURIComponent(JSON.stringify({ 
+        imagePath: hit.imagePath || hit.image_path || '', 
+        brandImageUrl: hit.brandImageUrl || '', 
+        applicationNo: hit.applicationNo || '' 
+    }));
 
     row.innerHTML = `
         <td>${rowIndex}</td>
         <td><button class="action-btn ${hit.isSimilar ? 'similar' : 'not-similar'}" data-result-id="${hit.id || hit.applicationNo}" data-monitored-trademark-id="${hit.monitoredTrademarkId}">${hit.isSimilar ? 'Benzer' : 'Benzemez'}</button></td>
-        <td class="trademark-image-cell lazy-load-container" data-hit-data='${minimalHitData}'><div class="tm-img-box tm-img-box-lg"><div class="tm-placeholder"><i class="fas fa-spinner fa-spin text-muted"></i></div></div></td>
+        <td class="trademark-image-cell lazy-load-container" data-hit-data="${minimalHitData}"><div class="tm-img-box tm-img-box-lg"><div class="tm-placeholder"><i class="fas fa-spinner fa-spin text-muted"></i></div></div></td>
         <td><strong>${hit.markName || '-'}</strong></td>
         <td>${holders}</td>
         <td>${niceClassHtml}</td>
@@ -1345,33 +1352,68 @@ const handleReportGeneration = async (event, options = {}) => {
                     try {
                         const targetRecordId = filteredResults.find(r => r.monitoredTrademarkId)?.monitoredTrademarkId || null;
                         
-                        // Önce Mail Taslağını Kaydet
+                        // 🔥 KURAL: targetRecordId aynı zamanda IP Record id'sidir. Gerçek client_id oradan alınır!
+                        let finalClientId = null;
+                        if (targetRecordId) {
+                            const { data: ipData } = await supabase.from('ip_records').select('client_id, applicants').eq('id', targetRecordId).limit(1).single();
+                            
+                            if (ipData) {
+                                if (ipData.client_id && !String(ipData.client_id).startsWith('owner_')) {
+                                    finalClientId = ipData.client_id;
+                                } else if (ipData.applicants) {
+                                    let apps = ipData.applicants;
+                                    if (typeof apps === 'string') try { apps = JSON.parse(apps); } catch(e){}
+                                    if (Array.isArray(apps) && apps.length > 0 && apps[0].id) {
+                                        finalClientId = apps[0].id;
+                                    }
+                                }
+                            }
+                            
+                            // Persons tablosunda teyit et (409 Conflict'i %100 önlemek için)
+                            if (finalClientId) {
+                                const { data: personCheck } = await supabase.from('persons').select('id').eq('id', finalClientId).limit(1).single();
+                                if (!personCheck) finalClientId = null; // Veritabanında yoksa mecburen null
+                            }
+                        }
+
+                        // 1. Önce Mail Taslağını Kaydet
                         const { data: mailData, error: mailError } = await supabase.from('mail_notifications').insert({
-                            id: crypto.randomUUID(), 
-                            record_id: targetRecordId,
+                            related_ip_record_id: targetRecordId,
+                            client_id: finalClientId, // 🔥 Temiz ve gerçek ID
+                            bulletin_no: String(bulletinNo),
+                            applicant_name: tmData.monitoredMark?.ownerName,
                             subject: `Marka Bülten Benzerlik Bildirimi - ${tmData.monitoredMark?.name}`,
                             body: "Müvekkil raporu başarıyla oluşturuldu.",
                             status: "draft",
-                            created_at: new Date().toISOString()
+                            notification_type: "marka",
+                            source: "bulletin_watch_system"
                         }).select('id').single();
 
                         if (mailError) throw mailError;
 
+                        // 2. Ardından Görevi (Task) Oluştur
                         const taskPayload = {
                             title: `Bülten Benzerlik Bildirimi - ${tmData.monitoredMark?.name}`,
                             description: `Bülten İtiraz Süreci için benzerlik raporu hazırlandı. Taslak maili inceleyip müvekkile gönderiniz.`,
                             task_type: "66", 
                             status: "open",
                             priority: "high",
-                            ip_record_id: targetRecordId,
+                            related_ip_record_id: targetRecordId,
                             iprecord_title: tmData.monitoredMark?.name,
-                            mail_notification_id: mailData.id,
-                            bulletin_no: bulletinNo,
-                            assigned_to_user_id: "dqk6yRN7Kwgf6HIJldLt9Uz77RU2", 
+                            iprecord_application_no: tmData.monitoredMark?.applicationNo,
+                            client_id: finalClientId, // 🔥 Temiz ve gerçek ID
+                            bulletin_no: String(bulletinNo),
+                            assigned_to_uid: "dqk6yRN7Kwgf6HIJldLt9Uz77RU2",
                             assigned_to_email: "selcanakoglu@evrekapatent.com"
                         };
 
-                        await taskService.createTask(taskPayload);
+                        const taskObj = await taskService.createTask(taskPayload);
+
+                        // 3. İki tabloyu birbirine bağla (associated_task_id)
+                        if (taskObj && taskObj.id) {
+                            await supabase.from('mail_notifications').update({ associated_task_id: taskObj.id }).eq('id', mailData.id);
+                        }
+
                     } catch (e) { console.error("Görev oluşturma hatası:", e); }
                 }
 
