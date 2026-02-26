@@ -32,10 +32,12 @@ document.getElementById("searchButton").addEventListener("click", async () => {
     }
 
     // 2. Bültene ait kayıtları (Markaları) getir
+    // 🔥 DÜZELTME: Limit eklenmediğinde Supabase 1000'de keser veya sayfa donar. Limit 5000'e çekildi.
     const { data: records, error: recordsError } = await supabase
       .from("trademark_bulletin_records")
       .select("*")
-      .eq("bulletin_no", bulletinNo);
+      .eq("bulletin_no", bulletinNo)
+      .limit(5000); 
 
     if (recordsError || !records || records.length === 0) {
       recordsContainer.innerHTML = "<p>Bu bültene ait kayıt bulunamadı.</p>";
@@ -68,7 +70,7 @@ document.getElementById("searchButton").addEventListener("click", async () => {
       html += `
         <tr>
           <td>${r.application_no || "-"}</td>
-          <td>${imageUrl ? `<img src="${imageUrl}" class="marka-image" style="max-height: 60px; object-fit: contain;">` : "-"}</td>
+          <td>${imageUrl ? `<img src="${imageUrl}" loading="lazy" class="marka-image" style="max-height: 60px; object-fit: contain;">` : "-"}</td>
           <td>${r.mark_name || "-"}</td>
           <td>${r.holders || "-"}</td>
           <td>${r.application_date || "-"}</td>
