@@ -24,7 +24,6 @@ const RELATED_CLASSES_MAP: Record<string, string[]> = {
     "36": ["35", "37", "39"]
 };
 
-// 🔥 1. FARK: %100 ORİJİNAL SÖZLÜK (HİÇBİR EKSİK YOK)
 const GENERIC_WORDS = [
     'ltd', 'şti', 'aş', 'anonim', 'şirketi', 'şirket', 'limited', 'inc', 'corp', 'corporation', 'co', 'company', 'llc', 'group', 'grup',
     'sanayi', 'ticaret', 'turizm', 'tekstil', 'gıda', 'inşaat', 'danışmanlık', 'hizmet', 'hizmetleri', 'bilişim', 'teknoloji', 'sigorta', 'yayıncılık', 'mobilya', 'otomotiv', 'tarım', 'enerji', 'petrol', 'kimya', 'kozmetik', 'ilaç', 'medikal', 'sağlık', 'eğitim', 'spor', 'müzik', 'film', 'medya', 'reklam', 'pazarlama', 'lojistik', 'nakliyat', 'kargo', 'finans', 'bankacılık', 'emlak', 'gayrimenkul', 'madencilik', 'metal', 'plastik', 'cam', 'seramik', 'ahşap',
@@ -46,10 +45,10 @@ function removeTurkishSuffixes(word: string) {
     return word;
 }
 
-// 🔥 2. FARK: TEK KELİME KORUMASI EKLENDİ
+// 🔥 ALGORİTMA DÜZELTMESİ 1: toLocaleLowerCase yerine toLowerCase kullanılarak I harfinin i'ye dönüşmesi sağlandı (Firebase ile %100 aynı)
 function cleanMarkName(name: string, removeGenericWords = true) {
     if (!name) return '';
-    let cleaned = String(name).toLocaleLowerCase('tr-TR').replace(/[^a-z0-9ğüşöçı\s]/g, '').replace(/\s+/g, ' ').trim();
+    let cleaned = String(name).toLowerCase().replace(/[^a-z0-9ğüşöçı\s]/g, '').replace(/\s+/g, ' ').trim();
     if (removeGenericWords) {
         cleaned = cleaned.split(' ').filter(word => {
             const stemmedWord = removeTurkishSuffixes(word);
@@ -59,7 +58,11 @@ function cleanMarkName(name: string, removeGenericWords = true) {
     return cleaned.trim();
 }
 
-// 🔥 3. FARK: %100 ORİJİNAL GÖRSEL HARİTA (SAYILAR DAHİL)
+function normalizeStringForPhonetic(str: string) {
+    if (!str) return "";
+    return str.toLowerCase().replace(/[^a-z0-9ğüşöçı]/g, '').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c').replace(/ı/g, 'i');
+}
+
 const visualMap: Record<string, string[]> = {
     "a": ["e", "o"], "b": ["d", "p"], "c": ["ç", "s"], "ç": ["c", "s"], "d": ["b", "p"], "e": ["a", "o"], "f": ["t"],
     "g": ["ğ", "q"], "ğ": ["g", "q"], "h": ["n"], "i": ["l", "j", "ı"], "ı": ["i"], "j": ["i", "y"], "k": ["q", "x"],
@@ -75,8 +78,8 @@ function visualMismatchPenalty(a: string, b: string) {
     const minLen = Math.min(a.length, b.length);
     let penalty = lenDiff * 0.5;
     for (let i = 0; i < minLen; i++) {
-        const ca = a[i].toLocaleLowerCase('tr-TR');
-        const cb = b[i].toLocaleLowerCase('tr-TR');
+        const ca = a[i].toLowerCase();
+        const cb = b[i].toLowerCase();
         if (ca !== cb) {
             if (visualMap[ca] && visualMap[ca].includes(cb)) penalty += 0.25;
             else penalty += 1.0;
@@ -125,11 +128,6 @@ function levenshteinSimilarity(a: string, b: string): number {
         for (let j = 0; j <= lenB; j++) v0[j] = v1[j];
     }
     return 1 - (v1[lenB] / Math.max(lenA, lenB));
-}
-
-function normalizeStringForPhonetic(str: string) {
-    if (!str) return "";
-    return str.toLocaleLowerCase('tr-TR').replace(/[^a-z0-9ğüşöçı]/g, '').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c').replace(/ı/g, 'i');
 }
 
 function isPhoneticallySimilar(a: string, b: string) {
@@ -265,7 +263,6 @@ serve(async (req) => {
                     .filter(t => t && String(t).trim().length > 0 && String(t) !== "undefined")
                     .map(term => {
                         const termStr = String(term);
-                        // 🔥 ORİJİNAL KURAL: Tek kelimeyse temizleme yapma, çok kelimeyse jenerikleri at.
                         const isMultiWord = termStr.trim().split(/\s+/).length > 1;
                         return { term: termStr, cleanedSearchName: cleanMarkName(termStr, isMultiWord) };
                     });
@@ -290,9 +287,11 @@ serve(async (req) => {
                 const blueSet = new Set<string>();
 
                 greenSet.forEach(c => { if (RELATED_CLASSES_MAP[c]) RELATED_CLASSES_MAP[c].forEach(rel => blueSet.add(rel)); });
+                const bypassClassFilter = greenSet.size === 0 && orangeSet.size === 0;
+
                 const appDate = mark.applicationDate || mark.application_date || null;
 
-                return { ...mark, primaryName, searchTerms, applicationDate: appDate, greenSet, orangeSet, blueSet };
+                return { ...mark, primaryName, searchTerms, applicationDate: appDate, greenSet, orangeSet, blueSet, bypassClassFilter };
             });
 
             const { data: hits, error } = await supabase
@@ -343,27 +342,27 @@ serve(async (req) => {
                 
                 const hitClasses = rawHitClasses.map(cleanClass).filter(Boolean);
                 
-                // 🔥 ORİJİNAL KURAL: Bülten markası çok kelimeliyse temizle, tekse temizleme.
-                const isHitMultiWord = String(hit.mark_name || '').trim().split(/\s+/).length > 1;
-                const cleanedHitName = cleanMarkName(hit.mark_name || '', isHitMultiWord); 
+                const rawHitName = String(hit.mark_name || '');
+                // 🔥 ALGORİTMA DÜZELTMESİ 2: İstisna kuralı için RAW (Sadece özel karakterlerden arındırılmış) kelime kullan.
+                const rawCleanedHitName = rawHitName.toLowerCase().replace(/[^a-z0-9ğüşöçı\s]/g, '').replace(/\s+/g, ' ').trim();
+                const isHitMultiWord = rawHitName.trim().split(/\s+/).length > 1;
+                const cleanedHitName = cleanMarkName(rawHitName, isHitMultiWord); 
 
                 for (const mark of preparedMarks) {
                     const isValidDate = isValidBasedOnDate(hit.application_date, mark.applicationDate);
                     if (!isValidDate) continue;
 
-                    // 🔥 ORİJİNAL KURAL: Firebase'deki gibi, eğer markanın hiç sınıfı yoksa OTOMATİK OLARAK ELENİR!
-                    let hasPoolMatch = false; 
+                    let hasPoolMatch = mark.bypassClassFilter; 
 
-                    const classColors: Record<string, string> = {};
                     hitClasses.forEach((hc: string) => {
-                        if (mark.greenSet.has(hc)) { classColors[hc] = 'green'; hasPoolMatch = true; }
-                        else if (mark.orangeSet.has(hc)) { classColors[hc] = 'orange'; hasPoolMatch = true; }
-                        else if (mark.blueSet.has(hc)) { classColors[hc] = 'blue'; hasPoolMatch = true; }
-                        else { classColors[hc] = 'gray'; }
+                        if (mark.greenSet.has(hc)) { hasPoolMatch = true; }
+                        else if (mark.orangeSet.has(hc)) { hasPoolMatch = true; }
+                        else if (mark.blueSet.has(hc)) { hasPoolMatch = true; }
                     });
 
                     for (const searchItem of mark.searchTerms) {
-                        let isExactPrefixSuffix = searchItem.cleanedSearchName.length >= 3 && cleanedHitName.includes(searchItem.cleanedSearchName);
+                        // 🔥 ALGORİTMA DÜZELTMESİ 2 (Devamı): Includes kontrolünde raw kelime kullanarak toleransı artırdık.
+                        let isExactPrefixSuffix = searchItem.cleanedSearchName.length >= 3 && rawCleanedHitName.includes(searchItem.cleanedSearchName);
 
                         if (!hasPoolMatch && !isExactPrefixSuffix) continue;
 
