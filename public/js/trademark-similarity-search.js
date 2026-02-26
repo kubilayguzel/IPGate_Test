@@ -683,67 +683,284 @@ const formatCacheData = (r) => ({
 });
 
 const loadDataFromCache = async (bulletinKey) => {
-    const { data, error } = await supabase.from('search_results_cache').select('*').eq('bulletin_key', bulletinKey);
-    if (!error) {
-        allSimilarResults = (data || []).map(formatCacheData);
-        document.getElementById('infoMessageContainer').innerHTML = allSimilarResults.length > 0 ? `<div class="info-message success">Önbellekten ${allSimilarResults.length} sonuç yüklendi.</div>` : '';
+    const noRecordsMessage = document.getElementById('noRecordsMessage');
+    const infoMessageContainer = document.getElementById('infoMessageContainer');
+    
+    try {
+        let offset = 0;
+        const limit = 1000;
+        let hasMore = true;
+        let cachedResults = [];
+
+        // Supabase'den kalıcı tablo (monitoring_trademark_records) verilerini parça parça çek
+        while (hasMore) {
+            const { data, error } = await supabase
+                .from('monitoring_trademark_records')
+                .select('*')
+                .eq('bulletin_id', bulletinKey)
+                .range(offset, offset + limit - 1);
+
+            if (error) throw error;
+
+            if (data && data.length > 0) {
+                // UI'ın anladığı CamelCase formata çevir
+                const mappedData = data.map(item => ({
+                    id: item.id,
+                    objectID: item.id,
+                    monitoredTrademarkId: item.monitored_trademark_id,
+                    markName: item.similar_mark_name,
+                    applicationNo: item.similar_application_no,
+                    niceClasses: item.nice_classes,
+                    similarityScore: item.similarity_score,
+                    holders: item.holders,
+                    imagePath: item.image_path,
+                    bulletinId: item.bulletin_id,
+                    source: 'cache'
+                }));
+                
+                cachedResults = cachedResults.concat(mappedData);
+                offset += limit;
+            } else {
+                hasMore = false;
+            }
+        }
+
+        allSimilarResults = cachedResults;
+        
+        if (infoMessageContainer) {
+            infoMessageContainer.innerHTML = cachedResults.length > 0 
+                ? `<div class="info-message success">Önbellekten ${cachedResults.length} benzer sonuç yüklendi.</div>` 
+                : '';
+        }
+        
+        if (noRecordsMessage) {
+            noRecordsMessage.style.display = cachedResults.length > 0 ? 'none' : 'block';
+        }
+        
         await groupAndSortResults();
+        
         if (pagination) pagination.update(allSimilarResults.length);
         renderCurrentPageOfResults();
+        
+    } catch (error) {
+        console.error("Önbellekten veri yüklenirken hata:", error);
     }
 };
 
 const checkCacheAndToggleButtonStates = async () => {
-    const bulletinKey = document.getElementById('bulletinSelect').value;
-    const startBtn = document.getElementById('startSearchBtn'); const researchBtn = document.getElementById('researchBtn'); const reportBtn = document.getElementById('btnGenerateReportAndNotifyGlobal');
-    if (!bulletinKey || filteredMonitoringTrademarks.length === 0) {
-        if(startBtn) startBtn.disabled = true; if(researchBtn) researchBtn.disabled = true; if(reportBtn) reportBtn.disabled = true; return;
-    }
-    if (SimpleLoading) SimpleLoading.show({ text: 'Bülten Sorgulanıyor' });
-    const { data } = await supabase.from('search_results_cache').select('id').eq('bulletin_key', bulletinKey).limit(1);
-    const hasCache = data && data.length > 0;
-    const hasOriginal = document.getElementById('bulletinSelect').options[document.getElementById('bulletinSelect').selectedIndex]?.dataset?.hasOriginalBulletin === 'true';
+    const bulletinSelect = document.getElementById('bulletinSelect');
+    const startSearchBtn = document.getElementById('startSearchBtn');
+    const researchBtn = document.getElementById('researchBtn');
+    const btnGenerateReportAndNotifyGlobal = document.getElementById('btnGenerateReportAndNotifyGlobal');
+    const infoMessageContainer = document.getElementById('infoMessageContainer');
 
-    if (hasCache) {
-        await loadDataFromCache(bulletinKey);
-        if(startBtn) startBtn.disabled = true; if(researchBtn) researchBtn.disabled = !hasOriginal; if(reportBtn) reportBtn.disabled = allSimilarResults.length === 0;
-    } else {
-        if(startBtn) startBtn.disabled = !hasOriginal; if(researchBtn) researchBtn.disabled = true; if(reportBtn) reportBtn.disabled = true;
-        allSimilarResults = []; if (pagination) pagination.update(0); renderCurrentPageOfResults();
+    const bulletinKey = bulletinSelect.value;
+    if (!bulletinKey || filteredMonitoringTrademarks.length === 0) {
+        if (startSearchBtn) startSearchBtn.disabled = true;
+        if (researchBtn) researchBtn.disabled = true;
+        if (infoMessageContainer) infoMessageContainer.innerHTML = '';
+        if (btnGenerateReportAndNotifyGlobal) btnGenerateReportAndNotifyGlobal.disabled = true;
+        return;
     }
-    if (SimpleLoading) SimpleLoading.hide();
+
+    if (SimpleLoading) {
+        SimpleLoading.show({
+            text: 'Bülten Sorgulanıyor',
+            subtext: 'Önbellekteki veriler kontrol ediliyor...'
+        });
+    }
+
+    try {
+        const selectedOption = bulletinSelect.options[bulletinSelect.selectedIndex];
+        const hasOriginalBulletin = selectedOption?.dataset?.hasOriginalBulletin === 'true';
+        
+        // Supabase Kalıcı Tabloda bu bültene ait kayıt var mı diye sadece 1 kayıt çekerek kontrol et
+        const { data, error } = await supabase
+            .from('monitoring_trademark_records')
+            .select('id')
+            .eq('bulletin_id', bulletinKey)
+            .limit(1);
+
+        const hasCache = data && data.length > 0;
+
+        if (hasCache) {
+            await loadDataFromCache(bulletinKey);
+            
+            if (startSearchBtn) startSearchBtn.disabled = true;
+            if (researchBtn) researchBtn.disabled = !hasOriginalBulletin;
+            if (btnGenerateReportAndNotifyGlobal) btnGenerateReportAndNotifyGlobal.disabled = allSimilarResults.length === 0;
+            
+            const messageType = hasOriginalBulletin ? 'success' : 'warning';
+            const messageText = hasOriginalBulletin ? 
+                'Bu bülten sistemde kayıtlı. Önbellekten sonuçlar yüklendi.' : 
+                'Bu bülten sistemde kayıtlı değil. Sadece eski arama sonuçları gösterilmektedir.';
+            
+            if (infoMessageContainer) infoMessageContainer.innerHTML = `<div class="info-message ${messageType}"><strong>Bilgi:</strong> ${messageText}</div>`;
+        } else {
+            if (startSearchBtn) startSearchBtn.disabled = !hasOriginalBulletin;
+            if (researchBtn) researchBtn.disabled = true;
+            if (btnGenerateReportAndNotifyGlobal) btnGenerateReportAndNotifyGlobal.disabled = true;
+            
+            const messageType = hasOriginalBulletin ? 'info' : 'error';
+            const messageText = hasOriginalBulletin ? 
+                'Önbellekte veri bulunamadı. "Arama Başlat" butonuna tıklayarak arama yapabilirsiniz.' : 
+                'Bu bülten sistemde kayıtlı değil ve arama sonucu da bulunamadı.';
+                
+            if (infoMessageContainer) infoMessageContainer.innerHTML = `<div class="info-message ${messageType}"><strong>Bilgi:</strong> ${messageText}</div>`;
+            
+            allSimilarResults = [];
+            if (pagination) pagination.update(0);
+            renderCurrentPageOfResults();
+        }
+    } catch (error) {
+        console.error('Cache check error:', error);
+        if (infoMessageContainer) infoMessageContainer.innerHTML = `<div class="info-message error"><strong>Hata:</strong> Bülten bilgileri kontrol edilirken bir hata oluştu.</div>`;
+    } finally {
+        if (SimpleLoading) SimpleLoading.hide();
+    }
 };
 
 const performSearch = async () => {
-    const bulletinKey = document.getElementById('bulletinSelect').value;
+    const bulletinSelect = document.getElementById('bulletinSelect');
+    const startSearchBtn = document.getElementById('startSearchBtn');
+    const researchBtn = document.getElementById('researchBtn');
+    const btnGenerateReportAndNotifyGlobal = document.getElementById('btnGenerateReportAndNotifyGlobal');
+    const noRecordsMessage = document.getElementById('noRecordsMessage');
+    const infoMessageContainer = document.getElementById('infoMessageContainer');
+    const resultsTableBody = document.getElementById('resultsTableBody');
+
+    const bulletinKey = bulletinSelect.value;
     if (!bulletinKey || filteredMonitoringTrademarks.length === 0) return;
+    
     SimpleLoading.show('Arama başlatılıyor...', 'Lütfen bekleyin...');
+
+    setTimeout(() => {
+        const loadingContent = document.querySelector('.simple-loading-content');
+        if (loadingContent) {
+            loadingContent.style.top = '80px';
+            loadingContent.style.right = '20px';
+            loadingContent.style.left = 'auto';
+            loadingContent.style.transform = 'none';
+        }
+    }, 100);
+
+    if (noRecordsMessage) noRecordsMessage.style.display = 'none';
+    infoMessageContainer.innerHTML = '';
+    resultsTableBody.innerHTML = '';
     allSimilarResults = [];
-
-    const monitoredMarksPayload = filteredMonitoringTrademarks.map(tm => ({
-        id: tm.id, markName: tm.markName || 'BELİRSİZ_MARKA', searchMarkName: tm.brandTextSearch?.[0] || '', brandTextSearch: tm.brandTextSearch || [], niceClassSearch: tm.niceClassSearch || []
-    }));
-
-    try {
-        const results = await runTrademarkSearch(monitoredMarksPayload, bulletinKey, (pd) => {
-            SimpleLoading.update(`Taranıyor... %${pd.progress || 0}`, `Bulunan: ${pd.currentResults || 0}`);
-        });
-
-        if (results?.length > 0) {
-            allSimilarResults = results.map(hit => ({ ...hit, source: 'new', monitoredTrademark: monitoringTrademarks.find(tm => tm.id === hit.monitoredTrademarkId)?.title || hit.markName }));
-            const cachePayload = allSimilarResults.map(r => ({
-                bulletin_key: bulletinKey, monitored_trademark_id: r.monitoredTrademarkId, similar_mark_name: r.markName, similar_application_no: r.applicationNo,
-                nice_classes: Array.isArray(r.niceClasses) ? r.niceClasses.join(', ') : r.niceClasses, similarity_score: r.similarityScore, is_similar: r.isSimilar || false,
-                holders: Array.isArray(r.holders) ? r.holders.map(h => h.name || h.id || h).join(', ') : r.holders, image_path: r.imagePath || r.brandImageUrl || ''
-            }));
-            
-            // Veriyi Supabase'e 100'erli paketlerle gönder (Performans için)
-            for (let i = 0; i < cachePayload.length; i += 100) {
-                await supabase.from('search_results_cache').insert(cachePayload.slice(i, i + 100));
+    
+    const monitoredMarksPayload = filteredMonitoringTrademarks.map(tm => {
+        // 🔥 DÜZELTME: applicationDate'i ipRecord'dan çek ve Edge Function için ISO formatına çevir
+        let appDate = tm.ipRecord?.applicationDate || tm.applicationDate || null;
+        let formattedDate = null;
+        
+        if (appDate) {
+            if (typeof appDate === 'object' && typeof appDate.toDate === 'function') {
+                formattedDate = appDate.toDate().toISOString(); // Firestore Timestamp -> String
+            } else if (appDate instanceof Date) {
+                formattedDate = appDate.toISOString(); // JS Date -> String
+            } else {
+                formattedDate = String(appDate); // Zaten String ise
             }
         }
-    } catch (error) { showNotification('Arama hatası: ' + error.message, 'error'); } finally {
-        SimpleLoading.hide(); await groupAndSortResults(); renderCurrentPageOfResults(); checkCacheAndToggleButtonStates();
+
+        return {
+            id: tm.id,
+            markName: (tm.title || tm.markName || '').trim() || 'BELİRSİZ_MARKA',
+            searchMarkName: tm.searchMarkName || '', 
+            brandTextSearch: tm.brandTextSearch || [], 
+            niceClassSearch: tm.niceClassSearch || [],
+            goodsAndServicesByClass: tm.goodsAndServicesByClass || [],
+            applicationDate: formattedDate // <--- KRİTİK EKSİK BURASIYDI, EKLENDİ
+        };
+    });
+
+    try {
+        const onProgress = (pd) => {
+            if (pd.status === 'downloading') {
+                 SimpleLoading.update(
+                    `Sonuçlar İndiriliyor...`, 
+                    `Alınan Kayıt: ${pd.message.split('...')[1] || ''}`
+                );
+            } else {
+                SimpleLoading.update(
+                    `Bülten Taranıyor... %${pd.progress || 0}`, 
+                    `Tespit Edilen Benzerlik: ${pd.currentResults || 0} adet`
+                );
+            }
+        };
+
+        const resultsFromCF = await runTrademarkSearch(monitoredMarksPayload, bulletinKey, onProgress);
+        
+        if (resultsFromCF?.length > 0) {
+            const processedResults = resultsFromCF.map(hit => ({ ...hit,
+                source: 'new',
+                monitoredTrademark: filteredMonitoringTrademarks.find(tm => tm.id === hit.monitoredTrademarkId)?.title || hit.markName
+            }));
+
+            resultsFromCF.length = 0; 
+
+            const groupedResults = processedResults.reduce((acc, r) => {
+                const key = r.monitoredTrademarkId;
+                (acc[key] = acc[key] || []).push(r);
+                return acc;
+            }, {});
+
+            allSimilarResults = processedResults;
+
+            const entries = Object.entries(groupedResults);
+            const SAVE_BATCH_SIZE = 25; 
+            const DELAY_MS = 1000;
+            
+            SimpleLoading.updateText('Sonuçlar Kaydediliyor...', `0 / ${entries.length} marka grubu`);
+
+            for (let i = 0; i < entries.length; i += SAVE_BATCH_SIZE) {
+                const chunk = entries.slice(i, i + SAVE_BATCH_SIZE);
+                
+                await Promise.all(chunk.map(async ([monitoredTrademarkId, results]) => {
+                     try {
+                        await searchRecordService.saveRecord(bulletinKey, monitoredTrademarkId, {
+                            results,
+                            searchDate: new Date().toISOString()
+                        });
+                     } catch (saveErr) {
+                         console.warn(`Kayıt uyarısı (${monitoredTrademarkId}):`, saveErr);
+                     }
+                }));
+
+                await new Promise(r => setTimeout(r, DELAY_MS));
+
+                SimpleLoading.updateText(
+                    'Sonuçlar Kaydediliyor...', 
+                    `${Math.min(i + SAVE_BATCH_SIZE, entries.length)} / ${entries.length} marka grubu`
+                );
+            }
+        }
+    } catch (error) {
+        console.error("Arama hatası:", error);
+        infoMessageContainer.innerHTML = `<div class="info-message error"><strong>Hata:</strong> ${error.message}</div>`;
+    } finally {
+        SimpleLoading.hide();
+        await groupAndSortResults();
+        
+        if (allSimilarResults.length > 0) {
+            infoMessageContainer.innerHTML = `<div class="info-message success">Toplam ${allSimilarResults.length} benzer sonuç bulundu.</div>`;
+            startSearchBtn.disabled = true;
+            researchBtn.disabled = false;
+            btnGenerateReportAndNotifyGlobal.disabled = false;
+            if (noRecordsMessage) noRecordsMessage.style.display = 'none';
+        } else {
+            if (noRecordsMessage) {
+                noRecordsMessage.textContent = 'Arama sonucu bulunamadı.';
+                noRecordsMessage.style.display = 'block';
+            }
+            startSearchBtn.disabled = false;
+            researchBtn.disabled = true;
+            btnGenerateReportAndNotifyGlobal.disabled = true;
+        }
+        
+        if (pagination) pagination.update(allSimilarResults.length);
+        renderCurrentPageOfResults();
     }
 };
 
