@@ -1,6 +1,6 @@
 // public/js/create-portfolio-by-opposition.js
 
-import { supabase, ipRecordsService, authService } from './supabase-config.js';
+import { supabase, ipRecordsService, authService } from '../supabase-config.js';
 
 class PortfolioByOppositionCreator {
     constructor() {
