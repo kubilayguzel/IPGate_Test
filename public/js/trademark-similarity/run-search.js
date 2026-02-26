@@ -1,15 +1,13 @@
 // public/js/trademark-similarity/run-search.js
-import { supabase } from '../../supabase-config.js'; // Kendi dizininize göre yolu kontrol edin
+import { supabase } from '../../supabase-config.js'; 
 
-console.log(">>> run-search.js modülü yüklendi (Supabase & Realtime Versiyon) <<<");
-
-// public/js/trademark-similarity/run-search.js
+console.log(">>> run-search.js modülü yüklendi (Supabase & Offset Paging Versiyon) <<<");
 
 export async function runTrademarkSearch(monitoredMarks, selectedBulletinId, onProgress) {
     try {
         console.log("🚀 Supabase Edge Function tetikleniyor...", { monitoredMarks: monitoredMarks.length, selectedBulletinId });
 
-        // 🔥 GÜNCELLEME: İsteği 'functions.invoke' ile atıyoruz
+        // Edge Function tetikleme
         const { data, error } = await supabase.functions.invoke('perform-trademark-similarity-search', {
             body: { 
                 monitoredMarks: monitoredMarks, 
@@ -37,69 +35,43 @@ export async function runTrademarkSearch(monitoredMarks, selectedBulletinId, onP
 async function monitorSearchProgress(jobId, onProgress) {
     return new Promise((resolve, reject) => {
         const interval = setInterval(async () => {
-            // search_progress tablosundan durumu kontrol et
-            const { data, error } = await supabase
-                .from('search_progress')
-                .select('*')
-                .eq('id', jobId)
-                .single();
+            try {
+                // search_progress tablosundan durumu kontrol et
+                const { data, error } = await supabase
+                    .from('search_progress')
+                    .select('status, processed_count, total_count, error_message')
+                    .eq('job_id', jobId)
+                    .single();
 
-            if (error) {
-                console.error("İlerleme okuma hatası:", error);
-                return;
-            }
+                if (error) throw error;
 
-            if (data) {
-                const progress = Math.floor((data.current_results / data.total_records) * 100) || 0;
-                
-                if (onProgress) {
-                    onProgress({
-                        progress: progress,
-                        currentResults: data.current_results
-                    });
-                }
-
-                if (data.status === 'completed') {
+                if (data.status === 'processing') {
+                    onProgress({ status: 'processing', processed: data.processed_count, total: data.total_count });
+                } 
+                else if (data.status === 'completed') {
                     clearInterval(interval);
-                    // Tüm sonuçları search_progress_results tablosundan çek
-                    const results = await getAllResults(jobId);
+                    onProgress({ status: 'fetching_results' });
+                    const results = await fetchResults(jobId, onProgress);
                     resolve(results);
-                } else if (data.status === 'error') {
+                } 
+                else if (data.status === 'failed') {
                     clearInterval(interval);
-                    reject(new Error(data.error_message || "Arama sırasında hata oluştu."));
+                    reject(new Error(data.error_message || "Arama işlemi başarısız oldu."));
                 }
+            } catch (err) {
+                clearInterval(interval);
+                reject(err);
             }
         }, 3000); // 3 saniyede bir kontrol et
     });
 }
 
-async function getAllResults(jobId) {
-    const { data, error } = await supabase
-        .from('search_progress_results')
-        .select('*')
-        .eq('job_id', jobId);
-    
-    if (error) throw error;
-    
-    // UI'ın beklediği formata (camelCase) çevir
-    return data.map(r => ({
-        id: r.id,
-        monitoredTrademarkId: r.monitored_trademark_id,
-        markName: r.mark_name,
-        applicationNo: r.application_no,
-        niceClasses: r.nice_classes,
-        similarityScore: r.similarity_score,
-        holders: r.holders,
-        imagePath: r.image_path,
-        isSimilar: false // Arama motorundan gelenler varsayılan benzerdir
-    }));
-}
-
-async function getAllResultsInBatches(jobId, onBatchLoaded) {
+// 🔥 DÜZELTME: UUID'ler için çok daha güvenli olan OFFSET Paging yapısı kuruldu.
+async function fetchResults(jobId, onProgress) {
     let allData = [];
-    const BATCH_SIZE = 2000; 
+    const BATCH_SIZE = 1000; 
     let keepFetching = true;
-    let lastId = '00000000-0000-0000-0000-000000000000'; // UUID cursor
+    let offset = 0; 
 
     while (keepFetching) {
         try {
@@ -107,17 +79,16 @@ async function getAllResultsInBatches(jobId, onBatchLoaded) {
                 .from('search_progress_results')
                 .select('*')
                 .eq('job_id', jobId)
-                .gt('id', lastId)
-                .order('id', { ascending: true })
-                .limit(BATCH_SIZE);
+                .range(offset, offset + BATCH_SIZE - 1)
+                .order('created_at', { ascending: true }); // Kayma olmaması için sıralama
 
             if (error) throw error;
             if (!data || data.length === 0) { keepFetching = false; break; }
 
-            // 🚀 DB'den gelen snake_case veriyi, UI'ın beklediği camelCase formata çeviriyoruz!
+            // DB'den gelen snake_case veriyi, UI'ın beklediği camelCase formata çeviriyoruz
             const mappedData = data.map(r => ({
                 id: r.id,
-                objectID: r.id, // Eski Firebase uyumluluğu için
+                objectID: r.id, // Eski uyumluluk için
                 monitoredTrademarkId: r.monitored_trademark_id,
                 markName: r.mark_name,
                 applicationNo: r.application_no,
@@ -128,11 +99,17 @@ async function getAllResultsInBatches(jobId, onBatchLoaded) {
             }));
 
             allData = allData.concat(mappedData);
-            lastId = data[data.length - 1].id;
+            offset += BATCH_SIZE;
+
+            // Eğer gelen veri BATCH_SIZE'dan küçükse daha fazla veri kalmamıştır
+            if (data.length < BATCH_SIZE) { 
+                keepFetching = false; 
+            }
             
-            if (onBatchLoaded) onBatchLoaded(allData.length);
-            if (data.length < BATCH_SIZE) keepFetching = false;
-        } catch (error) { throw error; }
+        } catch (err) {
+            console.error("Sonuçları çekerken hata:", err);
+            throw err;
+        }
     }
     return allData;
 }
