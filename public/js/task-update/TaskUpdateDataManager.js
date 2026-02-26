@@ -1,3 +1,5 @@
+// public/js/task-update/TaskUpdateDataManager.js
+
 import { taskService, ipRecordsService, personService, accrualService, transactionTypeService, supabase } from '../../supabase-config.js';
 
 export class TaskUpdateDataManager {
@@ -34,10 +36,14 @@ export class TaskUpdateDataManager {
     }
     
     async saveAccrual(data, isUpdate = false) {
-        if (isUpdate) return await accrualService.updateAccrual(data.id, data);
-        else return await accrualService.addAccrual(data);
+        if (isUpdate) {
+            return await accrualService.updateAccrual(data.id, data);
+        } else {
+            return await accrualService.addAccrual(data);
+        }
     }
 
+    // 🔥 Firebase Storage yerine Supabase Storage
     async uploadFile(file, path) {
         const { error } = await supabase.storage.from('task_documents').upload(path, file);
         if (error) throw error;
@@ -48,7 +54,9 @@ export class TaskUpdateDataManager {
     async deleteFileFromStorage(path) {
         if (!path) return;
         let cleanPath = decodeURIComponent(path);
-        if (cleanPath.startsWith('task_documents/')) cleanPath = cleanPath.replace('task_documents/', '');
+        if (cleanPath.startsWith('task_documents/')) {
+            cleanPath = cleanPath.replace('task_documents/', '');
+        }
         
         try {
             await supabase.storage.from('task_documents').remove([cleanPath]);
@@ -61,13 +69,19 @@ export class TaskUpdateDataManager {
     searchIpRecords(allRecords, query) {
         if (!query || query.length < 3) return [];
         const lower = query.toLowerCase();
-        return allRecords.filter(r => (r.title || '').toLowerCase().includes(lower) || (r.applicationNumber || '').toLowerCase().includes(lower));
+        return allRecords.filter(r => 
+            (r.title || '').toLowerCase().includes(lower) || 
+            (r.applicationNumber || r.application_number || '').toLowerCase().includes(lower)
+        );
     }
 
     searchPersons(allPersons, query) {
         if (!query || query.length < 2) return [];
         const lower = query.toLowerCase();
-        return allPersons.filter(p => (p.name || '').toLowerCase().includes(lower) || (p.email || '').toLowerCase().includes(lower));
+        return allPersons.filter(p => 
+            (p.name || '').toLowerCase().includes(lower) || 
+            (p.email || '').toLowerCase().includes(lower)
+        );
     }
 
     async updateIpRecord(recordId, data) {
