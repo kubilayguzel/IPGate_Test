@@ -565,18 +565,59 @@ export const ipRecordsService = {
         }
     },
 
+    // (ipRecordsService objesinin içi)
+    
+    // İşlem Geçmişini Çeken ve Arayüze Uyarlayan Metod
     async getRecordTransactions(recordId) {
-        if (!isFirebaseAvailable) return { success: false, error: "Firebase kullanılamıyor. İşlem geçmişi alınamaz." };
+        if (!recordId) return { success: false, message: 'Kayıt ID yok.' };
+
         try {
-            const recordRef = doc(db, 'ipRecords', recordId);
-            const transactionsCollectionRef = collection(recordRef, 'transactions');
-            const q = query(transactionsCollectionRef, orderBy('timestamp', 'desc'));
-            const querySnapshot = await getDocs(q);
-            
-            const transactions = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            return { success: true, data: transactions };
+            // 🔥 MÜKEMMEL SUPABASE JOIN: 
+            // 1. İşlemleri çek
+            // 2. transaction_documents tablosundaki direkt evrakları çek
+            // 3. tasks tablosundaki görev verilerini (ve task_owner, documents vb.) çek
+            const { data, error } = await supabase
+                .from('transactions')
+                .select(`
+                    *,
+                    transaction_documents(*),
+                    tasks(*)
+                `)
+                .eq('ip_record_id', String(recordId))
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+
+            // Arayüzün (PortfolioDetailManager & TransactionHelper) beklediği formata haritalıyoruz
+            const mappedData = data.map(t => {
+                const dateVal = t.transaction_date || t.created_at;
+                
+                // Tasks JOIN'inden gelen veriyi obje formatına güvenceye alıyoruz
+                const taskData = Array.isArray(t.tasks) ? t.tasks[0] : t.tasks;
+
+                return {
+                    ...t, // Orjinal snake_case verileri kaybetmemek için koruyoruz
+                    id: t.id,
+                    
+                    // UI ve TransactionHelper'ın aradığı tam (camelCase) isimlendirmeler:
+                    type: String(t.transaction_type_id || ''), 
+                    transactionHierarchy: t.transaction_hierarchy || 'parent', 
+                    parentId: t.parent_id || null, 
+                    
+                    // Tarih ve kullanıcı atamaları
+                    timestamp: dateVal,
+                    date: dateVal,
+                    userEmail: t.user_email || t.user_name || 'Sistem',
+                    
+                    // Ekli belgeler ve görev detayları (Helper'ın aradığı isimlerle)
+                    transaction_documents: t.transaction_documents || [],
+                    task_data: taskData || null
+                };
+            });
+
+            return { success: true, data: mappedData };
         } catch (error) {
-            console.error("IP kaydı işlem geçmişi yüklenirken hata:", error);
+            console.error("İşlem geçmişi çekme hatası:", error);
             return { success: false, error: error.message };
         }
     },
