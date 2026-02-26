@@ -320,20 +320,24 @@ export const personService = {
 // 2. İŞLEM TİPLERİ (TRANSACTION TYPES) SERVİSİ
 export const transactionTypeService = {
     async getTransactionTypes() {
-        // 🔥 YENİ: Sadece isimleri değil, 'details' içindeki tüm kuralları (*) çekiyoruz
         const { data, error } = await supabase.from('transaction_types').select('*');
         if (error) return { success: false, data: [] };
         
-        // Arayüzün beklediği format (details içindeki indexFile, duePeriod vb. dışarı çıkarılıyor)
         const mappedData = data.map(t => ({
             id: t.id,
             name: t.name,
             alias: t.alias,
-            applicableToMainType: t.ip_type ? [t.ip_type] : [],
+            
+            // 🔥 KRİTİK DÜZELTME: Arayüzün formu açabilmesi için ipType verisini ekledik
+            ipType: t.ip_type, 
+            ip_type: t.ip_type, 
+            
+            // Veritabanındaki dizi tipini (array) arayüze uygun formata taşıyoruz
+            applicableToMainType: t.applicable_to_main_type || (t.ip_type ? [t.ip_type] : []),
             hierarchy: t.hierarchy,
             isTopLevelSelectable: t.is_top_level_selectable,
-            code: t.id, // Eğer eski sistem code arıyorsa diye fallback
-            ...t.details // 🔥 KRİTİK NOKTA: Alt işlemleri belirleyen indexFile kuralı burada açılıyor
+            code: t.id, 
+            ...t.details 
         }));
         return { success: true, data: mappedData };
     }
@@ -592,8 +596,22 @@ export const ipRecordsService = {
 
     // 1. Yeni Kayıt Ekle (Veritabanı Röntgene Tam Uyumlu)
     async createRecordFromDataEntry(data) {
+        // 🔥 YENİ: Firebase formatında (20 karakter) rastgele ID üretici
+        const generatePushId = () => {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let autoId = '';
+            for (let i = 0; i < 20; i++) {
+                autoId += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return autoId;
+        };
+
+        // Eğer dışarıdan ID gönderilmediyse yeni bir tane üret
+        const newRecordId = data.id || generatePushId();
+
         // A) Ana Tablo (Sadece veritabanında var olan sütunlar)
         const dbPayload = {
+            id: newRecordId, // 🔴 HATAYI ÇÖZEN SATIR: Artık boş (null) gitmeyecek!
             title: data.title || data.brandText,
             brand_name: data.title || data.brandText,
             brand_text: data.title || data.brandText,
@@ -860,208 +878,162 @@ export const transactionService = {
 // 8. GÖREV (TASK) SERVİSİ
 // ==========================================
 export const taskService = {
-    // 1. Kullanıcıları Çekme (Atama Listesi İçin)
     async getAllUsers() {
         const { data, error } = await supabase.from('users').select('id, email, display_name');
         if (error) return { success: false, data: [] };
-        
-        const mappedUsers = data.map(u => ({
-            id: u.id,
-            email: u.email,
-            displayName: u.display_name || u.email
-        }));
-        return { success: true, data: mappedUsers };
+        return { success: true, data: data.map(u => ({ id: u.id, email: u.email, displayName: u.display_name || u.email })) };
     },
 
-    // --- YENİ: AKILLI İLİŞKİ BİRLEŞTİRİCİ (SMART ENRICHER) - KESİN ÇÖZÜM ---
+    // 🔥 GÜÇLENDİRİLMİŞ HARİTALAMA (Hata Toleranslı)
     async _enrichTasksWithRelations(tasks) {
-        const recordIds = [...new Set(tasks.map(t => t.ip_record_id).filter(id => id && id.trim() !== ''))];
+        const recordIds = [...new Set(tasks.map(t => t.related_ip_record_id || t.ip_record_id).filter(id => id && id.trim() !== ''))];
         let recordsMap = {};
-        
-        let ipData = [];
-        let suitData = [];
 
         if (recordIds.length > 0) {
-            const resIp = await supabase.from('ip_records').select('id, application_number, brand_name, details').in('id', recordIds);
-            if (resIp.data) ipData = resIp.data;
+            // ÖNCE DENEME: İlişkisel verileri çekmeye çalış
+            const { data: resIpData, error: resIpError } = await supabase.from('ip_records').select(`
+                id, application_number, brand_name, title, 
+                ip_record_applicants(persons(name))
+            `).in('id', recordIds);
+
+            if (resIpError) {
+                console.warn("⚠️ IP Record JOIN Hatası (Sahip bilgisi çekilemedi):", resIpError.message);
+                // PATLARSA: Sadece düz kolonları çek (Program çökmesin)
+                const fallbackIp = await supabase.from('ip_records').select('id, application_number, brand_name, title').in('id', recordIds);
+                if(fallbackIp.data) {
+                    fallbackIp.data.forEach(ip => {
+                        recordsMap[ip.id] = { appNo: ip.application_number || "-", title: ip.brand_name || ip.title || "-", applicant: "-" };
+                    });
+                }
+            } else if (resIpData) {
+                resIpData.forEach(ip => {
+                    let applicantTxt = "-";
+                    if (ip.ip_record_applicants && ip.ip_record_applicants.length > 0) {
+                        applicantTxt = ip.ip_record_applicants.map(a => a.persons?.name).filter(Boolean).join(', ');
+                    }
+                    recordsMap[ip.id] = { appNo: ip.application_number || "-", title: ip.brand_name || ip.title || "-", applicant: applicantTxt };
+                });
+            }
             
-            const foundIpIds = ipData.map(ip => ip.id);
+            const foundIpIds = Object.keys(recordsMap);
             const missingIds = recordIds.filter(id => !foundIpIds.includes(id));
             
             if (missingIds.length > 0) {
-                const resSuit = await supabase.from('suits').select('id, file_no, court_name, plaintiff, details').in('id', missingIds);
-                if (resSuit.data) suitData = resSuit.data;
+                const { data: resSuitData } = await supabase.from('suits').select('id, file_no, court_name, plaintiff, client_name').in('id', missingIds);
+                if (resSuitData) {
+                    resSuitData.forEach(s => {
+                        recordsMap[s.id] = { appNo: s.file_no || "-", title: s.court_name || "-", applicant: s.client_name || s.plaintiff || "-" };
+                    });
+                }
             }
         }
-
-        let personIdsToFetch = new Set();
-        
-        ipData.forEach(ip => {
-            const applicants = ip.details?.applicants || [];
-            if (Array.isArray(applicants)) {
-                applicants.forEach(app => {
-                    if (app && typeof app === 'object' && app.id && (!app.name || app.name.trim() === '')) {
-                        personIdsToFetch.add(app.id);
-                    }
-                });
-            }
-        });
-
-        let personsMap = {};
-        if (personIdsToFetch.size > 0) {
-            const { data: persons } = await supabase.from('persons').select('id, name').in('id', Array.from(personIdsToFetch));
-            if (persons) {
-                persons.forEach(p => personsMap[p.id] = p.name);
-            }
-        }
-
-        ipData.forEach(ip => {
-            const d = ip.details || {};
-            let finalApplicants = [];
-
-            if (Array.isArray(d.applicants) && d.applicants.length > 0) {
-                d.applicants.forEach(app => {
-                    if (typeof app === 'object') {
-                        if (app.name && app.name.trim() !== '') finalApplicants.push(app.name);
-                        else if (app.id && personsMap[app.id]) finalApplicants.push(personsMap[app.id]);
-                    } else if (typeof app === 'string') {
-                        finalApplicants.push(app);
-                    }
-                });
-            } else if (d.applicantName) {
-                finalApplicants.push(d.applicantName);
-            } else if (d.ownerName) {
-                finalApplicants.push(d.ownerName);
-            }
-
-            recordsMap[ip.id] = {
-                appNo: ip.application_number || d.applicationNumber || "-",
-                title: ip.brand_name || d.brandName || d.brandExampleText || "-",
-                applicant: finalApplicants.length > 0 ? finalApplicants.join(', ') : "-"
-            };
-        });
-
-        suitData.forEach(s => {
-            const d = s.details || {};
-            let applicantTxt = s.plaintiff || d.client?.name || d.plaintiff || "-";
-            
-            recordsMap[s.id] = {
-                appNo: s.file_no || d.caseNo || d.fileNumber || "-",
-                title: s.court_name || d.court || "-",
-                applicant: applicantTxt
-            };
-        });
 
         return tasks.map(t => {
-            const relation = recordsMap[t.ip_record_id] || {};
-            const details = t.details || {};
+            const relation = recordsMap[t.related_ip_record_id || t.ip_record_id] || {};
             
-            let taskFallbackApplicant = details.iprecordApplicantName || "-";
-            if ((!taskFallbackApplicant || taskFallbackApplicant === "-") && Array.isArray(details.relatedParties) && details.relatedParties.length > 0) {
-                taskFallbackApplicant = details.relatedParties.map(p => typeof p === 'object' ? (p.name || p.companyName) : p).filter(Boolean).join(', ');
-            }
+            // UI'ın beklentisi olan format (camelCase) ve Fallback'ler
+            const fallbackAppNo = t.iprecord_application_no || t.target_app_no || "-";
+            const fallbackTitle = t.iprecord_title || t.related_ip_record_title || "-";
+            const fallbackApplicant = t.related_party_name || t.iprecord_applicant_name || "-";
 
-            // 🔥 KRİTİK DÜZELTME: SQL'deki alt tireli verileri JS'nin beklediği CamelCase formata geri çeviriyoruz!
             return {
-                id: t.id,
+                ...t, 
+                id: String(t.id),
                 title: t.title,
                 description: t.description,
-                taskType: t.task_type,
+                taskType: String(t.task_type),
                 status: t.status,
                 priority: t.priority,
                 dueDate: t.due_date,
                 officialDueDate: t.official_due_date,
                 operationalDueDate: t.operational_due_date,
                 deliveryDate: t.delivery_date,
-                assignedTo_uid: t.assigned_to_user_id,
-                relatedIpRecordId: t.ip_record_id,
+                assignedTo_uid: t.assigned_to_uid || t.assigned_to_user_id,
+                assignedTo_email: t.assigned_to_email,
+                relatedIpRecordId: t.related_ip_record_id || t.ip_record_id,
+                relatedIpRecordTitle: t.related_ip_record_title,
+                relatedPartyId: t.related_party_id,
+                relatedPartyName: t.related_party_name,
                 transactionId: t.transaction_id,
                 opponentId: t.opponent_id,
                 history: t.history || [],
+                documents: t.documents || [], 
                 createdAt: t.created_at,
                 updatedAt: t.updated_at,
-                ...details,
-                assignedTo_email: details.assignedTo_email || details.assignedToEmail || null,
                 
-                iprecordApplicationNo: relation.appNo && relation.appNo !== "-" ? relation.appNo : (details.iprecordApplicationNo || "-"),
-                iprecordTitle: relation.title && relation.title !== "-" ? relation.title : (details.iprecordTitle || details.relatedIpRecordTitle || "-"),
-                iprecordApplicantName: relation.applicant && relation.applicant !== "-" ? relation.applicant : taskFallbackApplicant
+                // Tablolarda Gözükecek Final Veriler
+                iprecordApplicationNo: relation.appNo && relation.appNo !== "-" ? relation.appNo : fallbackAppNo,
+                iprecordTitle: relation.title && relation.title !== "-" ? relation.title : fallbackTitle,
+                
+                // 🔥 KESİN ÇÖZÜM: İlişkiden gelmiyorsa, kendi içindeki yedek veriyi (fallback) göster!
+                iprecordApplicantName: relation.applicant && relation.applicant !== "-" ? relation.applicant : fallbackApplicant
             };
         });
     },
 
-    // 2. Tüm Görevleri Çekme (Akıllı Birleştirici Kullanır)
     async getTasksForUser(uid) {
         const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
         if (error) return { success: false, error: error.message };
-        
-        const enrichedData = await this._enrichTasksWithRelations(data);
-        return { success: true, data: enrichedData };
+        return { success: true, data: await this._enrichTasksWithRelations(data) };
     },
 
-    // 3. Tetiklenen Görevler İçin (Akıllı Birleştirici Kullanır)
     async getTasksByStatus(status, uid = null) {
         let query = supabase.from('tasks').select('*').eq('status', status).order('created_at', { ascending: false });
-        if (uid) query = query.eq('assigned_to_user_id', uid);
-
+        if (uid) query = query.eq('assigned_to_uid', uid);
         const { data, error } = await query;
         if (error) return { success: false, error: error.message };
-
-        const enrichedData = await this._enrichTasksWithRelations(data);
-        return { success: true, data: enrichedData };
+        return { success: true, data: await this._enrichTasksWithRelations(data) };
     },
 
-    // 4. Tekil Görev Detayı (Akıllı Birleştirici Kullanır)
     async getTaskById(taskId) {
         const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
         if (error) return { success: false, error: error.message };
-
         const enrichedData = await this._enrichTasksWithRelations([data]);
         return { success: true, data: enrichedData[0] };
     },
 
-    // 5. Görev Ekleme (Foreign Key Alanları Düzeltildi)
-
     async addTask(taskData) {
         try {
-            // 🔥 Tahakkuk görevi mi diye kontrol et ve doğru sayacı çağır
-            const isAccrualTask = String(taskData.taskType) === '53';
-            const nextId = await this._getNextTaskId(isAccrualTask);
-
+            const nextId = await this._getNextTaskId(taskData.task_type || taskData.taskType);
             const payload = {
                 id: nextId, 
                 title: taskData.title,
                 description: taskData.description || null,
-                task_type: String(taskData.taskType),
+                task_type: String(taskData.task_type || taskData.taskType),
                 status: taskData.status || 'open',
                 priority: taskData.priority || 'normal',
-                due_date: taskData.dueDate || null,
-                official_due_date: taskData.officialDueDate || null,
-                operational_due_date: taskData.operationalDueDate || null,
-                assigned_to_uid: taskData.assignedTo_uid || null,
-                related_ip_record_id: taskData.relatedIpRecordId ? String(taskData.relatedIpRecordId) : null,
-                transaction_id: taskData.transactionId ? String(taskData.transactionId) : null,
-                epats_doc_name: taskData.epatsDocument?.name || null,
-                epats_doc_url: taskData.epatsDocument?.url || null,
-                target_app_no: taskData.targetAppNo || null,
-                bulletin_no: taskData.bulletinNo || null
+                due_date: taskData.due_date || taskData.dueDate || null,
+                official_due_date: taskData.official_due_date || taskData.officialDueDate || null,
+                operational_due_date: taskData.operational_due_date || taskData.operationalDueDate || null,
+                assigned_to_uid: taskData.assigned_to_uid || taskData.assignedTo_uid || null,
+                related_ip_record_id: taskData.related_ip_record_id || taskData.relatedIpRecordId ? String(taskData.related_ip_record_id || taskData.relatedIpRecordId) : null,
+                related_party_id: taskData.related_party_id || taskData.relatedPartyId || null,
+                related_party_name: taskData.related_party_name || taskData.relatedPartyName || null,
+                transaction_id: taskData.transaction_id || taskData.transactionId ? String(taskData.transaction_id || taskData.transactionId) : null,
+                documents: taskData.documents || [],
+                epats_doc_name: taskData.epats_doc_name || taskData.epatsDocument?.name || null,
+                epats_doc_url: taskData.epats_doc_url || taskData.epatsDocument?.url || null,
+                target_app_no: taskData.target_app_no || taskData.targetAppNo || null,
+                
+                // 🔥 KAYIP ALANLAR BURAYA EKLENDİ
+                task_owner: taskData.task_owner || taskData.taskOwner || null, 
+                history: taskData.history || [], 
+                bulletin_no: taskData.bulletin_no || taskData.bulletinNo || null,
+                bulletin_date: taskData.bulletin_date || taskData.bulletinDate || null,
+                iprecord_application_no: taskData.iprecord_application_no || taskData.iprecordApplicationNo || null,
+                iprecord_title: taskData.iprecord_title || taskData.iprecordTitle || null,
+                iprecord_applicant_name: taskData.iprecord_applicant_name || taskData.iprecordApplicantName || null
             };
             
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
-            
             const { data, error } = await supabase.from('tasks').insert(payload).select('id').single();
             if (error) throw error;
             return { success: true, data: { id: data.id } };
-        } catch (error) {
-            console.error("Task add error:", error);
-            return { success: false, error: error.message };
-        }
+        } catch (error) { return { success: false, error: error.message }; }
     },
-    async createTask(taskData) {
-        return await this.addTask(taskData);
-    },
+    
+    async createTask(taskData) { return await this.addTask(taskData); },
 
-    // 6. Görev Güncelleme (Foreign Key Alanları Düzeltildi)
     async updateTask(taskId, updateData) {
         try {
             const payload = {
@@ -1070,93 +1042,84 @@ export const taskService = {
                 task_type: updateData.taskType ? String(updateData.taskType) : undefined,
                 status: updateData.status,
                 priority: updateData.priority,
-                due_date: updateData.dueDate,
-                official_due_date: updateData.officialDueDate,
-                operational_due_date: updateData.operationalDueDate,
-                assigned_to_uid: updateData.assignedTo_uid, // DÜZELTİLDİ
-                related_ip_record_id: updateData.relatedIpRecordId ? String(updateData.relatedIpRecordId) : undefined, // DÜZELTİLDİ
+                due_date: updateData.dueDate || updateData.due_date,
+                official_due_date: updateData.officialDueDate || updateData.official_due_date,
+                operational_due_date: updateData.operationalDueDate || updateData.operational_due_date,
+                assigned_to_uid: updateData.assignedTo_uid || updateData.assigned_to_uid,
+                related_ip_record_id: updateData.relatedIpRecordId ? String(updateData.relatedIpRecordId) : undefined,
                 transaction_id: updateData.transactionId ? String(updateData.transactionId) : undefined,
+                related_party_id: updateData.relatedPartyId ? String(updateData.relatedPartyId) : undefined,
+                documents: updateData.documents, 
                 updated_at: new Date().toISOString()
             };
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
             const { error } = await supabase.from('tasks').update(payload).eq('id', String(taskId));
             if (error) throw error;
             return { success: true };
-        } catch (error) {
-            return { success: false, error: error.message };
-        }
+        } catch (error) { return { success: false, error: error.message }; }
     },
 
-    // --- SAYAÇTAN YENİ TASK ID ALMA (Örn: T-875) ---
-    async _getNextTaskId(isAccrualTask = false) {
-        // İsteğinize göre: Tahakkuk göreviyse accrual-tasks, değilse tasks sayacını kullan
-        const counterId = isAccrualTask ? 'accrual-tasks' : 'tasks';
-        
+    async _getNextTaskId(taskType) {
         try {
-            // 🔥 lastId yerine last_id kullanıyoruz
+            const isAccrualTask = String(taskType) === '53';
+            const counterId = isAccrualTask ? 'tasks_accruals' : 'tasks';
+            const prefix = isAccrualTask ? 'T-' : '';
+
             const { data: counterData } = await supabase.from('counters').select('last_id').eq('id', counterId).single();
 
             let nextNum = (counterData?.last_id || 0) + 1;
-            let proposedId = `T-${nextNum}`;
-
             let isFree = false;
+            let finalId = '';
+            
             while (!isFree) {
-                const { data: existingTask } = await supabase.from('tasks').select('id').eq('id', proposedId).single();
-                if (!existingTask) isFree = true;
-                else {
-                    nextNum++;
-                    proposedId = `T-${nextNum}`;
-                }
+                finalId = `${prefix}${nextNum}`; 
+                const { data: existingTask } = await supabase.from('tasks').select('id').eq('id', finalId).maybeSingle(); 
+                if (!existingTask) isFree = true; else nextNum++; 
             }
 
-            await supabase.from('counters').upsert({ id: counterId, last_id: nextNum });
-            return proposedId;
-        } catch (error) {
-            console.error(`Sayaç Hatası (${counterId}):`, error);
-            return `T-${Date.now()}`;
+            await supabase.from('counters').upsert({ id: counterId, last_id: nextNum }, { onConflict: 'id' });
+            return finalId;
+        } catch (e) {
+            const fallbackId = String(Date.now()).slice(-6); 
+            return String(taskType) === '53' ? `T-${fallbackId}` : fallbackId;
         }
-    },
+    }
 };
 
 // ==========================================
 // 9. TAHAKKUK (ACCRUAL) SERVİSİ
 // ==========================================
-
 export const accrualService = {
-    // --- TAHAKKUK SAYAÇ SERVİSİ ---
+    
     async _getNextAccrualId() {
         try {
-            const { data: counterData } = await supabase.from('counters').select('last_id').eq('id', 'accruals').single();
-            let nextNum = (counterData?.last_id || 0) + 1;
-            let proposedId = `A-${nextNum}`;
+            const counterId = 'accruals'; 
+            const { data: counterData } = await supabase.from('counters').select('last_id').eq('id', counterId).single();
 
+            let nextNum = (counterData?.last_id || 0) + 1;
             let isFree = false;
+            let finalId = '';
+            
             while (!isFree) {
-                const { data: existing } = await supabase.from('accruals').select('id').eq('id', proposedId).single();
-                if (!existing) isFree = true;
-                else { nextNum++; proposedId = `A-${nextNum}`; }
+                finalId = String(nextNum); 
+                const { data: existingAccrual } = await supabase.from('accruals').select('id').eq('id', finalId).maybeSingle(); 
+                if (!existingAccrual) isFree = true;
+                else nextNum++; 
             }
 
-            await supabase.from('counters').upsert({ id: 'accruals', last_id: nextNum });
-            return proposedId;
-        } catch (error) { return `A-${Date.now()}`; }
+            await supabase.from('counters').upsert({ id: counterId, last_id: nextNum }, { onConflict: 'id' });
+            return finalId;
+        } catch (e) {
+            return String(Date.now()).slice(-6); 
+        }
     },
 
-    // 1. Yeni Tahakkuk Ekleme
     async addAccrual(accrualData) {
         try {
-            // 🔥 TAHAKKUK ID'Sİ SAYAÇTAN ÇEKİLİYOR
             const nextId = await this._getNextAccrualId();
-
-            const payload = {
-                id: nextId, 
-                task_id: String(accrualData.taskId || accrualData.task_id || ''),
-                status: accrualData.status || 'unpaid',
-                evreka_invoice_no: accrualData.evrekaInvoiceNo || accrualData.evreka_invoice_no || null,
-                tpe_invoice_no: accrualData.tpeInvoiceNo || accrualData.tpe_invoice_no || null,
-                created_at: accrualData.createdAt || accrualData.created_at || new Date().toISOString(),
-                details: accrualData.details || accrualData
-            };
+            
+            // 🔴 Burada details GÖNDERİLMİYOR, accrualData zaten düzleştirilmiş
+            const payload = { ...accrualData, id: nextId };
 
             const { data, error } = await supabase.from('accruals').insert(payload).select('id').single();
             if (error) throw error;
@@ -1167,19 +1130,9 @@ export const accrualService = {
         }
     },
 
-    // 2. Tahakkuk Güncelleme
     async updateAccrual(id, updateData) {
         try {
-            const payload = {
-                task_id: updateData.taskId ? String(updateData.taskId) : undefined,
-                status: updateData.status,
-                evreka_invoice_no: updateData.evrekaInvoiceNo || updateData.evreka_invoice_no,
-                tpe_invoice_no: updateData.tpeInvoiceNo || updateData.tpe_invoice_no,
-                updated_at: new Date().toISOString(),
-                details: updateData.details || updateData
-            };
-
-            // SQL'de hata vermemesi için undefined olanları sil
+            const payload = { ...updateData };
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
 
             const { error } = await supabase.from('accruals').update(payload).eq('id', String(id));
@@ -1191,17 +1144,31 @@ export const accrualService = {
         }
     },
 
-    // 3. Göreve Ait Tahakkukları Getirme
     async getAccrualsByTaskId(taskId) {
         try {
             const { data, error } = await supabase.from('accruals').select('*').eq('task_id', String(taskId));
             if (error) throw error;
             
+            // 🔴 UI'ın beklediği CamelCase haritalamayı yapıyoruz (Dövizler JSONB'den gelecek)
             const mappedData = data.map(acc => ({
                 id: acc.id,
-                ...acc.details, // Esnek verileri dışa çıkarıyoruz
-                ...acc
+                taskId: acc.task_id,
+                taskTitle: acc.task_title,
+                officialFee: acc.official_fee, 
+                serviceFee: acc.service_fee,   
+                totalAmount: acc.total_amount, 
+                remainingAmount: acc.remaining_amount, 
+                vatRate: acc.vat_rate,
+                applyVatToOfficialFee: acc.apply_vat_to_official_fee,
+                status: acc.status,
+                tpInvoiceParty: acc.tp_invoice_party_id ? { id: acc.tp_invoice_party_id, name: acc.tp_invoice_party_name } : null,
+                serviceInvoiceParty: acc.service_invoice_party_id ? { id: acc.service_invoice_party_id, name: acc.service_invoice_party_name } : null,
+                isForeignTransaction: acc.is_foreign_transaction,
+                files: acc.files || [],
+                createdAt: acc.created_at,
+                updatedAt: acc.updated_at
             }));
+            
             return { success: true, data: mappedData };
         } catch (error) {
             console.error("Accrual fetch error:", error);
