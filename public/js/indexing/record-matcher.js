@@ -1,13 +1,10 @@
-// public/js/services/record-matcher.js
+// public/js/indexing/record-matcher.js
 
 export class RecordMatcher {
     /**
      * Verilen numarayı kayıt listesinde arar.
      */
     findMatch(searchNumber, allRecords) {
-        // TEST LOGLARI
-        console.log("🔍 RecordMatcher -> Aranan No:", searchNumber);
-
         if (!searchNumber || !allRecords || allRecords.length === 0) {
             return null;
         }
@@ -16,12 +13,15 @@ export class RecordMatcher {
         const cleanSearch = this._normalize(searchNumber);
         
         for (const record of allRecords) {
-            // Kontrol edilecek olası alanlar
+            // 🔥 DÜZELTME: Supabase'den raw (snake_case) veri gelme ihtimaline karşı kalkan eklendi
             const fieldsToCheck = [
                 record.applicationNumber,
+                record.application_number, // Supabase Native Fallback
                 record.applicationNo,
                 record.wipoIR,
-                record.aripoIR
+                record.wipo_ir,            // Supabase Native Fallback
+                record.aripoIR,
+                record.aripo_ir            // Supabase Native Fallback
             ];
 
             for (const fieldValue of fieldsToCheck) {
@@ -79,12 +79,18 @@ export class RecordMatcher {
     getDisplayLabel(record) {
         if (!record) return '';
         
-        let displayNum = record.applicationNumber || record.applicationNo || 'Numara Yok';
+        // Güvenlik ağı ile label oluştur
+        let displayNum = record.applicationNumber || record.application_number || record.applicationNo || 'Numara Yok';
+        let displayOrigin = record.origin || 'Bilinmiyor';
 
-        if (record.recordOwnerType === 'wipo' && record.wipoIR) displayNum = record.wipoIR;
-        else if (record.recordOwnerType === 'aripo' && record.aripoIR) displayNum = record.aripoIR;
+        if (record.wipoIR || record.wipo_ir) {
+            displayNum = record.wipoIR || record.wipo_ir;
+            displayOrigin = 'WIPO';
+        } else if (record.aripoIR || record.aripo_ir) {
+            displayNum = record.aripoIR || record.aripo_ir;
+            displayOrigin = 'ARIPO';
+        }
 
-        const markName = record.title || record.markName || '';
-        return markName ? `${displayNum} - ${markName}` : displayNum;
+        return `[${displayOrigin}] ${displayNum}`;
     }
 }
