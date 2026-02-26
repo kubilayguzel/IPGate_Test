@@ -388,7 +388,7 @@ serve(async (req) => {
                             similar_mark_name: hit.mark_name, similar_application_no: hit.application_no,
                             similarity_score: finalScore, positional_exact_match_score: positionalExactMatchScore,
                             is_earlier: false, matched_term: searchItem.term, source: 'new',
-                            holders: holdersTextStr, nice_classes: hit.nice_classes || '', image_path: hit.image_path || ''
+                            holders: holdersTextStr, nice_classes: hit.nice_classes || '', image_path: hit.image_path || '',is_similar: false
                         });
                         break;
                     }
