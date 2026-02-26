@@ -8,7 +8,6 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// --- YARDIMCI FONKSİYONLAR ---
 const RELATED_CLASSES_MAP: Record<string, string[]> = {
     "29": ["30", "31", "43"], "30": ["29", "31", "43"], "31": ["29", "30", "43"],
     "32": ["33"], "33": ["32"], "43": ["29", "30", "31"],
@@ -30,12 +29,7 @@ const GENERIC_WORDS = [
     'sanayi', 'ticaret', 'turizm', 'tekstil', 'gıda', 'inşaat', 'danışmanlık', 'hizmet', 'hizmetleri', 'bilişim', 'teknoloji',
     'mühendislik', 'üretim', 'imalat', 'tasarım', 'dizayn', 'grafik', 'web', 'yazılım', 'donanım', 'elektronik', 'makina',
     'ürün', 'products', 'services', 'çözüm', 'sistem', 'malzeme', 'ekipman', 'cihaz', 'araç', 'yedek', 'parça', 'aksesuar',
-    'meşhur', 'ünlü', 'tarihi', 'geleneksel', 'klasik', 'yeni', 'taze', 'özel', 'premium', 'lüks', 'kalite', 'uygun',
-    'türkiye', 'uluslararası', 'emlak', 'konut', 'ticari', 'ofis', 'plaza', 'alışveriş', 'rezidans', 'daire',
-    'dijital', 'internet', 'mobil', 'ağ', 'sunucu', 'platform', 'sosyal', 'medya',
-    'yemek', 'restoran', 'cafe', 'kahve', 'çay', 'fırın', 'ekmek', 'pasta', 'börek', 'pizza', 'burger', 'kebap', 'döner', 
-    'et', 'tavuk', 'sebze', 'meyve', 'süt', 'peynir', 'yoğurt', 'dondurma', 'şeker', 'bal', 'organik', 'doğal',
-    've', 'ile', 'için', 'bir', 'bu', 'da', 'de', 'ki', 'mi', 'mı', 'mu', 'mü', 'sadece', 'tek', 'en', 'çok', 'az', 'yeni', 'eski'
+    'meşhur', 'ünlü', 'tarihi', 'geleneksel', 'klasik', 'yeni', 'taze', 'özel', 'premium', 'lüks', 'kalite', 'uygun'
 ];
 
 function removeTurkishSuffixes(word: string) {
@@ -48,7 +42,7 @@ function removeTurkishSuffixes(word: string) {
 
 function cleanMarkName(name: string, removeGenericWords = true) {
     if (!name) return '';
-    let cleaned = name.toLowerCase().replace(/[^a-z0-9ğüşöçı\s]/g, '').replace(/\s+/g, ' ').trim();
+    let cleaned = String(name).toLocaleLowerCase('tr-TR').replace(/[^a-z0-9ğüşöçı\s]/g, '').replace(/\s+/g, ' ').trim();
     if (removeGenericWords) {
         cleaned = cleaned.split(' ').filter(word => {
             const stemmedWord = removeTurkishSuffixes(word);
@@ -60,11 +54,7 @@ function cleanMarkName(name: string, removeGenericWords = true) {
 
 const visualMap: Record<string, string[]> = {
     "a": ["e", "o"], "b": ["d", "p"], "c": ["ç", "s"], "ç": ["c", "s"], "d": ["b", "p"], "e": ["a", "o"], "f": ["t"],
-    "g": ["ğ", "q"], "ğ": ["g", "q"], "h": ["n"], "i": ["l", "j", "ı"], "ı": ["i"], "j": ["i", "y"], "k": ["q", "x"],
-    "l": ["i", "1"], "m": ["n"], "n": ["m", "r"], "o": ["a", "0", "ö"], "ö": ["o"], "p": ["b", "q"], "q": ["g", "k"],
-    "r": ["n"], "s": ["ş", "c", "z"], "ş": ["s", "z"], "t": ["f"], "u": ["ü", "v"], "ü": ["u", "v"], "v": ["u", "ü", "w"],
-    "w": ["v"], "x": ["ks"], "y": ["j"], "z": ["s", "ş"], "0": ["o"], "1": ["l", "i"], "ks": ["x"], "Q": ["O","0"],
-    "O": ["Q", "0"], "I": ["l", "1"], "L": ["I", "1"], "Z": ["2"], "S": ["5"], "B": ["8"], "D": ["O"]
+    "g": ["ğ", "q"], "ğ": ["g", "q"], "h": ["n"], "i": ["l", "j", "ı"], "ı": ["i"], "j": ["i", "y"], "k": ["q", "x"]
 };
 
 function visualMismatchPenalty(a: string, b: string) {
@@ -73,14 +63,36 @@ function visualMismatchPenalty(a: string, b: string) {
     const minLen = Math.min(a.length, b.length);
     let penalty = lenDiff * 0.5;
     for (let i = 0; i < minLen; i++) {
-        const ca = a[i].toLowerCase();
-        const cb = b[i].toLowerCase();
+        const ca = a[i].toLocaleLowerCase('tr-TR');
+        const cb = b[i].toLocaleLowerCase('tr-TR');
         if (ca !== cb) {
             if (visualMap[ca] && visualMap[ca].includes(cb)) penalty += 0.25;
             else penalty += 1.0;
         }
     }
     return penalty;
+}
+
+function parseDateForValidation(val: any): Date | null {
+    if (!val) return null;
+    if (typeof val === 'string') {
+        const parts = val.split(/[./-]/);
+        if (parts.length === 3) {
+            if (parts[0].length === 4) return new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+            else return new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+        }
+        const iso = new Date(val);
+        if (!isNaN(iso.getTime())) return iso;
+    }
+    return null;
+}
+
+function isValidBasedOnDate(hitDate: any, monitoredDate: any) {
+    if (!hitDate || !monitoredDate) return true;
+    const hit = parseDateForValidation(hitDate);
+    const mon = parseDateForValidation(monitoredDate);
+    if (!hit || !mon || isNaN(hit.getTime()) || isNaN(mon.getTime())) return true;
+    return hit >= mon;
 }
 
 const v0 = new Int32Array(512);
@@ -91,9 +103,7 @@ function levenshteinSimilarity(a: string, b: string): number {
     const lenA = a.length, lenB = b.length;
     if (lenA === 0 || lenB === 0) return 0.0;
     if (lenB >= 512) return 0.0; 
-
     for (let i = 0; i <= lenB; i++) v0[i] = i;
-
     for (let i = 0; i < lenA; i++) {
         v1[0] = i + 1;
         for (let j = 0; j < lenB; j++) {
@@ -105,46 +115,121 @@ function levenshteinSimilarity(a: string, b: string): number {
     return 1 - (v1[lenB] / Math.max(lenA, lenB));
 }
 
-function calculateSimilarityScoreInternal(cleanedHitName: string, cleanedSearchName: string) {
-    if (!cleanedSearchName || !cleanedHitName) return { finalScore: 0.0, positionalExactMatchScore: 0.0 }; 
-    if (cleanedSearchName === cleanedHitName) return { finalScore: 1.0, positionalExactMatchScore: 1.0 }; 
-
-    const levenshteinScore = levenshteinSimilarity(cleanedSearchName, cleanedHitName);
-    
-    const words1 = cleanedSearchName.split(' ').filter(w => w.length > 0);
-    const words2 = cleanedHitName.split(' ').filter(w => w.length > 0);
-    let maxWordScore = 0.0;
-
-    if (words1.length === 0 && words2.length === 0) {
-        maxWordScore = 1.0;
-    } else if (words1.length > 0 && words2.length > 0) {
-        for (const w1 of words1) {
-            for (const w2 of words2) {
-                const sim = levenshteinSimilarity(w1, w2);
-                if (sim > maxWordScore) maxWordScore = sim;
-            }
-        }
-    }
-
-    const visualPenalty = visualMismatchPenalty(cleanedSearchName, cleanedHitName);
-    const maxPossibleVisualPenalty = Math.max(cleanedSearchName.length, cleanedHitName.length) * 1.0;
-    const visualScore = maxPossibleVisualPenalty === 0 ? 1.0 : (1.0 - (visualPenalty / maxPossibleVisualPenalty));
-
-    let positionalExactMatchScore = 0.0;
-    const len = Math.min(cleanedSearchName.length, cleanedHitName.length, 3);
-    if (len > 0) {
-        let match = true;
-        for (let i = 0; i < len; i++) {
-            if (cleanedSearchName[i] !== cleanedHitName[i]) { match = false; break; }          
-        }
-        if (match) positionalExactMatchScore = 1.0;
-    }
-
-    const finalScore = (levenshteinScore * 0.40) + (maxWordScore * 0.40) + (visualScore * 0.20);
-    return { finalScore: Math.max(0.0, Math.min(1.0, finalScore)), positionalExactMatchScore }; 
+function normalizeStringForPhonetic(str: string) {
+    if (!str) return "";
+    return str.toLocaleLowerCase('tr-TR').replace(/[^a-z0-9ğüşöçı]/g, '').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c').replace(/ı/g, 'i');
 }
 
-// --- ANA YÖNLENDİRİCİ FONKSİYON ---
+function isPhoneticallySimilar(a: string, b: string) {
+    if (!a || !b) return 0.0;
+    a = normalizeStringForPhonetic(a); b = normalizeStringForPhonetic(b);
+    if (a === b) return 1.0;
+    const lenA = a.length, lenB = b.length;
+    const minLen = Math.min(lenA, lenB), maxLen = Math.max(lenA, lenB);
+    if (maxLen === 0) return 1.0; if (minLen === 0) return 0.0;
+    let matchingChars = 0;
+    const matchedB = new Array(lenB).fill(false);
+    const searchRange = Math.min(maxLen, Math.floor(maxLen / 2) + 1);
+    for (let i = 0; i < lenA; i++) {
+        for (let j = Math.max(0, i - searchRange); j < Math.min(lenB, i + searchRange + 1); j++) {
+            if (a[i] === b[j] && !matchedB[j]) { matchingChars++; matchedB[j] = true; break; }
+        }
+    }
+    if (matchingChars === 0) return 0.0;
+    const commonality = matchingChars / Math.max(lenA, lenB);
+    let positionalBonus = 0;
+    if (a[0] === b[0]) positionalBonus += 0.2;
+    if (lenA > 1 && lenB > 1 && a[1] === b[1]) positionalBonus += 0.1;
+    return Math.max(0.0, Math.min(1.0, (commonality * 0.7) + (positionalBonus * 0.3)));
+}
+
+function calculateSimilarityScoreInternal(searchMarkNameOriginal: string, hitMarkNameOriginal: string, s1: string, s2: string) {
+    if (!s1 || !s2) return { finalScore: 0.0, positionalExactMatchScore: 0.0 }; 
+    if (s1 === s2) return { finalScore: 1.0, positionalExactMatchScore: 1.0 }; 
+
+    const levenshteinScore = levenshteinSimilarity(s1, s2);
+    
+    const jaroWinklerScore = (() => {
+        let m = 0; const s1_len = s1.length, s2_len = s2.length;
+        const range = Math.floor(Math.max(s1_len, s2_len) / 2) - 1;
+        const s1_matches = new Array(s1_len).fill(false), s2_matches = new Array(s2_len).fill(false);
+        for (let i = 0; i < s1_len; i++) {
+            for (let j = Math.max(0, i - range); j < Math.min(s2_len, i + range + 1); j++) {
+                if (s1[i] === s2[j] && !s2_matches[j]) { s1_matches[i] = true; s2_matches[j] = true; m++; break; }
+            }
+        }
+        if (m === 0) return 0.0;
+        let k = 0, t = 0;
+        for (let i = 0; i < s1_len; i++) {
+            if (s1_matches[i]) {
+                let j; for (j = k; j < s2_len; j++) { if (s2_matches[j]) { k = j + 1; break; } }
+                if (s1[i] !== s2[j]) t++;
+            }
+        }
+        t /= 2;
+        const jaro_score = (m / s1_len + m / s2_len + (m - t) / m) / 3;
+        let l = 0;
+        for (let i = 0; i < Math.min(s1_len, s2_len, 4); i++) { if (s1[i] === s2[i]) l++; else break; }
+        return jaro_score + l * 0.1 * (1 - jaro_score);
+    })();
+
+    const ngramScore = (() => {
+        const getNGrams = (s: string) => { const n = new Set<string>(); for (let i = 0; i <= s.length - 2; i++) n.add(s.substring(i, i + 2)); return n; };
+        const ng1 = getNGrams(s1), ng2 = getNGrams(s2);
+        if (ng1.size === 0 && ng2.size === 0) return 1.0;
+        if (ng1.size === 0 || ng2.size === 0) return 0.0;
+        let common = 0; ng1.forEach(ng => { if (ng2.has(ng)) common++; });
+        return common / Math.min(ng1.size, ng2.size);
+    })();
+
+    const prefixScore = (() => {
+        const p1 = s1.substring(0, Math.min(s1.length, 3)), p2 = s2.substring(0, Math.min(s2.length, 3));
+        if (p1 === p2) return 1.0; if (p1.length === 0 && p2.length === 0) return 1.0;
+        return levenshteinSimilarity(p1, p2);
+    })();
+
+    const visualScore = (() => {
+        const penalty = visualMismatchPenalty(s1, s2);
+        const maxP = Math.max(s1.length, s2.length) * 1.0;
+        return maxP === 0 ? 1.0 : (1.0 - (penalty / maxP));
+    })();
+
+    const { maxWordScore, maxWordPair } = (() => {
+        const w1 = s1.split(' ').filter(w => w.length > 0), w2 = s2.split(' ').filter(w => w.length > 0);
+        if (w1.length === 0 && w2.length === 0) return { maxWordScore: 1.0, maxWordPair: null };
+        if (w1.length === 0 || w2.length === 0) return { maxWordScore: 0.0, maxWordPair: null };
+        let maxSim = 0.0; let pair: [string, string] | null = null;
+        for (const a of w1) {
+            for (const b of w2) {
+                const sim = levenshteinSimilarity(a, b);
+                if (sim > maxSim) { maxSim = sim; pair = [a, b]; }
+            }
+        }
+        return { maxWordScore: maxSim, maxWordPair: pair };
+    })();
+
+    const positionalExactMatchScore = (() => {
+        const len = Math.min(s1.length, s2.length, 3);
+        if (len === 0) return 0.0;
+        for (let i = 0; i < len; i++) if (s1[i] !== s2[i]) return 0.0;
+        return 1.0;
+    })();
+
+    const exactWordLen = (maxWordPair && maxWordPair[0] === maxWordPair[1]) ? maxWordPair[0].length : 0;
+    if (maxWordScore >= 0.70) {
+        if (maxWordScore === 1.0 && exactWordLen < 2) { } 
+        else { return { finalScore: maxWordScore, positionalExactMatchScore }; }
+    }
+
+    const nameSimRaw = (levenshteinScore * 0.30 + jaroWinklerScore * 0.25 + ngramScore * 0.15 + visualScore * 0.15 + prefixScore * 0.10 + maxWordScore * 0.05);
+    const phonRaw = isPhoneticallySimilar(searchMarkNameOriginal, hitMarkNameOriginal);
+
+    let finalScore = (nameSimRaw * 0.95) + (phonRaw * 0.05);
+    finalScore = Math.max(0.0, Math.min(1.0, finalScore));
+
+    return { finalScore, positionalExactMatchScore }; 
+}
+
 serve(async (req) => {
     if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -154,31 +239,47 @@ serve(async (req) => {
         const supabase = createClient(supabaseUrl, supabaseKey);
         const body = await req.json();
 
-        // =========================================================================
-        // PARALEL WORKER MODU (İşçiler)
-        // =========================================================================
         if (body.action === 'worker') {
             const { jobId, workerId, monitoredMarks, selectedBulletinId, lastId, processedCount, totalBulletinRecords } = body;
             const bulletinNo = selectedBulletinId.split('_')[0];
-            const BATCH_SIZE = 500; // Bülten kayıtlarını 500'er 500'er çekeriz
+            const BATCH_SIZE = Math.max(25, Math.min(250, Math.floor(50000 / (monitoredMarks.length || 1))));
 
-            // 1. Markaları Hazırla
             const preparedMarks = monitoredMarks.map((mark: any) => {
-                const primaryName = (mark.searchMarkName || mark.markName || '').trim();
+                const rawName = mark.searchMarkName || mark.markName || mark.title || mark.trademarkName;
+                const primaryName = (rawName && rawName !== "undefined" && rawName !== "null") ? String(rawName).trim() : 'İsimsiz Marka';
+                
                 const alternatives = Array.isArray(mark.brandTextSearch) ? mark.brandTextSearch : [];
                 const searchTerms = [primaryName, ...alternatives]
-                    .filter(t => t && t.trim().length > 0)
-                    .map(term => ({ term, cleanedSearchName: cleanMarkName(term, term.trim().split(/\s+/).length > 1) }));
+                    .filter(t => t && String(t).trim().length > 0 && String(t) !== "undefined")
+                    .map(term => ({ term, cleanedSearchName: cleanMarkName(String(term)) }));
                 
-                const classesRaw = Array.isArray(mark.niceClassSearch) && mark.niceClassSearch.length > 0 ? mark.niceClassSearch : (Array.isArray(mark.niceClasses) ? mark.niceClasses : []);
-                const orangeSet = new Set(classesRaw.map((c: any) => String(c).replace(/\D/g, '')).filter(Boolean));
-                const blueSet = new Set();
-                orangeSet.forEach((c: any) => { if (RELATED_CLASSES_MAP[c]) RELATED_CLASSES_MAP[c].forEach(rel => blueSet.add(rel)); });
-                
-                return { ...mark, searchTerms, orangeSet, blueSet };
+                const makeArray = (val: any) => {
+                    if (!val) return [];
+                    if (Array.isArray(val)) return val.map(String);
+                    if (typeof val === 'string') return val.split(/[^\d]+/);
+                    return [String(val)];
+                };
+
+                const originalClassesRaw = mark.goodsAndServicesByClass ? makeArray(mark.goodsAndServicesByClass.map((c:any)=>c.classNo||c)) : makeArray(mark.niceClasses);
+                const watchedClassesRaw = makeArray(mark.niceClassSearch);
+
+                const cleanClass = (c: any) => {
+                    const num = parseInt(String(c).replace(/\D/g, ''), 10);
+                    return isNaN(num) ? '' : num.toString();
+                };
+
+                const greenSet = new Set(originalClassesRaw.map(cleanClass).filter(Boolean));
+                const orangeSet = new Set(watchedClassesRaw.map(cleanClass).filter(Boolean));
+                const blueSet = new Set<string>();
+
+                greenSet.forEach(c => { if (RELATED_CLASSES_MAP[c]) RELATED_CLASSES_MAP[c].forEach(rel => blueSet.add(rel)); });
+                const bypassClassFilter = greenSet.size === 0 && orangeSet.size === 0;
+
+                const appDate = mark.applicationDate || mark.application_date || null;
+
+                return { ...mark, primaryName, searchTerms, applicationDate: appDate, greenSet, orangeSet, blueSet, bypassClassFilter };
             });
 
-            // 2. Bültenden Sıradaki Kaydı Çek
             const { data: hits, error } = await supabase
                 .from('trademark_bulletin_records')
                 .select('id, application_no, application_date, mark_name, nice_classes, holders, image_path')
@@ -189,47 +290,56 @@ serve(async (req) => {
 
             if (error) throw error;
 
-            // 3. EĞER BÜLTEN KAYDI BİTTİYSE: İŞÇİ TAMAMLANDI
             if (!hits || hits.length === 0) {
                 await supabase.from('search_progress_workers').update({ status: 'completed' }).eq('id', `${jobId}_w${workerId}`);
-                
                 const { data: activeWorkers } = await supabase.from('search_progress_workers').select('id').eq('job_id', jobId).eq('status', 'processing');
-                
                 if (!activeWorkers || activeWorkers.length === 0) {
                     await supabase.from('search_progress').update({ status: 'completed' }).eq('id', jobId);
                     console.log(`🎉 TÜM İŞÇİLER BİTİRDİ! Ana Job ${jobId} tamamlandı.`);
                 }
-                
                 return new Response(JSON.stringify({ success: true, finished: true }), { headers: corsHeaders });
             }
 
             let newLastId = hits[hits.length - 1].id;
             let actualProcessedCount = 0;
             const uiResults = [];
-            const permanentRecords = []; // 🔥 KALICI TABLO EKLENDİ
+            const permanentRecords = []; 
 
-            // 4. KRONOMETRE
             const startTime = Date.now();
-            const CPU_TIME_LIMIT = 1500; // 1.5 Saniyede kes
+            const CPU_TIME_LIMIT = 1500; 
 
             for (let i = 0; i < hits.length; i++) {
                 if (Date.now() - startTime > CPU_TIME_LIMIT) {
-                    newLastId = i > 0 ? hits[i - 1].id : hits[0].id; // 🔥 Güvenli Çıkış
+                    newLastId = i > 0 ? hits[i - 1].id : hits[0].id; 
                     break;
                 }
 
                 actualProcessedCount++;
                 const hit = hits[i];
-                const hitClasses = typeof hit.nice_classes === 'string' ? hit.nice_classes.split(/[^\d]+/).map(c => String(c).replace(/\D/g, '')).filter(Boolean) : [];
+                
+                let rawHitClasses: string[] = [];
+                if (Array.isArray(hit.nice_classes)) rawHitClasses = hit.nice_classes.map(String);
+                else if (typeof hit.nice_classes === 'string') rawHitClasses = hit.nice_classes.split(/[^\d]+/);
+                else if (hit.nice_classes) rawHitClasses = [String(hit.nice_classes)];
+                
+                const cleanClass = (c: any) => {
+                    const num = parseInt(String(c).replace(/\D/g, ''), 10);
+                    return isNaN(num) ? '' : num.toString();
+                };
+                
+                const hitClasses = rawHitClasses.map(cleanClass).filter(Boolean);
                 const cleanedHitName = cleanMarkName(hit.mark_name || ''); 
 
                 for (const mark of preparedMarks) {
-                    let hasPoolMatch = false;
-                    const classColors: Record<string, string> = {};
+                    const isValidDate = isValidBasedOnDate(hit.application_date, mark.applicationDate);
+                    if (!isValidDate) continue;
+
+                    let hasPoolMatch = mark.bypassClassFilter; 
 
                     hitClasses.forEach((hc: string) => {
-                        if (mark.orangeSet.has(hc)) { classColors[hc] = 'orange'; hasPoolMatch = true; }
-                        else if (mark.blueSet.has(hc)) { classColors[hc] = 'gray'; hasPoolMatch = true; }
+                        if (mark.greenSet.has(hc)) { hasPoolMatch = true; }
+                        else if (mark.orangeSet.has(hc)) { hasPoolMatch = true; }
+                        else if (mark.blueSet.has(hc)) { hasPoolMatch = true; }
                     });
 
                     for (const searchItem of mark.searchTerms) {
@@ -237,51 +347,87 @@ serve(async (req) => {
 
                         if (!hasPoolMatch && !isExactPrefixSuffix) continue;
 
-                        const { finalScore, positionalExactMatchScore } = calculateSimilarityScoreInternal(cleanedHitName, searchItem.cleanedSearchName);
+                        const { finalScore, positionalExactMatchScore } = calculateSimilarityScoreInternal(
+                            searchItem.term, hit.mark_name, searchItem.cleanedSearchName, cleanedHitName
+                        );
 
                         if (finalScore < 0.5 && positionalExactMatchScore < 0.5 && !isExactPrefixSuffix) continue;
 
-                        // Arayüz İçin
+                        // UI TABLOSU İÇİN (Ekranda listelenecekler)
                         uiResults.push({
-                            job_id: jobId, monitored_trademark_id: mark.id, mark_name: hit.mark_name,
-                            application_no: hit.application_no, nice_classes: hit.nice_classes, similarity_score: finalScore,
-                            holders: hit.holders, image_path: hit.image_path
+                            job_id: jobId, 
+                            monitored_trademark_id: mark.id, 
+                            mark_name: hit.mark_name,
+                            application_no: hit.application_no, 
+                            nice_classes: hit.nice_classes, 
+                            similarity_score: finalScore,
+                            holders: hit.holders, // Veritabanındaki Array veya Text hali neyse o
+                            image_path: hit.image_path
                         });
 
-                        // 🔥 Kalıcı Tablo İçin (Bunu silmiştim, geri eklendi)
-                        let holdersData = hit.holders;
-                        if (typeof holdersData === 'string') { holdersData = holdersData.split(',').map((h: string) => h.trim()); }
+                        // 🔥 DÜZELTME: KALICI TABLO İÇİN ŞEMAYA %100 UYUMLU KAYIT (Crash çözen kısım)
+                        let holdersTextStr = "";
+                        if (Array.isArray(hit.holders)) {
+                            holdersTextStr = hit.holders.join(', '); // Eğer dizi geldiyse metne çevir
+                        } else {
+                            holdersTextStr = String(hit.holders || ''); // Değilse string'e zorla
+                        }
 
                         permanentRecords.push({
-                            application_date: hit.application_date || '', application_no: hit.application_no,
-                            bulletin_id: selectedBulletinId, class_colors: classColors, holders: holdersData || [],
-                            image_path: hit.image_path || '', is_earlier: false, mark_name: hit.mark_name,
-                            matched_term: searchItem.term, monitored_mark_id: mark.id,
-                            monitored_trademark: mark.markName || mark.title || '', monitored_trademark_id: mark.id,
-                            nice_classes: hit.nice_classes || '', positional_exact_match_score: positionalExactMatchScore,
-                            similarity_score: finalScore, source: 'new'
+                            bulletin_id: selectedBulletinId, 
+                            bulletin_no: bulletinNo,
+                            monitored_trademark_id: mark.id,
+                            similar_mark_name: hit.mark_name,
+                            similar_application_no: hit.application_no,
+                            similarity_score: finalScore, 
+                            positional_exact_match_score: positionalExactMatchScore,
+                            is_earlier: false, 
+                            matched_term: searchItem.term, 
+                            source: 'new',
+                            holders: holdersTextStr, // ✅ Artık kesinlikle TEXT formatında!
+                            nice_classes: hit.nice_classes || '', 
+                            image_path: hit.image_path || ''
                         });
-
                         break;
                     }
                 }
             }
 
-            // 5. BULUNANLARI YAZ
-            if (uiResults.length > 0) {
-                await supabase.from('search_progress_results').insert(uiResults);
-                await supabase.from('monitoring_trademark_records').insert(permanentRecords); // 🔥 Kalıcı kayıt yapıldı
-                
+            // 🔥 AĞIR LOGLAMA (X-RAY) EKLENDİ
+            if (uiResults.length > 0 || permanentRecords.length > 0) {
+                console.log(`\n--- DB YAZMA İŞLEMİ BAŞLIYOR ---`);
+                console.log(`Arayüze Yazılacaklar: ${uiResults.length} kayıt`);
+                console.log(`Kalıcı Tabloya Yazılacaklar: ${permanentRecords.length} kayıt`);
+
+                // 1. Arayüz Sonuçlarını Yaz
+                if (uiResults.length > 0) {
+                    const { error: uiError } = await supabase.from('search_progress_results').insert(uiResults);
+                    if (uiError) {
+                        console.error(`❌ UI TABLOSU (search_progress_results) HATASI:`, uiError);
+                    } else {
+                        console.log(`✅ UI Tablosuna yazıldı.`);
+                    }
+                }
+
+                // 2. Kalıcı Tabloya Yaz (Sorunlu olduğu düşünülen kısım)
+                if (permanentRecords.length > 0) {
+                    const { error: permError } = await supabase.from('monitoring_trademark_records').insert(permanentRecords);
+                    if (permError) {
+                        console.error(`❌ KALICI TABLO (monitoring_trademark_records) YAZMA HATASI:`, permError);
+                    } else {
+                        console.log(`✅ Kalıcı Tabloya başarıyla yazıldı!`);
+                    }
+                }
+
+                // Sayaç Güncelleme
                 const { data: jobData } = await supabase.from('search_progress').select('current_results').eq('id', jobId).single();
                 await supabase.from('search_progress').update({ current_results: (jobData?.current_results || 0) + uiResults.length }).eq('id', jobId);
             }
 
-            // 6. İLERLEME YÜZDESİNİ HESAPLA (UI İçin)
             const newProcessedCount = processedCount + actualProcessedCount;
             const progressPercent = Math.min(100, Math.floor((newProcessedCount / totalBulletinRecords) * 100));
             await supabase.from('search_progress_workers').upsert({ id: `${jobId}_w${workerId}`, job_id: jobId, status: 'processing', progress: progressPercent });
 
-            // 7. ZİNCİRE DEVAM ET
             EdgeRuntime.waitUntil(
                 supabase.functions.invoke('perform-trademark-similarity-search', {
                     body: { action: 'worker', jobId, workerId, monitoredMarks, selectedBulletinId, lastId: newLastId, processedCount: newProcessedCount, totalBulletinRecords },
@@ -293,7 +439,7 @@ serve(async (req) => {
         }
 
         // =========================================================================
-        // BAŞLANGIÇ MODU (Arayüzden gelen ilk istek)
+        // BAŞLANGIÇ MODU
         // =========================================================================
         const { monitoredMarks, selectedBulletinId } = body;
         if (!monitoredMarks || !selectedBulletinId) throw new Error("Eksik parametre.");
@@ -301,13 +447,12 @@ serve(async (req) => {
         const jobId = `job_${Date.now()}`;
         const bulletinNo = selectedBulletinId.split('_')[0];
         
-        // Bültenin toplam kaydını bul (Yüzde hesabı için)
         const { count } = await supabase.from('trademark_bulletin_records').select('*', { count: 'exact', head: true }).eq('bulletin_no', bulletinNo);
         const totalRecords = count || 1;
 
         await supabase.from('search_progress').insert({ id: jobId, status: 'processing', current_results: 0, total_records: totalRecords });
         
-        // MARKALARI 10 EŞİT PARÇAYA BÖL
+        // 🔥 TAM GÜÇ: 10 İŞÇİ
         const WORKER_COUNT = 10;
         const chunkSize = Math.ceil(monitoredMarks.length / WORKER_COUNT);
         
@@ -328,8 +473,6 @@ serve(async (req) => {
         }
 
         await supabase.from('search_progress_workers').insert(workerRecords);
-
-        console.log(`🚀 Paralel Arama Tetiklendi: ${jobId} (${workerRecords.length} İşçi Başladı)`);
 
         return new Response(JSON.stringify({ success: true, jobId }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
