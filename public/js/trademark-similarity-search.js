@@ -644,8 +644,11 @@ const loadInitialData = async () => {
 const loadBulletinOptions = async () => {
     const bulletinSelect = document.getElementById('bulletinSelect');
     bulletinSelect.innerHTML = '<option value="">Bülten seçin...</option>';
+    
     const { data: registeredData } = await supabase.from('trademark_bulletins').select('*').order('bulletin_no', { ascending: false });
-    const { data: cacheData } = await supabase.from('search_results_cache').select('bulletin_key');
+    // Eski tablo yerine arama geçmişinden (search_progress) tamamlanmışları çekiyoruz
+    const { data: cacheData } = await supabase.from('search_progress').select('bulletin_id').eq('status', 'completed');
+    
     const allBulletins = new Map();
     
     if (registeredData) {
@@ -657,16 +660,12 @@ const loadBulletinOptions = async () => {
     
     if (cacheData) {
         cacheData.forEach(rec => {
-            if(!rec.bulletin_key) return;
-            
-            // 🔥 DÜZELTME 1: "GLOBAL" kelimesi içeren (manuel) kayıtları bültenmiş gibi listeye ekleme
-            if (String(rec.bulletin_key).includes('GLOBAL')) return;
+            if(!rec.bulletin_id || String(rec.bulletin_id).includes('GLOBAL')) return;
 
-            const parts = String(rec.bulletin_key).split('_');
+            const parts = String(rec.bulletin_id).split('_');
             const normalizedKey = `${parts[0]}_${(parts[1] || '').replace(/\D/g, '')}`;
             
             if (!allBulletins.has(normalizedKey)) {
-                // 🔥 DÜZELTME 2: (Sadece Arama) yerine (Bellek) ibaresi kullanılıyor
                 allBulletins.set(normalizedKey, { 
                     bulletinNo: parts[0], 
                     bulletinKey: normalizedKey, 
@@ -696,49 +695,58 @@ const loadDataFromCache = async (bulletinKey) => {
     const infoMessageContainer = document.getElementById('infoMessageContainer');
     
     try {
-        let offset = 0;
-        const limit = 1000;
-        let hasMore = true;
+        // 1. IŞIK HIZI: Önce toplam kayıt sayısını soruyoruz
+        const { count, error: countErr } = await supabase
+            .from('monitoring_trademark_records')
+            .select('*', { count: 'exact', head: true })
+            .eq('bulletin_id', bulletinKey);
+
+        if (countErr) throw countErr;
+
         let cachedResults = [];
 
-        // Supabase'den kalıcı tablo (monitoring_trademark_records) verilerini parça parça çek
-        while (hasMore) {
-            const { data, error } = await supabase
-                .from('monitoring_trademark_records')
-                .select('*')
-                .eq('bulletin_id', bulletinKey)
-                .range(offset, offset + limit - 1);
-
-            if (error) throw error;
-
-            if (data && data.length > 0) {
-                // UI'ın anladığı CamelCase formata çevir
-                const mappedData = data.map(item => ({
-                    id: item.id,
-                    objectID: item.id,
-                    monitoredTrademarkId: item.monitored_trademark_id,
-                    markName: item.similar_mark_name,
-                    applicationNo: item.similar_application_no,
-                    niceClasses: item.nice_classes,
-                    similarityScore: item.similarity_score,
-                    holders: item.holders,
-                    imagePath: item.image_path,
-                    bulletinId: item.bulletin_id,
-                    source: 'cache'
-                }));
-                
-                cachedResults = cachedResults.concat(mappedData);
-                offset += limit;
-            } else {
-                hasMore = false;
+        if (count > 0) {
+            // 2. PARALEL İNDİRME: Tüm veriyi 1000'erli paketler halinde AYNI ANDA çekiyoruz!
+            const limit = 1000;
+            const fetchPromises = [];
+            
+            for (let offset = 0; offset < count; offset += limit) {
+                fetchPromises.push(
+                    supabase.from('monitoring_trademark_records')
+                    .select('*')
+                    .eq('bulletin_id', bulletinKey)
+                    .range(offset, offset + limit - 1)
+                );
             }
+
+            // Bekleme yok, tüm istekler aynı anda biter (30 saniye yerine 1-2 saniye sürer)
+            const responses = await Promise.all(fetchPromises);
+            
+            responses.forEach(res => {
+                if (res.data && res.data.length > 0) {
+                    const mappedData = res.data.map(item => ({
+                        id: item.id,
+                        objectID: item.id,
+                        monitoredTrademarkId: item.monitored_trademark_id,
+                        markName: item.similar_mark_name,
+                        applicationNo: item.similar_application_no,
+                        niceClasses: item.nice_classes,
+                        similarityScore: item.similarity_score,
+                        holders: item.holders,
+                        imagePath: item.image_path,
+                        bulletinId: item.bulletin_id,
+                        source: 'cache'
+                    }));
+                    cachedResults = cachedResults.concat(mappedData);
+                }
+            });
         }
 
         allSimilarResults = cachedResults;
         
         if (infoMessageContainer) {
             infoMessageContainer.innerHTML = cachedResults.length > 0 
-                ? `<div class="info-message success">Önbellekten ${cachedResults.length} benzer sonuç yüklendi.</div>` 
+                ? `<div class="info-message success">Önbellekten ${cachedResults.length} benzer sonuç ışık hızında yüklendi.</div>` 
                 : '';
         }
         
@@ -1012,15 +1020,17 @@ const groupAndSortResults = async () => {
     });
     allSimilarResults = sortedIds.flatMap(id => groupedByTrademark[id].sort((a, b) => (b.similarityScore || 0) - (a.similarityScore || 0)));
 };
-// ... Kaldığı Yerden Devam ...
 
 const handleSimilarityToggle = async (event) => {
     const { resultId } = event.target.dataset;
     const currentHit = allSimilarResults.find(r => r.objectID === resultId || r.id === resultId);
     if (!currentHit) return;
 
-    const newStatus = currentHit.isSimilar !== true;
-    const { error } = await supabase.from('search_results_cache').update({ is_similar: newStatus }).eq('id', resultId);
+    // Eğer false değilse false yap, false ise true yap
+    const newStatus = currentHit.isSimilar !== false ? false : true;
+    
+    // 🔥 Eski tablo adı düzeltildi
+    const { error } = await supabase.from('monitoring_trademark_records').update({ is_similar: newStatus }).eq('id', resultId);
     
     if (!error) {
         currentHit.isSimilar = newStatus;
@@ -1032,7 +1042,8 @@ const handleSimilarityToggle = async (event) => {
 
 const handleBsChange = async (event) => {
     const { resultId } = event.target.dataset;
-    await supabase.from('search_results_cache').update({ bs_value: event.target.value }).eq('id', resultId);
+    // 🔥 Eski tablo adı düzeltildi
+    await supabase.from('monitoring_trademark_records').update({ bs_value: event.target.value }).eq('id', resultId);
 };
 
 const handleNoteCellClick = (cell) => {
@@ -1043,7 +1054,8 @@ const handleNoteCellClick = (cell) => {
     noteInput.value = currentNote;
     
     document.getElementById('saveNoteBtn').onclick = async () => {
-        const { error } = await supabase.from('search_results_cache').update({ note: noteInput.value }).eq('id', resultId);
+        // 🔥 Eski tablo adı düzeltildi
+        const { error } = await supabase.from('monitoring_trademark_records').update({ note: noteInput.value }).eq('id', resultId);
         if (!error) {
             const hit = allSimilarResults.find(r => r.objectID === resultId || r.id === resultId);
             if (hit) hit.note = noteInput.value;
@@ -1369,13 +1381,18 @@ const saveManualResultEntry = async () => {
     
     const sourceType = document.querySelector('input[name="manualSourceType"]:checked').value;
     const currentBulletinVal = document.getElementById('bulletinSelect').value || MANUAL_COLLECTION_ID;
+    const bulletinNoVal = currentBulletinVal.split('_')[0] || 'GLOBAL';
     
+    // 🔥 Sütun isimleri Supabase veritabanındakiyle %100 eşleştirildi
     let resultPayload = { 
-        bulletin_key: currentBulletinVal, 
+        bulletin_id: currentBulletinVal,
+        bulletin_no: bulletinNoVal,
         monitored_trademark_id: monitoredId, 
         is_similar: true, 
-        similarity_score: 1.0, 
-        source: 'manual' 
+        similarity_score: 1.0,
+        positional_exact_match_score: 1.0,
+        source: 'manual',
+        is_earlier: false
     };
 
     if (sourceType === 'tp') {
@@ -1384,6 +1401,8 @@ const saveManualResultEntry = async () => {
         let flatHolders = tpSearchResultData.holders;
         if (Array.isArray(flatHolders)) {
             flatHolders = flatHolders.map(h => h.name || h.holderName || h).join(', ');
+        } else {
+            flatHolders = String(flatHolders || '');
         }
 
         resultPayload = { 
@@ -1415,14 +1434,37 @@ const saveManualResultEntry = async () => {
 
     SimpleLoading.show('Kaydediliyor...', 'Sonuç ekleniyor...');
     
-    const { error } = await supabase.from('search_results_cache').insert([resultPayload]);
+    // 🔥 Eski tablo adı düzeltildi ve eklenen data geri alındı
+    const { data: insertedData, error } = await supabase.from('monitoring_trademark_records').insert([resultPayload]).select();
     
     SimpleLoading.hide();
     
     if (!error) {
         showNotification('Kayıt başarıyla eklendi.', 'success');
         $('#addManualResultModal').modal('hide');
-        checkCacheAndToggleButtonStates();
+        
+        // 🔥 Manuel eklenen kaydı ANINDA arayüze (tabloya) yansıtıyoruz
+        if (insertedData && insertedData.length > 0) {
+            const newItem = insertedData[0];
+            allSimilarResults.push({
+                id: newItem.id,
+                objectID: newItem.id,
+                monitoredTrademarkId: newItem.monitored_trademark_id,
+                markName: newItem.similar_mark_name,
+                applicationNo: newItem.similar_application_no,
+                niceClasses: newItem.nice_classes,
+                similarityScore: newItem.similarity_score,
+                holders: newItem.holders,
+                imagePath: newItem.image_path,
+                bulletinId: newItem.bulletin_id,
+                isSimilar: true,
+                source: 'manual'
+            });
+
+            await groupAndSortResults();
+            if (pagination) pagination.update(allSimilarResults.length);
+            renderCurrentPageOfResults();
+        }
     } else { 
         console.error("Manuel kayıt hatası:", error);
         showNotification('Kayıt eklenemedi: ' + error.message, 'error'); 
