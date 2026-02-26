@@ -39,14 +39,17 @@ async function monitorSearchProgress(jobId, onProgress) {
                 // search_progress tablosundan durumu kontrol et
                 const { data, error } = await supabase
                     .from('search_progress')
-                    .select('status, processed_count, total_count, error_message')
-                    .eq('job_id', jobId)
+                    // 🔥 DÜZELTME 1: Kolon adları veritabanı şemanıza göre güncellendi
+                    .select('status, current_results, total_records, error_message')
+                    // 🔥 DÜZELTME 2: 'job_id' yerine 'id' kolonu arandı
+                    .eq('id', jobId)
                     .single();
 
                 if (error) throw error;
 
                 if (data.status === 'processing') {
-                    onProgress({ status: 'processing', processed: data.processed_count, total: data.total_count });
+                    // 🔥 DÜZELTME 3: Gelen veriler yeni kolon adlarından okundu
+                    onProgress({ status: 'processing', processed: data.current_results, total: data.total_records });
                 } 
                 else if (data.status === 'completed') {
                     clearInterval(interval);
@@ -66,50 +69,33 @@ async function monitorSearchProgress(jobId, onProgress) {
     });
 }
 
-// 🔥 DÜZELTME: UUID'ler için çok daha güvenli olan OFFSET Paging yapısı kuruldu.
 async function fetchResults(jobId, onProgress) {
-    let allData = [];
-    const BATCH_SIZE = 1000; 
-    let keepFetching = true;
-    let offset = 0; 
+    let allResults = [];
+    let offset = 0;
+    const limit = 1000;
+    let hasMore = true;
 
-    while (keepFetching) {
-        try {
-            const { data, error } = await supabase
-                .from('search_progress_results')
-                .select('*')
-                .eq('job_id', jobId)
-                .range(offset, offset + BATCH_SIZE - 1)
-                .order('created_at', { ascending: true }); // Kayma olmaması için sıralama
+    while (hasMore) {
+        const { data, error } = await supabase
+            .from('search_progress_results')
+            .select('*')
+            .eq('job_id', jobId)
+            // 🔥 DÜZELTME: 'created_at' yerine 'id' kolonuna göre sıralama yapıyoruz
+            .order('id', { ascending: true }) 
+            .range(offset, offset + limit - 1);
 
-            if (error) throw error;
-            if (!data || data.length === 0) { keepFetching = false; break; }
+        if (error) {
+            console.error("Sonuçları çekerken hata:", error);
+            throw error;
+        }
 
-            // DB'den gelen snake_case veriyi, UI'ın beklediği camelCase formata çeviriyoruz
-            const mappedData = data.map(r => ({
-                id: r.id,
-                objectID: r.id, // Eski uyumluluk için
-                monitoredTrademarkId: r.monitored_trademark_id,
-                markName: r.mark_name,
-                applicationNo: r.application_no,
-                niceClasses: r.nice_classes,
-                similarityScore: r.similarity_score,
-                holders: r.holders,
-                imagePath: r.image_path
-            }));
-
-            allData = allData.concat(mappedData);
-            offset += BATCH_SIZE;
-
-            // Eğer gelen veri BATCH_SIZE'dan küçükse daha fazla veri kalmamıştır
-            if (data.length < BATCH_SIZE) { 
-                keepFetching = false; 
-            }
-            
-        } catch (err) {
-            console.error("Sonuçları çekerken hata:", err);
-            throw err;
+        if (data && data.length > 0) {
+            allResults = allResults.concat(data);
+            offset += limit;
+        } else {
+            hasMore = false;
         }
     }
-    return allData;
+
+    return allResults;
 }
