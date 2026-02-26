@@ -1,3 +1,5 @@
+// public/js/components/TaskDetailManager.js
+
 import { supabase } from "../../supabase-config.js";
 import { formatToTRDate } from "../../utils.js";
 
@@ -30,6 +32,19 @@ export class TaskDetailManager {
                 <i class="fas fa-exclamation-circle mr-3 fa-lg"></i>
                 <div>${message}</div>
             </div>`;
+    }
+
+    // 🔥 YENİ EKLENDİ: [object Object] hatasını çözen para birimi dönüştürücü
+    _formatMoney(amountData) {
+        if (!amountData) return '0 TRY';
+        if (Array.isArray(amountData)) {
+            if (amountData.length === 0) return '0 TRY';
+            return amountData.map(x => `${x.amount || 0} ${x.currency || 'TRY'}`).join(' + ');
+        }
+        if (typeof amountData === 'object') {
+            return `${amountData.amount || 0} ${amountData.currency || 'TRY'}`;
+        }
+        return `${amountData} TRY`;
     }
 
     async render(task, options = {}) {
@@ -307,6 +322,7 @@ export class TaskDetailManager {
         return items.length ? items.join('') : `<div class="text-muted small font-italic p-2">Ekli belge bulunmuyor.</div>`;
     }
 
+    // 🔥 YENİ EKLENDİ: Tutarları ekrana basarken [object Object] sorununu format fonksiyonu ile çözdük.
     _generateAccrualsHtml(accruals) {
         if (!accruals || accruals.length === 0) return `<div class="text-muted small font-italic p-2">Bağlı tahakkuk bulunmuyor.</div>`;
         return accruals.map(acc => {
@@ -314,15 +330,18 @@ export class TaskDetailManager {
             let statusText = 'Ödenmedi';
             if(acc.status === 'paid') { statusColor = '#27ae60'; statusText = 'Ödendi'; }
             else if(acc.status === 'cancelled') { statusColor = '#95a5a6'; statusText = 'İptal'; }
+            
+            const amountStr = this._formatMoney(acc.total_amount || acc.totalAmount);
+
             return `
             <div class="d-flex justify-content-between align-items-center p-3 mb-2 rounded bg-white border">
                 <div class="d-flex align-items-center">
                     <span class="badge badge-light border mr-3">#${acc.id}</span>
-                    <span class="font-weight-bold text-dark" style="font-size: 0.95rem;">${acc.total_amount || 0} TRY</span>
+                    <span class="font-weight-bold text-dark" style="font-size: 0.95rem;">${amountStr}</span>
                 </div>
                 <div class="text-right">
                     <span class="badge badge-pill text-white" style="background-color: ${statusColor}; font-size: 0.75rem;">${statusText}</span>
-                    <div class="text-muted small mt-1">${this._formatDate(acc.created_at)}</div>
+                    <div class="text-muted small mt-1">${this._formatDate(acc.created_at || acc.createdAt)}</div>
                 </div>
             </div>`;
         }).join('');
