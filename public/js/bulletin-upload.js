@@ -55,15 +55,6 @@ function setupUploadEvents() {
     }
   }
 
-  // --- 🔥 YENİ: Otomatik ID Üretici (Firebase id'leri gibi) ---
-  function generateUUID() {
-      if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
-      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-          var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-          return v.toString(16);
-      });
-  }
-
   // --- SQL Parse Yardımcıları ---
   function parseValuesFromRaw(raw) {
       const values = [];
@@ -176,8 +167,11 @@ function setupUploadEvents() {
                   image_path = `bulletins/trademark_${bulletinNo}_images/${imgMatch.name.split('/').pop()}`;
               }
 
+              // 🔥 DÜZELTME: Sabit/deterministik ID. (Aynı dosya iki kez yüklenirse kopyalamak yerine ezer)
+              const deterministicId = `bull_${bulletinNo}_app_${safeAppNo}`;
+
               finalRecords.push({
-                  id: generateUUID(), // 🔥 HATA ÇÖZÜMÜ: Otomatik Benzersiz ID atandı
+                  id: deterministicId, 
                   application_no: r.application_no,
                   bulletin_no: r.bulletin_no,
                   mark_name: r.mark_name,
@@ -189,13 +183,13 @@ function setupUploadEvents() {
           }
       });
 
-      // Ana Bülteni Ekle (Hata vermemesi için önce ID'si var mı diye kontrol et)
-      let bulletinDbId = generateUUID();
-      const { data: existingB } = await supabase.from('trademark_bulletins').select('id').eq('bulletin_no', bulletinNo).limit(1);
-      if (existingB && existingB.length > 0) {
-          bulletinDbId = existingB[0].id;
-      }
-      await supabase.from('trademark_bulletins').upsert({ id: bulletinDbId, bulletin_no: bulletinNo, bulletin_date: bulletinDate });
+      // Ana Bülteni Ekle
+      const bulletinDbId = `bulletin_main_${bulletinNo}`;
+      await supabase.from('trademark_bulletins').upsert({ 
+          id: bulletinDbId, 
+          bulletin_no: bulletinNo, 
+          bulletin_date: bulletinDate 
+      });
 
       // 4. Verileri Supabase'e Yaz (1000'li Parçalar)
       updateProgress(15, `Veritabanına ${finalRecords.length} marka aktarılıyor...`);
@@ -212,32 +206,27 @@ function setupUploadEvents() {
       }
 
       // --- KURŞUN GEÇİRMEZ (FAIL-SAFE) YÜKLEME FONKSİYONU ---
-      // Bağlantı kopsa bile döngüyü ASLA kırmaz, diğer görsellere devam eder.
-      async function uploadImageWithRetrySafe(destPath, imgData, contentType, retries = 5) {
+      async function uploadImageWithRetrySafe(destPath, imgData, contentType, retries = 3) {
           for (let i = 0; i < retries; i++) {
               try {
                   const { data, error } = await supabase.storage.from('brand_images').upload(destPath, imgData, {
                       contentType: contentType,
-                      upsert: true // Var olanları ezer/atlar
+                      upsert: true 
                   });
                   
-                  if (!error) return true; // Başarılı
+                  if (!error) return true; 
                   
-                  // Hata varsa biraz daha uzun bekle ve tekrar dene
-                  console.warn(`⏳ Bağlantı koptu, tekrar deneniyor (${i+1}/${retries}): ${destPath}`);
-                  await new Promise(res => setTimeout(res, 1000 * (i + 1))); 
+                  await new Promise(res => setTimeout(res, 500 * (i + 1))); 
               } catch (err) {
-                  // Ağ tamamen gitse bile çökmeyi engelle
-                  await new Promise(res => setTimeout(res, 1000 * (i + 1))); 
+                  await new Promise(res => setTimeout(res, 500 * (i + 1))); 
               }
           }
-          console.error(`❌ 5 denemede de yüklenemedi, ancak DÖNGÜ DEVAM EDİYOR: ${destPath}`);
-          return false; // Hata fırlatmaz (throw error yok), sadece false döner.
+          return false; 
       }
 
       // 5. Görselleri Storage'a Yükle (Dengeli ve Asla Çökmeyen Paketler)
       updateProgress(30, "Görseller Storage'a aktarılıyor. (Lütfen sekmeyi kapatmayın)...");
-      const CHUNK_SIZE = 25; // Supabase Rate Limit'e takılmamak için en güvenli hız
+      const CHUNK_SIZE = 25; 
       let uploadedCount = 0;
 
       for (let i = 0; i < imageFiles.length; i += CHUNK_SIZE) {
@@ -250,7 +239,6 @@ function setupUploadEvents() {
                   const destPath = `bulletins/trademark_${bulletinNo}_images/${imgName}`;
                   const contentType = imgName.endsWith('.png') ? 'image/png' : 'image/jpeg';
                   
-                  // Çökmeyen fonksiyonumuzu çağırıyoruz
                   await uploadImageWithRetrySafe(destPath, imgData, contentType);
               } catch (blobErr) {
                   console.error("Dosya okuma hatası, atlanıyor...", blobErr);
@@ -264,7 +252,6 @@ function setupUploadEvents() {
 
       updateProgress(100, "🎉 İşlem Başarıyla Tamamlandı! Tablo yenileniyor...", "green");
       
-      // Formu Temizle ve Tabloyu Yenile
       selectedFile = null;
       if (selectedFileName) selectedFileName.textContent = "";
       if (fileInput) fileInput.value = "";
