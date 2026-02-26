@@ -31,7 +31,7 @@ export class TaskSubmitHandler {
     async handleFormSubmit(e, state) {
         e.preventDefault();
         
-        console.log('🚀 [DEBUG] handleFormSubmit tetiklendi (Supabase, Kesin Taraf Ataması).');
+        console.log('🚀 [DEBUG] handleFormSubmit tetiklendi (Supabase, Bülten Fix).');
         
         const { 
             selectedTaskType, selectedIpRecord, selectedRelatedParties, selectedRelatedParty,
@@ -94,7 +94,7 @@ export class TaskSubmitHandler {
                 }
             }
 
-            // 3. Temel Task Verisi (Supabase Formatında)
+            // 3. Temel Task Verisi
             let taskData = {
                 task_type: String(selectedTaskType.id),
                 title: taskTitle,
@@ -130,10 +130,9 @@ export class TaskSubmitHandler {
                 taskData.operational_due_date = new Date(manualDueDate).toISOString();
             }
 
-            // 6. 🔥 KESİN TARAF (OWNER) ATAMASI (Güçlendirildi)
+            // 6. Kesin Taraf Ataması
             this._enrichTaskWithParties(taskData, selectedTaskType, selectedRelatedParties, selectedRelatedParty, selectedIpRecord);
 
-            // Başvuru işlemiyse taskOwner'ı ekstradan formdan alarak doldur
             if (selectedTaskType.alias === 'Başvuru' && selectedTaskType.ipType === 'trademark') {
                 if (selectedApplicants && selectedApplicants.length > 0) {
                     taskData.task_owner = selectedApplicants.map(p => String(p.id));
@@ -142,8 +141,15 @@ export class TaskSubmitHandler {
                 }
             }
             
-            // 7. Bülten - Kayıt Oluşturma Bağlantısı
-            if (selectedIpRecord && (selectedIpRecord.source === 'bulletin' || selectedIpRecord._source === 'bulletin' || !selectedIpRecord.record_owner_type)) {
+            // 7. 🔥 BÜLTEN - KAYIT OLUŞTURMA BAĞLANTISI (HATA BURADA ÇÖZÜLDÜ)
+            // Sadece bülten aramasından yeni gelmiş ham verilerde (_source = bulletin) 
+            // ve portföyde zaten kayıtlı olmayan (portfolio_status'ü boş olan) verilerde çalışır.
+            const isRawBulletinRecord = selectedIpRecord && 
+                                        (selectedIpRecord.source === 'bulletin' || selectedIpRecord._source === 'bulletin') &&
+                                        !selectedIpRecord.portfolio_status &&
+                                        !selectedIpRecord.portfoyStatus;
+
+            if (isRawBulletinRecord) {
                 const newRealRecordId = await this._createRecordFromBulletin(selectedIpRecord);
                 if (newRealRecordId) {
                     taskData.related_ip_record_id = newRealRecordId;
@@ -160,10 +166,10 @@ export class TaskSubmitHandler {
                 taskData.related_ip_record_id = newRecordId;
             }
 
-            // Tarih Hesaplamaları (Otomasyon)
+            // Tarih Hesaplamaları
             await this._calculateTaskDates(taskData, selectedTaskType, selectedIpRecord);
 
-            // 9. Dosya (Doküman) Yükleme İşlemleri
+            // 9. Dosya Yükleme İşlemleri
             if (uploadedFiles && uploadedFiles.length > 0) {
                 const docs = [];
                 for (const fileObj of uploadedFiles) {
@@ -202,7 +208,7 @@ export class TaskSubmitHandler {
             const taskResult = await taskService.addTask(taskData);
             if (!taskResult.success) throw new Error(taskResult.error);
 
-            // 11. Dava (Suit) ve Transaction (Geçmiş Logu) İşlemleri
+            // 11. Dava (Suit) ve Transaction İşlemleri
             if (selectedTaskType.ipType === 'suit' || String(selectedTaskType.id) === '49') {
                 await this._handleSuitCreation(state, taskData, taskResult.data.id);
             }
@@ -238,7 +244,9 @@ export class TaskSubmitHandler {
         try {
             const { data } = supabase.storage.from('brand_images').getPublicUrl(path);
             return data ? data.publicUrl : path;
-        } catch (e) { return path; }
+        } catch (e) {
+            return path;
+        }
     }
 
     async _createRecordFromBulletin(bulletinRecord) {
@@ -273,7 +281,10 @@ export class TaskSubmitHandler {
             const result = await ipRecordsService.createRecordFromDataEntry(newRecordData);
             if (result.success) return result.id;
             throw new Error(result.error);
-        } catch (error) { throw error; }
+        } catch (error) {
+            console.error("❌ _createRecordFromBulletin Hatası:", error);
+            throw error; 
+        }
     }
 
     async _handleAccrualLogic(taskId, taskTitle, taskType, state, accrualData, isFree) {
@@ -308,7 +319,7 @@ export class TaskSubmitHandler {
 
             const accrualResult = await accrualService.addAccrual(finalAccrual);
             if (!accrualResult.success) {
-                showNotification('İş oluşturuldu ancak tahakkuk kaydedilemedi.', 'error');
+                showNotification('İş oluşturuldu ancak tahakkuk kaydedilemedi: ' + accrualResult.error, 'error');
             }
             return; 
         }
@@ -343,13 +354,14 @@ export class TaskSubmitHandler {
         const accrualTaskData = {
             task_type: "53",
             title: `Tahakkuk Oluşturma: ${taskTitle}`,
-            description: `"${taskTitle}" işi için finansal kayıt oluşturulması gerekiyor.`,
+            description: `"${taskTitle}" işi oluşturuldu ancak tahakkuk girilmedi. Lütfen finansal kaydı oluşturun.`,
             priority: 'high',
             status: 'pending',
             assigned_to_uid: assignedUid,
             assigned_to_email: assignedEmail,
             related_ip_record_id: state.selectedIpRecord ? state.selectedIpRecord.id : null,
             related_ip_record_title: state.selectedIpRecord ? (state.selectedIpRecord.title || state.selectedIpRecord.brand_name || state.selectedIpRecord.markName) : taskTitle,
+            
             iprecord_application_no: accAppNo,
             iprecord_title: accTitle,
             iprecord_applicant_name: accAppName
@@ -379,6 +391,12 @@ export class TaskSubmitHandler {
                 taskData.official_due_date = official.toISOString();
                 taskData.operational_due_date = operational.toISOString();
                 taskData.due_date = operational.toISOString();
+                
+                const dateStr = baseDate.toLocaleDateString('tr-TR');
+                if (taskData.description && !taskData.description.includes('Yenileme tarihi:')) {
+                    const separator = taskData.description.endsWith('.') ? ' ' : '. ';
+                    taskData.description += `${separator}Yenileme tarihi: ${dateStr}.`;
+                }
             }
             const isOpposition = ['20', 'trademark_publication_objection'].includes(String(taskType.id));
             if (isOpposition && ipRecord && ipRecord.source === 'bulletin' && ipRecord.bulletinId) {
@@ -397,51 +415,26 @@ export class TaskSubmitHandler {
                     taskData.official_due_date = adjustedOfficial.toISOString();
                     taskData.operational_due_date = operationalDate.toISOString();
                     taskData.bulletin_no = bulletinData.bulletinNo;
-                    taskData.bulletin_date = bulletinData.bulletinDate;
                 }
             }
         } catch (e) { }
     }
 
-    // 🔥 GÜÇLENDİRİLMİŞ TARAF (OWNER) ATAMA MERKEZİ
     _enrichTaskWithParties(taskData, taskType, relatedParties, singleParty, ipRecord) {
         const tIdStr = String(taskType.id);
 
-        // 1. Formdan özel olarak bir "İlgili Taraf" seçilmişse onu kullan
-        if (relatedParties && relatedParties.length > 0) {
-            taskData.task_owner = relatedParties.map(p => String(p.id)).filter(Boolean);
-            taskData.related_party_id = String(relatedParties[0].id);
-            taskData.related_party_name = relatedParties[0].name;
+        if (RELATED_PARTY_REQUIRED.has(tIdStr)) {
+            if (relatedParties && relatedParties.length) {
+                taskData.related_party_id = relatedParties[0].id;
+                taskData.related_party_name = relatedParties[0].name;
+            }
         } 
-        else if (singleParty) {
-            taskData.task_owner = [String(singleParty.id)];
-            taskData.related_party_id = String(singleParty.id);
-            taskData.related_party_name = singleParty.name;
-        }
-        // 2. Formdan seçilmemişse, BAĞLI OLDUĞU IP RECORD'UN (Markanın) Sahibini kopyala
-        else if (ipRecord) {
-            let primaryApplicant = null;
-            
-            if (Array.isArray(ipRecord.applicants) && ipRecord.applicants.length > 0) {
-                primaryApplicant = ipRecord.applicants[0];
-                taskData.task_owner = ipRecord.applicants.map(a => String(a.id || a)).filter(Boolean);
-            } else if (ipRecord.client) {
-                primaryApplicant = ipRecord.client;
-                taskData.task_owner = [String(ipRecord.client.id || ipRecord.client)];
-            }
 
-            if (primaryApplicant) {
-                taskData.related_party_id = String(primaryApplicant.id || primaryApplicant);
-                taskData.related_party_name = primaryApplicant.name || primaryApplicant.applicantName || "Bilinmeyen Taraf";
-            }
-        }
-
-        // 3. İtiraz işlemleri için Opponent (Karşı Taraf) ataması
         const objectionIds = ['7', '19', '20'];
         if (objectionIds.includes(tIdStr)) {
             const opponent = (relatedParties && relatedParties.length) ? relatedParties[0] : singleParty;
             if (opponent) {
-                taskData.opponent_id = String(opponent.id);
+                taskData.opponent_id = opponent.id;
                 taskData.opponent_name = opponent.name;
             }
         }
@@ -455,7 +448,9 @@ export class TaskSubmitHandler {
             const fileObj = uploadedFiles[0];
             const file = fileObj.file || fileObj;
             const path = `brand-images/${Date.now()}_${file.name}`;
-            try { brandImageUrl = await this.dataManager.uploadFileToStorage(file, path); } catch (e) { }
+            try {
+                brandImageUrl = await this.dataManager.uploadFileToStorage(file, path);
+            } catch (e) { }
         }
 
         const brandType = document.getElementById('brandType')?.value || '';
@@ -464,7 +459,9 @@ export class TaskSubmitHandler {
         const nonLatin = document.getElementById('nonLatinAlphabet')?.value || '';
         
         let cleanBrandName = visualDescription;
-        if (!cleanBrandName && taskData.title) cleanBrandName = taskData.title.replace(/ Marka Başvurusu$/i, '').trim();
+        if (!cleanBrandName && taskData.title) {
+                cleanBrandName = taskData.title.replace(/ Marka Başvurusu$/i, '').trim();
+        }
 
         let origin = document.getElementById('originSelect')?.value || 'TÜRKPATENT';
         let originCountry = 'TR'; 
@@ -491,7 +488,9 @@ export class TaskSubmitHandler {
                             const lines = rawText.split(/[\n]/).map(l => l.trim()).filter(Boolean);
                             lines.forEach(line => {
                                 const cleanLine = line.replace(/^\)+|\)+$/g, '').trim(); 
-                                if (cleanLine && !classObj.items.includes(cleanLine)) classObj.items.push(cleanLine);
+                                if (cleanLine && !classObj.items.includes(cleanLine)) {
+                                    classObj.items.push(cleanLine);
+                                }
                             });
                         }
                     }
@@ -522,6 +521,7 @@ export class TaskSubmitHandler {
             origin: origin,
             countryCode: originCountry,
             createdFrom: 'task_creation',
+            
             applicants: applicantsData,
             goodsAndServicesByClass: goodsAndServicesByClass,
             priorities: priorities || []
@@ -563,6 +563,7 @@ export class TaskSubmitHandler {
                 defendant: document.getElementById('clientRole')?.value === 'davali' ? client?.name : document.getElementById('opposingParty')?.value,
                 subject: suitTitle,
                 status: 'continue',
+                
                 title: suitTitle,
                 transaction_type_id: selectedTaskType.id,
                 suit_type: selectedTaskType.alias || selectedTaskType.name,
@@ -583,13 +584,16 @@ export class TaskSubmitHandler {
             
             await this._addTransactionToPortfolio(newSuit.id, selectedTaskType, taskId, state, taskData.documents);
 
-        } catch (error) { console.error('Suit oluşturma hatası:', error); }
+        } catch (error) { 
+            console.error('Suit oluşturma hatası:', error); 
+        }
     }
 
     async _addTransactionToPortfolio(recordId, taskType, taskId, state, taskDocuments = []) {
         let hierarchy = 'parent';
         let parentId = null;
         const tId = String(taskType.id);
+        
         const needsParent = ['8', '21', '37'].includes(tId);
 
         if (needsParent && this.selectedParentTransactionId) {
@@ -627,8 +631,11 @@ export class TaskSubmitHandler {
                     document_designation: 'Görev Evrakı',
                     uploaded_at: new Date().toISOString()
                 }));
+                
                 await supabase.from('transaction_documents').insert(docInserts);
             }
-        } catch (error) { console.error(`Transaction ekleme hatası:`, error); }
+        } catch (error) {
+            console.error(`Transaction ekleme hatası:`, error);
+        }
     }
 }
