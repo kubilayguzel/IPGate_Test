@@ -386,7 +386,7 @@ serve(async (req) => {
                         permanentRecords.push({
                             bulletin_id: selectedBulletinId, bulletin_no: bulletinNo, monitored_trademark_id: mark.id,
                             similar_mark_name: hit.mark_name, similar_application_no: hit.application_no,
-                            similarity_score: finalScore, positional_exact_match_score: positionalExactMatchScore,
+                            application_date: hit.application_date || null, similarity_score: finalScore, positional_exact_match_score: positionalExactMatchScore,
                             is_earlier: false, matched_term: searchItem.term, source: 'new',
                             holders: holdersTextStr, nice_classes: hit.nice_classes || '', image_path: hit.image_path || '',is_similar: false
                         });
