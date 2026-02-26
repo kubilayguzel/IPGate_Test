@@ -11,7 +11,7 @@ export class PersonModalManager {
         this.isEdit = false;
         this.currentPersonId = null;
         this.documents = []; 
-        this.docsToDelete = []; // 🔥 YENİ: Silinecek Storage Evrakları
+        this.docsToDelete = []; 
         this.relatedDraft = [];
         this.relatedLoaded = [];
         this.relatedToDelete = [];
@@ -410,10 +410,8 @@ export class PersonModalManager {
                 savedId = res.data.id;
             }
 
-            // İlgili kişileri kaydet
             await this.saveRelatedToDb(savedId);
 
-            // 🔥 YENİ: Veritabanı başarıyla güncellendiyse silinecek evrakları Storage'dan kalıcı sil
             if (this.docsToDelete && this.docsToDelete.length > 0) {
                 for (const delUrl of this.docsToDelete) {
                     await this.dataManager.deleteDocument(delUrl);
@@ -464,6 +462,7 @@ export class PersonModalManager {
         this.resetRelatedForm();
     }
 
+    // 🔥 GÜNCELLEME BURADA: Liste doğrudan DOM elementleriyle çiziliyor
     renderRelatedList() {
         const container = document.getElementById('relatedListContainer');
         container.innerHTML = '';
@@ -476,22 +475,36 @@ export class PersonModalManager {
 
         all.forEach((r, idx) => {
             const isLoaded = !!r.id;
-            const item = `
-                <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-center p-2" 
-                     style="cursor: pointer;" 
-                     onclick="window.personModalManager.editRelated(${idx}, ${isLoaded === true})">
-                    <div style="flex-grow: 1;">
-                        <strong class="d-block text-dark">${r.name}</strong>
-                        <small class="text-muted">${r.email || ''} ${r.phone || ''}</small>
-                    </div>
-                    <div>
-                        <button type="button" class="btn btn-sm btn-outline-danger border-0" 
-                                onclick="event.stopPropagation(); window.personModalManager.removeRelated(${idx}, ${isLoaded})">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </div>
-                </div>`;
-            container.insertAdjacentHTML('beforeend', item);
+
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'list-group-item list-group-item-action d-flex justify-content-between align-items-center p-2';
+            itemDiv.style.cursor = 'pointer';
+
+            itemDiv.innerHTML = `
+                <div style="flex-grow: 1;">
+                    <strong class="d-block text-dark">${r.name}</strong>
+                    <small class="text-muted">${r.email || ''} ${r.phone || ''}</small>
+                </div>
+                <div>
+                    <button type="button" class="btn btn-sm btn-outline-danger border-0 remove-related-btn">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            `;
+
+            // Satıra tıklanınca doğru context üzerinden çağır
+            itemDiv.addEventListener('click', () => {
+                this.editRelated(idx, isLoaded);
+            });
+
+            // Sadece çöp kutusuna basıldığında
+            const removeBtn = itemDiv.querySelector('.remove-related-btn');
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation(); // Satırın tıklanmasını engelle
+                this.removeRelated(idx, isLoaded);
+            });
+
+            container.appendChild(itemDiv);
         });
     }
 
@@ -655,36 +668,50 @@ export class PersonModalManager {
         document.getElementById('docFileNameDisplay').innerText = 'PDF Sürükle veya Tıkla';    
     }
 
+    // 🔥 GÜNCELLEME BURADA: Liste doğrudan DOM elementleriyle çiziliyor
     renderDocuments() {
         const cont = document.getElementById('docListContainer');
-        cont.innerHTML = this.documents.length === 0 ? '<div class="p-4 text-center text-muted small">Henüz evrak eklenmedi.</div>' : '';
+        cont.innerHTML = '';
+        
+        if (this.documents.length === 0) {
+            cont.innerHTML = '<div class="p-4 text-center text-muted small">Henüz evrak eklenmedi.</div>';
+            return;
+        }
         
         this.documents.forEach((d, i) => {
-            cont.insertAdjacentHTML('beforeend', `
-                <div class="list-group-item d-flex justify-content-between align-items-center p-3 border-bottom">
-                    <div class="d-flex align-items-center">
-                        <i class="fas fa-file-pdf text-danger fa-2x mr-3"></i>
-                        <div>
-                            <div class="font-weight-bold text-dark">${d.type} ${d.proxyParty ? `(${d.proxyParty})` : ''}</div>
-                            <div class="small text-muted">
-                                ${d.fileName} ${d.validityDate ? ` • S.T: ${d.validityDate}` : ''}
-                            </div>
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'list-group-item d-flex justify-content-between align-items-center p-3 border-bottom';
+
+            itemDiv.innerHTML = `
+                <div class="d-flex align-items-center">
+                    <i class="fas fa-file-pdf text-danger fa-2x mr-3"></i>
+                    <div>
+                        <div class="font-weight-bold text-dark">${d.type} ${d.proxyParty ? `(${d.proxyParty})` : ''}</div>
+                        <div class="small text-muted">
+                            ${d.fileName} ${d.validityDate ? ` • S.T: ${d.validityDate}` : ''}
                         </div>
                     </div>
-                    <button type="button" class="btn btn-sm btn-outline-danger border-0 rounded-circle" onclick="event.stopPropagation(); window.personModalManager.removeDocument(${i})">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>`);
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-danger border-0 rounded-circle remove-doc-btn">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+
+            const removeBtn = itemDiv.querySelector('.remove-doc-btn');
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.removeDocument(i);
+            });
+
+            cont.appendChild(itemDiv);
         });
     }
 
-    // 🔥 YENİ: Silme işlemi onaylı ve Storage silinecekler listesiyle (docsToDelete) donatıldı
     removeDocument(idx) {
         if (!confirm('Bu evrakı listeden kaldırmak istediğinize emin misiniz? (Kayıt işlemiyle kalıcı silinecektir)')) return;
         
         const docToDel = this.documents[idx];
         
-        // Eğer veritabanından gelen eski bir evraksa URL'sini silinecekler listesine al
         if (!docToDel.isNew && docToDel.url) {
             this.docsToDelete.push(docToDel.url);
         }
@@ -772,8 +799,6 @@ export class PersonModalManager {
             }
         }
 
-        // 🔥 YENİ: Arayüzdeki Array'i ana veriden bağımsız (Deep Copy) yapıyoruz
-        // Bu sayede evrak silme anında DOM çakışması ve listenin tümden gitmesi engellenir
         this.documents = p.documents ? [...p.documents] : [];
         this.renderDocuments();
 
@@ -787,7 +812,7 @@ export class PersonModalManager {
         if (form) form.reset();
         
         this.documents = [];
-        this.docsToDelete = []; // 🔥 Sıfırlama
+        this.docsToDelete = []; 
         this.relatedDraft = [];
         this.relatedLoaded = [];
         this.relatedToDelete = [];
