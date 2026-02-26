@@ -122,6 +122,7 @@ async function fetchResults(jobId, onProgress) {
                 monitoredTrademarkId: item.monitored_trademark_id,
                 markName: item.similar_mark_name || item.mark_name, // Kalıcı veya Geçici tablodan gelmesine göre
                 applicationNo: item.similar_application_no || item.application_no,
+                applicationDate: item.application_date,
                 niceClasses: item.nice_classes,
                 similarityScore: item.similarity_score,
                 holders: item.holders,
