@@ -1,16 +1,14 @@
 // public/js/indexing/portfolio-update-manager.js
 
 import { supabase, ipRecordsService } from '../../supabase-config.js';
-import { showNotification, debounce, STATUSES } from '../../utils.js';
-import { getSelectedNiceClasses, setSelectedNiceClasses, initializeNiceClassification } from '../nice-classification.js';
+import { showNotification, STATUSES } from '../../utils.js';
+import { getSelectedNiceClasses, setSelectedNiceClasses } from '../nice-classification.js';
 
 export class PortfolioUpdateManager {
     constructor() {
         this.state = {
             selectedRecordId: null,
             recordData: null,
-            // Ana işlem seçimine göre (örn: 6, 17) alt işlem 40 seçildiğinde de
-            // tescil/nice düzenleme formunu açabilmek için işlem geçmişini tutuyoruz.
             currentTransactions: [],
             niceClasses: [],
             goodsAndServicesMap: {},
@@ -19,8 +17,6 @@ export class PortfolioUpdateManager {
 
         this.elements = this.cacheElements();
         this.init();
-
-        // PDF'den otomatik alan doldurma (tek seferlik tekrar kontrolü)
         this._lastAutofillKey = null;
     }
 
@@ -32,555 +28,223 @@ export class PortfolioUpdateManager {
             selectedDisplay: $('selectedRecordDisplay'),
             childTransactionType: $('detectedType') || $('childTransactionType'),
             parentTransactionSelect: $('parentTransactionSelect'),
-
             detailsContainer: $('record-details-wrapper'),
             registryEditorSection: $('registry-editor-section'),
-
-            registryStatus: $('registry-status'),
-            appDate: $('registry-application-date'),
-            regNo: $('registry-registration-no'),
-            regDate: $('registry-registration-date'),
-            renewalDate: $('registry-renewal-date'),
-
-            btnSaveAll: $('btn-save-all'),
-            bulletinList: $('bulletin-list'),
-            btnAddBulletin: $('btn-add-bulletin'),
-            bulletinNoInput: $('bulletin-no-input'),
-            bulletinDateInput: $('bulletin-date-input'),
-
-            niceChips: $('nice-classes-chips'),
-            niceAccordion: $('nice-classes-accordion'),
-            btnNiceAddModal: $('btn-add-nice-modal'),
-            niceClassModal: $('nice-class-modal'),
-            niceModalAvailableClasses: $('available-nice-classes')
+            regNoInput: $('registry-registration-no'),
+            regDateInput: $('registry-registration-date'),
+            statusSelect: $('registry-status'),
+            saveBtn: $('save-portfolio-btn')
         };
     }
 
     init() {
+        if (!this.elements.detailsContainer) return;
         this.setupEventListeners();
-        this.renderInitialState();
-
-        // Nice modülünü indeksleme sayfası için aktif hale getir
-        initializeNiceClassification();
-
-        document.addEventListener('record-selected', (e) => {
-            if (e.detail && e.detail.recordId) {
-                this.selectRecord(e.detail.recordId);
-            }
-        });
-
-        // Diğer modüllerden (örn. document-review-manager) alan doldurma istekleri gelebilir.
-        window.applyRegistryAutofill = (payload) => {
-            try { this.applyRegistryAutofill(payload); } catch (e) { /* no-op */ }
-        };
+        this.populateStatusDropdown();
     }
 
-    renderInitialState() {
-        if (this.elements.detailsContainer) this.elements.detailsContainer.style.display = 'none';
-        if (this.elements.registryEditorSection) this.elements.registryEditorSection.style.display = 'none';
+    populateStatusDropdown() {
+        const select = this.elements.statusSelect;
+        if (!select) return;
+        select.innerHTML = '<option value="">-- Durum Seçin --</option>';
+        const statuses = STATUSES.trademark || [];
+        statuses.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s.value; opt.textContent = s.text;
+            select.appendChild(opt);
+        });
     }
 
     setupEventListeners() {
-        // --- 1. Arama ve Seçim Dinleyicileri ---
-        if (this.elements.searchInput) {
-            this.elements.searchInput.addEventListener('input', debounce((e) => this.handleSearch(e.target.value), 300));
-        }
-
-        if (this.elements.searchResults) {
-            this.elements.searchResults.addEventListener('click', (e) => {
-                const item = e.target.closest('.search-result-item');
-                if (item) this.selectRecord(item.dataset.id);
-            });
-        }
-
-        if (this.elements.selectedDisplay) {
-            this.elements.selectedDisplay.addEventListener('click', (e) => {
-                if (e.target.closest('.remove-selected-item-btn')) this.clearSelection();
-            });
-        }
-
-        // --- 2. İşlem Tipi Değişim Dinleyicisi (Tescil Belgesi Kontrolü) ---
-        if (this.elements.childTransactionType) {
-            this.elements.childTransactionType.addEventListener('change', () => {
-                this.handleTransactionTypeChange();
-            });
-        }
-
-        // Ana işlem değiştiğinde de (özellikle alt işlem 40 seçiliyken)
-        // formun görünürlüğünü tekrar hesapla.
-        if (this.elements.parentTransactionSelect) {
-            this.elements.parentTransactionSelect.addEventListener('change', () => {
-                this.handleTransactionTypeChange();
-            });
-        }
-
-        // --- 3. Buton Dinleyicileri ---
-        // Merkezi Nice modalını açar
-        if (this.elements.btnNiceAddModal) {
-            this.elements.btnNiceAddModal.addEventListener('click', () => this.openNiceModal());
-        }
-
-        // Kaydetme butonunu tetikler
-        if (this.elements.btnSaveAll) {
-            this.elements.btnSaveAll.addEventListener('click', () => this.saveAllChanges());
-        }
-
-        // Bülten ekleme butonu
-        if (this.elements.btnAddBulletin) {
-            this.elements.btnAddBulletin.addEventListener('click', () => this.addBulletin());
-        }
-
-        // --- 4. Global Silme Dinleyicileri ---
-        document.addEventListener('click', (e) => {
-            // Bülten silme
-            if (e.target.matches('.delete-bulletin-btn')) {
-                this.removeBulletin(e.target.dataset.index);
-            }
-
-            // Sınıf silme (Merkezi yapıya yönlendirilir)
-            if (e.target.matches('[data-remove-class]') || e.target.closest('[data-remove-class]')) {
-                const btn = e.target.closest('[data-remove-class]');
-                this.removeNiceClass(btn.getAttribute('data-remove-class'));
+        // DocumentReviewManager veya BulkUploadManager'dan gelen seçimi dinle
+        document.addEventListener('record-selected', (e) => {
+            if (e.detail && e.detail.recordId) {
+                this.handleExternalRecordSelection(e.detail.recordId);
             }
         });
 
-        // NOT: Eski "ACCORDION DÜZELTMESİ" bloğu tamamen kaldırıldı.
-        // Çünkü bu işlemler artık merkezi nice-classification.js içinde yapılıyor.
-    }
-
-    handleTransactionTypeChange() {
-        if (!this.elements.childTransactionType || !this.elements.registryEditorSection) return;
-
-        const selectedOption =
-            this.elements.childTransactionType.options[this.elements.childTransactionType.selectedIndex];
-        const typeId = String(this.elements.childTransactionType.value || '');
-        const typeText = selectedOption ? String(selectedOption.text || '').toLowerCase() : '';
-
-        // Parent işlem tipini bul
-        // NOT: parent select'in value'su "transactionId" olduğu için state.currentTransactions'tan çözümlüyoruz
-        let parentTypeId = '';
-        const parentTxId = this.elements.parentTransactionSelect
-            ? String(this.elements.parentTransactionSelect.value || '')
-            : '';
-
-        if (parentTxId && Array.isArray(this.state.currentTransactions)) {
-            const parentTx = this.state.currentTransactions.find((t) => String(t.id) === parentTxId);
-            if (parentTx) parentTypeId = String(parentTx.type || '');
+        if (this.elements.saveBtn) {
+            this.elements.saveBtn.addEventListener('click', () => this.handleSave());
         }
 
-        // A) Alt işlem 45 (Tescil Belgesi)
-        // B) Alt işlem metninde "tescil belgesi" geçiyorsa
-        // C) Alt işlem 40 (Kabul) ve ana işlem tipi 6 veya 17 ise
-        const isRegistry =
-            typeId === '45' ||
-            typeText.includes('tescil belgesi') ||
-            (typeId === '40' && (parentTypeId === '6' || parentTypeId === '17'));
-
-        if (isRegistry) {
-            this.elements.registryEditorSection.style.display = 'block';
-
-            // Marka durumu default olarak "Tescilli" gelsin.
-            this.ensureDefaultRegisteredStatus();
-
-            // Tescil belgesi PDF'i varsa otomatik tescil no/tarih doldurmayı dene.
-            // (Sadece alanlar boşsa ve aynı PDF için tekrar tekrar çalışmasın.)
-            this.tryAutofillRegistryFromCurrentPdf();
-
-            const r = this.state.recordData;
-            if (r && r.goodsAndServicesByClass) {
-                const formatted = r.goodsAndServicesByClass.map(
-                    (g) => `(${g.classNo}-1) ${g.items ? g.items.join('\n') : ''}`
-                );
-
-                // UI'ın (DOM) hazır olduğundan emin olmak için kısa bir gecikme
-                setTimeout(() => {
-                    setSelectedNiceClasses(formatted);
-                }, 100);
-            }
-        } else {
-            this.elements.registryEditorSection.style.display = 'none';
+        if (this.elements.childTransactionType) {
+            this.elements.childTransactionType.addEventListener('change', () => this.checkVisibility());
         }
     }
 
-    ensureDefaultRegisteredStatus() {
-        const select = this.elements.registryStatus;
-        if (!select) return;
-
-        // Henüz populate edilmediyse veya boşsa, kayıtlı varsayılanı seç.
-        const current = String(select.value || '').trim();
-        if (current) return;
-
-        // trademark statü listesinde "registered" = "Tescilli"
-        const opt = Array.from(select.options || []).find(o => String(o.value) === 'registered');
-        if (opt) select.value = 'registered';
-    }
-
-    applyRegistryAutofill({ registrationNumber, registrationDate, status, force = false } = {}) {
-        if (!this.elements.registryEditorSection) return;
-        // Form kapalıyken de çağrılabilir; sadece alanlar varsa doldur.
-        if (this.elements.regNo && (force || !String(this.elements.regNo.value || '').trim())) {
-            if (registrationNumber) this.elements.regNo.value = registrationNumber;
-        }
-        if (this.elements.regDate && (force || !String(this.elements.regDate.value || '').trim())) {
-            if (registrationDate) this.elements.regDate.value = registrationDate;
-        }
-        if (this.elements.registryStatus) {
-            const current = String(this.elements.registryStatus.value || '').trim();
-            if (force || !current) {
-                if (status) this.elements.registryStatus.value = status;
-                else this.ensureDefaultRegisteredStatus();
-            }
-        }
-    }
-
-    async tryAutofillRegistryFromCurrentPdf() {
-        // Bu ekran sadece indeksleme-detail'de kullanılıyor; PDF URL'i document-review-manager tarafından set edilir.
-        const pdfInfo = window.__CURRENT_INDEXING_PDF__;
-        const pdfUrl = pdfInfo && pdfInfo.url ? String(pdfInfo.url) : '';
-        if (!pdfUrl) return;
-
-        // Alanlar doluysa tekrar deneme.
-        const regNoFilled = this.elements.regNo && String(this.elements.regNo.value || '').trim();
-        const regDateFilled = this.elements.regDate && String(this.elements.regDate.value || '').trim();
-        if (regNoFilled && regDateFilled) return;
-
-        // Aynı PDF için gereksiz tekrar çalışmayı önle.
-        const key = `${pdfUrl}::${regNoFilled ? 'n' : ''}${regDateFilled ? 'd' : ''}`;
-        if (this._lastAutofillKey === key) return;
-        this._lastAutofillKey = key;
-
+    async handleExternalRecordSelection(recordId) {
+        if (!recordId) return;
         try {
-            const extracted = await this.extractRegistryFieldsFromPdfUrl(pdfUrl);
-            if (!extracted) return;
-
-            const payload = {
-                registrationNumber: extracted.registrationNumber,
-                registrationDate: extracted.registrationDate,
-                status: 'registered',
-                force: false,
-            };
-
-            this.applyRegistryAutofill(payload);
-
-            if (payload.registrationNumber || payload.registrationDate) {
-                showNotification('✅ Tescil bilgileri PDF içeriğinden otomatik dolduruldu.', 'success');
+            // 🔥 DÜZELTME: Portföyden kaydın "Sınıflar (Classes)" dahil en detaylı halini çekiyoruz
+            const result = await ipRecordsService.getRecordById(recordId);
+            if (result.success && result.data) {
+                this.selectRecord(result.data);
             }
         } catch (e) {
-            console.warn('PDF üzerinden tescil alanları okunamadı:', e);
+            console.error('Kayıt detayları alınamadı:', e);
         }
     }
 
-    async extractRegistryFieldsFromPdfUrl(pdfUrl) {
-        const pdfjsLib = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.mjs');
+    async selectRecord(record) {
+        if (!record) return;
 
-        const res = await fetch(pdfUrl);
-        if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
-        const data = await res.arrayBuffer();
+        this.state.selectedRecordId = record.id;
+        this.state.recordData = record;
 
-        const loadingTask = pdfjsLib.getDocument({ data, disableWorker: true });
-        const pdf = await loadingTask.promise;
+        // Tescil bilgilerini inputlara bas
+        const regNoEl = this.elements.regNoInput;
+        const regDateEl = this.elements.regDateInput;
+        const statusEl = this.elements.statusSelect;
 
-        let fullText = '';
-        for (let p = 1; p <= pdf.numPages; p++) {
-            const page = await pdf.getPage(p);
-            const content = await page.getTextContent();
-            const pageText = (content.items || []).map(it => it.str || '').join(' ');
-            fullText += `\n${pageText}`;
-        }
-
-        const normalized = fullText
-            .replace(/\s+/g, ' ')
-            .replace(/\u00A0/g, ' ')
-            .trim();
-
-        // 1) Tescil tarihi Regex (Güncellendi: [./] ile esneklik sağlandı)
-        const dateMatches = Array.from(
-            normalized.matchAll(/(\d{1,2})[\.\/](\d{1,2})[\.\/](\d{4})\s*tarihinde\s*tescil\s*edil(?:mi(?:ş|s)tir)?/gi)
-        );
-
-        let registrationDate = null;
-        if (dateMatches.length > 0) {
-            const lastMatch = dateMatches[dateMatches.length - 1];
-            // Tarihi YYYY-MM-DD formatına çevir (HTML date input için)
-            const d = lastMatch[1].padStart(2, '0');
-            const m = lastMatch[2].padStart(2, '0');
-            const y = lastMatch[3];
-            registrationDate = `${y}-${m}-${d}`;
-        }
-
-        // 2) Tescil numarası Regex (Aynı kalabilir, gayet iyi)
-        let registrationNumber = null;
-        const noMatch = normalized.match(/\bNo\s*:\s*(\d{4})\s*(\d{1,10})\b/i);
-
-        if (noMatch) {
-            registrationNumber = `${noMatch[1]} ${noMatch[2]}`;
-        } else {
-            const slashMatch = normalized.match(/\b(\d{4})\s*\/\s*(\d{1,10})\b/);
-            if (slashMatch) registrationNumber = `${slashMatch[1]} ${slashMatch[2]}`;
-        }
-
-        if (!registrationDate && !registrationNumber) return null;
-        return { registrationDate, registrationNumber };
-    }
-
-    initDatePickers() {
-        if (typeof flatpickr !== 'undefined') {
-            flatpickr(".datepicker", {
-                dateFormat: "Y-m-d",
-                altInput: true,
-                altFormat: "d.m.Y",
-                locale: "tr",
-                allowInput: true
-            });
-        }
-    }
-
-    async selectRecord(id) {
-        if (this.elements.searchInput) this.elements.searchInput.value = '';
-        if (this.elements.searchResults) this.elements.searchResults.style.display = 'none';
-
-        try {
-            const result = await ipRecordsService.getRecordById(id);
-            if (!result.success) throw new Error(result.error);
-
-            const data = result.data;
-            this.state.recordData = data;
-            this.state.selectedRecordId = id;
-            this.state.bulletins = data.bulletins || [];
-
-            // Ana işlem tipini kontrol edebilmek için işlem geçmişini de çek
-            try {
-                const txResult = await ipRecordsService.getRecordTransactions(id);
-                this.state.currentTransactions = txResult.success ? (txResult.data || []) : [];
-            } catch (e) {
-                console.warn('İşlem geçmişi yüklenemedi (registry form kontrolü için):', e);
-                this.state.currentTransactions = [];
+        if (regNoEl) regNoEl.value = record.registrationNumber || record.registrationNo || '';
+        if (regDateEl) {
+            regDateEl.value = record.registrationDate || '';
+            if (regDateEl._flatpickr && record.registrationDate) {
+                regDateEl._flatpickr.setDate(record.registrationDate, false);
             }
-
-            this.parseNiceClassesFromData(data);
-
-            if (this.elements.selectedDisplay) this.renderSelectedRecordUI();
-
-            // Verileri doldur
-            this.populateFormFields();
-
-            if (this.elements.detailsContainer) this.elements.detailsContainer.style.display = 'block';
-
-            // Eğer işlem tipi zaten seçiliyse formu kontrol et
-            if (this.elements.childTransactionType && this.elements.childTransactionType.value) {
-                this.handleTransactionTypeChange();
-            }
-
-        } catch (error) {
-            console.error('PortfolioManager Kayıt Yükleme Hatası:', error);
-            showNotification('Kayıt verileri yüklenirken hata oluştu', 'error');
         }
-    }
+        if (statusEl) {
+            statusEl.value = record.status || record.portfolio_status || '';
+        }
 
-    populateFormFields() {
-        const r = this.state.recordData;
-        if (!r) return;
+        // Sınıfları (Nice Classes) ve Eşyaları Doldur
+        let loadedClasses = record.niceClasses || [];
+        if (typeof loadedClasses === 'string') {
+            try { loadedClasses = JSON.parse(loadedClasses); } catch(e) { loadedClasses = []; }
+        }
+        
+        let loadedGS = record.goodsAndServicesByClass || [];
+        if (typeof loadedGS === 'string') {
+            try { loadedGS = JSON.parse(loadedGS); } catch(e) { loadedGS = []; }
+        }
 
-        // Standart alanları doldur
-        if (this.elements.registryStatus) this.populateStatusDropdown(r.status);
-        if (this.elements.appDate) this.elements.appDate.value = r.applicationDate || '';
-        if (this.elements.regNo) this.elements.regNo.value = r.registrationNumber || '';
-        if (this.elements.regDate) this.elements.regDate.value = r.registrationDate || '';
-        if (this.elements.renewalDate) this.elements.renewalDate.value = r.renewalDate || '';
-
-        this.renderBulletins();
-
-        // İşlem tipini kontrol ederek Nice editörünü ve diğer alanları tetikle
-        this.handleTransactionTypeChange();
-    }
-
-    populateStatusDropdown(currentStatus) {
-        const select = this.elements.registryStatus;
-        if (!select) return;
-
-        select.innerHTML = '<option value="">Seçiniz...</option>';
-        const statuses = STATUSES.trademark || [];
-
-        // Mevcut statüyü normalize et (küçük harfe çevir)
-        const normalizedCurrent = currentStatus ? currentStatus.toLowerCase() : '';
-
-        let found = false;
-        statuses.forEach(st => {
-            const option = document.createElement('option');
-            option.value = st.value;
-            option.textContent = st.text;
-
-            // Eşleşme kontrolü (küçük harf duyarsız)
-            if (st.value.toLowerCase() === normalizedCurrent) {
-                option.selected = true;
-                found = true;
-            }
-            select.appendChild(option);
+        this.state.niceClasses = loadedClasses;
+        this.state.goodsAndServicesMap = {};
+        
+        loadedGS.forEach(g => {
+            if (g && g.classNo) this.state.goodsAndServicesMap[g.classNo] = g.items || [];
         });
 
-        // Eğer listede yoksa ve bir değer varsa, onu da ekle (ama listedekiyle çakışmadığından emin ol)
-        if (currentStatus && !found) {
-            const option = document.createElement('option');
-            option.value = currentStatus;
-            option.textContent = currentStatus;
-            option.selected = true;
-            select.appendChild(option);
+        this.state.bulletins = record.bulletins || [];
+        this.checkVisibility();
+
+        // Nice Classification Modal'ına (UI) verileri gönder
+        setTimeout(() => {
+            if (typeof setSelectedNiceClasses === 'function') {
+                const formatted = loadedClasses.map(c => {
+                    const items = this.state.goodsAndServicesMap[c] || [];
+                    const itemsStr = items.join('\n');
+                    return `(${c}) ${itemsStr}`;
+                });
+                setSelectedNiceClasses(formatted);
+            }
+        }, 300);
+    }
+
+    checkVisibility() {
+        const childVal = this.elements.childTransactionType ? String(this.elements.childTransactionType.value) : '';
+        const childSelect = this.elements.childTransactionType;
+        const selectedOption = childSelect && childSelect.selectedIndex > -1 ? childSelect.options[childSelect.selectedIndex] : null;
+        const childText = selectedOption ? selectedOption.text.toLowerCase() : '';
+
+        let isVisible = false;
+        
+        // İşlem adı "Tescil Belgesi" içeriyorsa veya tipi 45 ise Tescil formunu göster
+        if (childVal === '45' || childText.includes('tescil belgesi')) {
+            isVisible = true;
+        } else if (childVal === '40') {
+            isVisible = true; 
+        }
+
+        if (this.elements.registryEditorSection) {
+            this.elements.registryEditorSection.style.display = isVisible ? 'block' : 'none';
         }
     }
 
-    parseNiceClassesFromData(data) {
-        const gsList = data.goodsAndServicesByClass || [];
-        this.state.goodsAndServicesMap = gsList.reduce((acc, curr) => {
-            acc[String(curr.classNo)] = (curr.items || []).join('\n');
-            return acc;
-        }, {});
-
-        let nClasses = data.niceClasses || [];
-        if (!nClasses.length && gsList.length > 0) nClasses = gsList.map(item => String(item.classNo));
-        if (!nClasses.length && data.niceClass) nClasses = Array.isArray(data.niceClass) ? data.niceClass.map(String) : [String(data.niceClass)];
-        this.state.niceClasses = nClasses.map(String);
-    }
-
-    // --- Helper Metodlar ---
-
-    async handleSearch(query) { /* ... */ }
-    renderSearchResults(results) { /* ... */ }
-    clearSelection() { /* ... */ }
-    renderSelectedRecordUI() { /* ... */ }
-
-    removeNiceClass(classNo) {
-        // Direkt merkezi temizleme fonksiyonunu çağırıyoruz
-        if (typeof window.clearClassSelection === 'function') {
-            window.clearClassSelection(classNo);
-        }
-    }
-
-    async openNiceModal() {
-        const allNiceClasses = Array.from({length: 45}, (_, i) => String(i + 1));
-        const existing = new Set(this.state.niceClasses);
-        const availableHtml = allNiceClasses.filter(c => !existing.has(c))
-            .map(c => `<button class="list-group-item list-group-item-action add-modal-class" data-class="${c}">
-                        <i class="fas fa-plus-circle text-success mr-2"></i>Nice ${c}
-                       </button>`)
-            .join('');
-
-        if (this.elements.niceModalAvailableClasses) {
-            this.elements.niceModalAvailableClasses.innerHTML = availableHtml || '<div class="p-3 text-center text-muted">Tüm sınıflar ekli.</div>';
+    async handleSave() {
+        if (!this.state.selectedRecordId) {
+            showNotification('Lütfen önce bir kayıt seçin.', 'warning');
+            return;
         }
 
-        this.elements.niceModalAvailableClasses.onclick = (e) => {
-            const btn = e.target.closest('.add-modal-class');
-            if (btn) this.addClassFromModal(btn.dataset.class);
-        };
+        const regNo = this.elements.regNoInput ? this.elements.regNoInput.value.trim() : '';
+        const regDate = this.elements.regDateInput ? this.elements.regDateInput.value : '';
+        const statusVal = this.elements.statusSelect ? this.elements.statusSelect.value : '';
 
-        if (window.$ && window.$.fn.modal) {
-            $(this.elements.niceClassModal).modal('show');
-        } else {
-            this.elements.niceClassModal.style.display = 'block';
-            this.elements.niceClassModal.classList.add('show');
+        let rawNiceClasses = [];
+        if (typeof getSelectedNiceClasses === 'function') {
+            rawNiceClasses = getSelectedNiceClasses() || [];
         }
-    }
 
-    addClassFromModal(cls) {
-        // Merkezi Nice editörüne yeni bir sınıf (boş içerikle) ekle
-        const currentData = getSelectedNiceClasses();
-        const newItem = `(${cls}-1) `;
-        setSelectedNiceClasses([...currentData, newItem]);
+        let niceClasses = [];
+        let goodsAndServicesByClass = [];
 
-        // Modalı kapat
-        if (window.$ && window.$.fn.modal) {
-            $(this.elements.niceClassModal).modal('hide');
-        } else {
-            this.elements.niceClassModal.style.display = 'none';
-            this.elements.niceClassModal.classList.remove('show');
-        }
-    }
-
-    addBulletin() {
-        const no = this.elements.bulletinNoInput.value.trim();
-        const date = this.elements.bulletinDateInput.value;
-        if (!no || !date) { showNotification('Eksik bilgi', 'warning'); return; }
-        this.state.bulletins.push({ bulletinNo: no, bulletinDate: date });
-        this.renderBulletins();
-        this.elements.bulletinNoInput.value = '';
-    }
-
-    removeBulletin(index) {
-        this.state.bulletins.splice(index, 1);
-        this.renderBulletins();
-    }
-
-    renderBulletins() {
-        if (!this.elements.bulletinList) return;
-        this.elements.bulletinList.innerHTML = this.state.bulletins.map((b, i) => `
-            <div class="d-flex justify-content-between border-bottom p-2">
-                <span>No: ${b.bulletinNo} (${b.bulletinDate})</span>
-                <button class="btn btn-sm btn-danger delete-bulletin-btn" data-index="${i}">Sil</button>
-            </div>
-        `).join('');
-    }
-
-    async saveAllChanges() {
-        if (!this.state.selectedRecordId) return;
-
-        try {
-            // 1. Nice Sınıfları ve Emtiaları Hazırla
-            const selectedNiceData = getSelectedNiceClasses();
-            const goodsAndServicesByClass = [];
-            const niceClasses = [];
-
-            selectedNiceData.forEach(str => {
-                const match = str.match(/^\((\d+)(?:-\d+)?\)\s*([\s\S]*)$/);
-                if (match) {
-                    const classNo = Number(match[1]);
-                    const content = match[2];
-
-                    niceClasses.push(String(classNo));
-
-                    const items = content.split('\n')
-                        .map(line => line.trim())
-                        .filter(line => line.length > 0);
-
-                    goodsAndServicesByClass.push({
-                        classNo: classNo,
-                        items: items
+        // Ekranda seçilen/yazılan sınıfları parçala (Regex ile "(35) eşyalar..." ayrıştırılır)
+        rawNiceClasses.forEach(item => {
+            const match = item.match(/^\((\d+)(?:-\d+)?\)\s*([\s\S]*)$/);
+            if (match) {
+                const classNo = parseInt(match[1]);
+                const rawText = match[2].trim();
+                
+                if (!niceClasses.includes(classNo)) niceClasses.push(classNo);
+                
+                let classObj = goodsAndServicesByClass.find(obj => obj.classNo === classNo);
+                if (!classObj) {
+                    classObj = { classNo, items: [] };
+                    goodsAndServicesByClass.push(classObj);
+                }
+                
+                if (rawText) {
+                    const lines = rawText.split(/[\n]/).map(l => l.trim()).filter(Boolean);
+                    lines.forEach(line => {
+                        const cleanLine = line.replace(/^\)+|\)+$/g, '').trim(); 
+                        if (cleanLine && !classObj.items.includes(cleanLine)) {
+                            classObj.items.push(cleanLine);
+                        }
                     });
                 }
-            });
+            }
+        });
 
-            // 2. Güncellenecek Verileri Oluştur
+        // 🔥 Butonu "Yükleniyor" durumuna getir
+        const saveBtn = this.elements.saveBtn;
+        let originalContent = '';
+        if (saveBtn) {
+            originalContent = saveBtn.innerHTML;
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Kaydediliyor...';
+        }
+
+        try {
             const updates = {
-                // --- EKSİK OLAN KISIM EKLENDİ ---
-                status: this.elements.registryStatus ? this.elements.registryStatus.value : null,
-                applicationDate: this.elements.appDate ? this.elements.appDate.value : null,
-                registrationNumber: this.elements.regNo ? this.elements.regNo.value : null,
-                registrationDate: this.elements.regDate ? this.elements.regDate.value : null,
-                renewalDate: this.elements.renewalDate ? this.elements.renewalDate.value : null,
-                // --------------------------------
-                
+                registrationNumber: regNo || null,
+                registrationDate: regDate || null,
+                status: statusVal || null,
                 niceClasses: niceClasses.sort((a, b) => Number(a) - Number(b)),
                 goodsAndServicesByClass: goodsAndServicesByClass.sort((a, b) => a.classNo - b.classNo),
-                
-                // Bültenleri de kaydedelim (state'den)
-                bulletins: this.state.bulletins || [],
-                
-                updatedAt: new Date().toISOString()
+                bulletins: this.state.bulletins || []
             };
 
-            // Boş (null/undefined) alanları temizle (Opsiyonel ama temiz veri için iyidir)
             Object.keys(updates).forEach(key => {
-                if (updates[key] === undefined || updates[key] === null) {
-                    delete updates[key];
-                }
+                if (updates[key] === undefined) delete updates[key];
             });
 
-            const { error } = await supabase.from('ip_records').update({ details: updates, updated_at: new Date().toISOString() }).eq('id', String(this.state.selectedRecordId));
-            if (error) throw error;
-            showNotification('Tüm değişiklikler (Tescil & Nice) başarıyla kaydedildi!', 'success');
+            // 🔥 Supabase ipRecordsService ile tek hamlede SQL UPDATE yapıyoruz
+            // Eşyalar otomatik olarak ip_record_classes tablosuna dağıtılacaktır.
+            const result = await ipRecordsService.updateRecord(this.state.selectedRecordId, updates);
+            
+            if (!result.success) throw new Error(result.error);
+            showNotification('Tescil bilgileri ve eşya listesi başarıyla güncellendi.', 'success');
 
         } catch (error) {
             console.error('Kaydetme hatası:', error);
             showNotification('Kaydetme sırasında hata oluştu: ' + error.message, 'error');
+        } finally {
+            // Butonu eski haline döndür
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = originalContent || '<i class="fas fa-save mr-2"></i>Portföyü Güncelle';
+            }
         }
     }
 }
