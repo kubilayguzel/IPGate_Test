@@ -1,6 +1,7 @@
 // public/js/task-management/my-tasks.js
 
-import { authService, taskService, ipRecordsService, personService, transactionTypeService, supabase } from '../../supabase-config.js';
+// 🔥 Firebase importları tamamen kaldırıldı, Supabase ve servislerimiz eklendi
+import { authService, taskService, ipRecordsService, accrualService, personService, transactionTypeService, supabase } from '../../supabase-config.js';
 import { showNotification, TASK_STATUS_MAP, formatToTRDate } from '../../utils.js';
 import { loadSharedLayout } from '../layout-loader.js';
 import Pagination from '../pagination.js'; 
@@ -31,7 +32,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.currentTaskForAccrual = null;
 
             this.taskDetailManager = null;
-            
             this.accrualFormManager = null; 
             this.completeTaskFormManager = null; 
             this.statusDisplayMap = TASK_STATUS_MAP;
@@ -46,8 +46,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             this.initializePagination();
 
-            // Supabase Auth Dinleyicisi
-            authService.isSupabaseAvailable = true; // Flag varsa diye
             const user = authService.getCurrentUser();
             if (user) {
                 this.currentUser = user;
@@ -93,7 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if(loader) loader.style.display = 'none';
 
             try {
-                // Supabase Service üzerinden çekiyoruz
+                // Sadece görevleri çek (_enrichTasksWithRelations içinde ilişkiler zaten haritalanıyor)
                 const tasksResult = await taskService.getTasksForUser(this.currentUser.uid);
                 this.allTasks = tasksResult.success ? tasksResult.data.filter(t => t.status !== 'awaiting_client_approval') : [];
 
@@ -104,10 +102,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 const results = await Promise.all(fetchPromises);
                 
-                if (this.allPersons.length === 0) this.allPersons = results[0]?.success ? results[0].data : [];
-                if (this.allTransactionTypes.length === 0) this.allTransactionTypes = results[1]?.success ? results[1].data : [];
-                if (this.allUsers.length === 0) this.allUsers = results[2]?.success ? results[2].data : [];
+                let resIdx = 0;
+                if (this.allPersons.length === 0) this.allPersons = results[resIdx++]?.success ? results[resIdx-1].data : [];
+                if (this.allTransactionTypes.length === 0) this.allTransactionTypes = results[resIdx++]?.success ? results[resIdx-1].data : [];
+                if (this.allUsers.length === 0) this.allUsers = results[resIdx++]?.success ? results[resIdx-1].data : [];
 
+                this.buildMaps(); 
+                
                 this.accrualFormManager.allPersons = this.allPersons;
                 this.accrualFormManager.render();
                 if (this.completeTaskFormManager) {
@@ -125,19 +126,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (window.SimpleLoadingController) window.SimpleLoadingController.hide();
             }
         }
+        
+        buildMaps() {}
 
         processData(preservePage = false) {
             const safeDate = (val) => {
                 if (!val) return null;
-                try {
-                    return new Date(val);
-                } catch { return null; }
+                return new Date(val);
             };
 
             this.processedData = this.allTasks.map(task => {
-                const appNo = task.iprecordApplicationNo || task.details?.iprecordApplicationNo || "-";
-                const recordTitleDisplay = task.iprecordTitle || task.details?.iprecordTitle || task.relatedIpRecordTitle || "-";
-                const applicantName = task.iprecordApplicantName || task.details?.iprecordApplicantName || "-";
+                const appNo = task.iprecordApplicationNo || "-";
+                const recordTitleDisplay = task.iprecordTitle || task.relatedIpRecordTitle || "-";
+                const applicantName = task.iprecordApplicantName || "-";
                 
                 const transactionType = this.allTransactionTypes.find(t => String(t.id) === String(task.taskType));
                 const taskTypeDisplay = transactionType ? (transactionType.alias || transactionType.name) : 'Bilinmiyor';
@@ -186,23 +187,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (valA == null) valA = '';
                 if (valB == null) valB = '';
 
-                if (valA instanceof Date && valB instanceof Date) {
-                    return (valA - valB) * multiplier;
-                }
+                if (valA instanceof Date && valB instanceof Date) return (valA - valB) * multiplier;
                 if (valA instanceof Date) return -1 * multiplier; 
                 if (valB instanceof Date) return 1 * multiplier;
 
                 if (key === 'id') {
-                    const numA = parseFloat(valA.toString().replace(/[^0-9]/g, ''));
-                    const numB = parseFloat(valB.toString().replace(/[^0-9]/g, ''));
-                    if (!isNaN(numA) && !isNaN(numB)) {
-                        return (numA - numB) * multiplier;
-                    }
+                    const numA = parseFloat(String(valA).replace(/[^0-9]/g, ''));
+                    const numB = parseFloat(String(valB).replace(/[^0-9]/g, ''));
+                    if (!isNaN(numA) && !isNaN(numB)) return (numA - numB) * multiplier;
                 }
 
-                valA = valA.toString().toLowerCase();
-                valB = valB.toString().toLowerCase();
-                return valA.localeCompare(valB, 'tr') * multiplier;
+                return String(valA).localeCompare(String(valB), 'tr') * multiplier;
             });
         }
 
@@ -210,10 +205,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.querySelectorAll('#myTasksTable thead th[data-sort]').forEach(th => {
                 const icon = th.querySelector('i');
                 if(!icon) return;
-                
                 icon.className = 'fas fa-sort';
                 icon.style.opacity = '0.3';
-                
                 if (th.dataset.sort === this.sortState.key) {
                     icon.className = this.sortState.direction === 'asc' ? 'fas fa-sort-up' : 'fas fa-sort-down';
                     icon.style.opacity = '1';
@@ -241,10 +234,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     matchesTab = !activeStatuses.includes(item.status);
                 }
 
-                const assigneeId = item.assignedTo?.id || item.assignedTo_uid || item.assignedTo;
-                
-                const isMyTask = (assigneeId === currentUserId) || 
-                                 (item.assignedToEmail === currentUserEmail) ||
+                const isMyTask = (item.assignedTo_uid === currentUserId) || 
                                  (item.assignedTo_email === currentUserEmail);
 
                 return matchesSearch && matchesStatusFilter && matchesTab && isMyTask;
@@ -253,9 +243,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.sortData();
 
             if (this.pagination) {
-                if (!preservePage) {
-                    this.pagination.reset();
-                }
+                if (!preservePage) this.pagination.reset();
                 this.pagination.update(this.filteredData.length);
             }
 
@@ -342,6 +330,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             try {
                 const assignPromises = this.tasksToAssign.map(task => {
+                    const updateData = { assignedTo_uid: uid, assignedTo_email: user.email };
                     const historyEntry = { 
                         action: `İş yeniden atandı: ${task.assignedTo_email || 'Atanmamış'} -> ${user.email}`, 
                         timestamp: new Date().toISOString(), 
@@ -350,13 +339,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     
                     let history = task.history ? [...task.history] : [];
                     history.push(historyEntry);
+                    updateData.history = history;
 
-                    return taskService.updateTask(task.id, {
-                        ...task, // Diğer tüm veriler korunur
-                        assignedTo_uid: uid, 
-                        assignedToEmail: user.email,
-                        history: history 
-                    });
+                    return taskService.updateTask(task.id, updateData);
                 });
 
                 await Promise.all(assignPromises); 
@@ -374,7 +359,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 await this.loadAllData(); 
             } catch (e) { 
                 if (loader) loader.hide();
-                console.error(e);
                 showNotification('Atama sırasında hata oluştu.', 'error'); 
             }
         }
@@ -383,13 +367,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.querySelectorAll('#taskTabs .nav-link').forEach(tab => {
                 tab.addEventListener('click', (e) => {
                     e.preventDefault();
-                    
                     document.querySelectorAll('#taskTabs .nav-link').forEach(t => {
                         t.classList.remove('active');
                         t.style.color = '#6c757d'; 
                     });
                     e.target.classList.add('active');
-                    e.target.style.color = '#495057';
+                    e.target.style.color = '#495057'; 
 
                     this.activeTab = e.target.dataset.tab;
                     const currentQuery = document.getElementById('taskSearchInput').value;
@@ -404,12 +387,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             
             const headers = document.querySelectorAll('#myTasksTable thead th[data-sort]');
-            headers.forEach(th => {
-                th.style.cursor = 'pointer';
-                th.addEventListener('click', () => {
-                    this.handleSort(th.dataset.sort);
-                });
-            });
+            headers.forEach(th => th.addEventListener('click', () => this.handleSort(th.dataset.sort)));
 
             document.getElementById('myTasksTableBody').addEventListener('click', (e) => {
                 const btn = e.target.closest('.action-btn');
@@ -419,7 +397,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 if (btn.classList.contains('view-btn') || btn.dataset.action === 'view') {
                     const task = this.allTasks.find(t => t.id === taskId);
-                    
                     if (task && String(task.taskType) === '2') {
                         this.taskDetailManager.showApplicationSummary(task);
                     } else {
@@ -428,20 +405,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 } 
                 else if (btn.classList.contains('edit-btn') || btn.dataset.action === 'edit') {
                     const task = this.allTasks.find(t => t.id === taskId);
-                    
                     if (task && (String(task.taskType) === '53' || task.taskType === 'accrual_creation')) {
-                        console.log('💰 Tahakkuk düzenleme modalı açılıyor:', taskId);
                         this.openCompleteAccrualModal(taskId);
                     } else {
                         window.location.href = `task-update.html?id=${taskId}`;
                     }
                 }
-                else if (btn.classList.contains('assign-btn')) {
-                    this.openAssignTaskModal(taskId);
-                }
-                else if (btn.classList.contains('add-accrual-btn')) {
-                    this.showCreateAccrualModal(taskId);
-                }
+                else if (btn.classList.contains('assign-btn')) this.openAssignTaskModal(taskId);
+                else if (btn.classList.contains('add-accrual-btn')) this.showCreateAccrualModal(taskId);
             });
 
             const closeModal = (id) => this.closeModal(id);
@@ -453,6 +424,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             document.getElementById('cancelCompleteAccrualBtn')?.addEventListener('click', () => closeModal('completeAccrualTaskModal'));
             document.getElementById('submitCompleteAccrualBtn')?.addEventListener('click', () => this.handleCompleteAccrualSubmission());
+            
             document.getElementById('batchAssignBtn')?.addEventListener('click', () => this.openAssignTaskModal());
             document.getElementById('cancelAssignmentBtn')?.addEventListener('click', () => this.closeModal('assignTaskModal'));
             document.getElementById('closeAssignTaskModal')?.addEventListener('click', () => this.closeModal('assignTaskModal'));
@@ -471,14 +443,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             if(noTasksMessage) noTasksMessage.style.display = 'none';
 
             let displayData = this.filteredData;
-            if (this.pagination) {
-                displayData = this.pagination.getCurrentPageData(this.filteredData);
-            }
+            if (this.pagination) displayData = this.pagination.getCurrentPageData(this.filteredData);
 
             displayData.forEach(task => {
                 const statusClass = `status-${(task.status || '').replace(/ /g, '_').toLowerCase()}`;
                 const priorityClass = `priority-${(task.priority || 'normal').toLowerCase()}`;
 
+                const opDate = formatToTRDate(task.dueDateObj);
+                const offDate = formatToTRDate(task.officialDueObj);
                 const dueDateISO = task.dueDateObj ? task.dueDateObj.toISOString().slice(0,10) : '';
                 const officialDueISO = task.officialDueObj ? task.officialDueObj.toISOString().slice(0,10) : '';
                 
@@ -518,18 +490,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                     </td>
                     <td>${task.taskTypeDisplay}</td>
                     <td><span class="priority-badge ${priorityClass}">${task.priority}</span></td>
-                    <td data-field="operationalDue" data-date="${dueDateISO}">
-                        ${formatToTRDate(task.dueDateObj)} 
-                    </td>
-                    <td data-field="officialDue" data-date="${officialDueISO}">
-                        ${formatToTRDate(task.officialDueObj)}
-                    </td>
+                    <td data-field="operationalDue" data-date="${dueDateISO}">${opDate}</td>
+                    <td data-field="officialDue" data-date="${officialDueISO}">${offDate}</td>
                     <td>${formatToTRDate(task.createdAtObj)}</td>
-                    <td>${task.assignedTo_email || '-'}</td>
+                    <td>${task.assignedToDisplay || task.assignedTo_email || '-'}</td>
                     <td><span class="status-badge ${statusClass}">${task.statusText}</span></td>
-                    <td class="text-center" style="overflow:visible;">
-                        ${actionMenuHtml}
-                    </td>
+                    <td class="text-center" style="overflow:visible;">${actionMenuHtml}</td>
                 `;
                 tableBody.appendChild(row);
             });
@@ -538,16 +504,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.attachCheckboxListeners();
             if (window.$) $('.dropdown-toggle').dropdown();
 
-            if (window.DeadlineHighlighter) {
-                setTimeout(() => window.DeadlineHighlighter.refresh('islerim'), 50);
-            }
+            if (window.DeadlineHighlighter) setTimeout(() => window.DeadlineHighlighter.refresh('islerim'), 50);
         }
 
         populateStatusFilterDropdown() {
             const select = document.getElementById('statusFilter');
             if(!select) return;
             select.innerHTML = '<option value="all">Tümü</option>';
-
             Object.entries(this.statusDisplayMap).forEach(([value, text]) => {
                 const opt = document.createElement('option');
                 opt.value = value;
@@ -556,7 +519,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         }
 
-        async showTaskDetailModal(taskId) {
+        async showTaskDetailModal(taskId) { 
             const task = this.allTasks.find(t => t.id === taskId);
             if (!task || !this.taskDetailManager) return;
 
@@ -568,31 +531,29 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.taskDetailManager.showLoading();
 
             try {
-                // Supabase Tahakkuk Çekimi
-                const { data: relatedAccruals } = await supabase
-                    .from('accruals')
-                    .select('*')
-                    .eq('task_id', String(task.id));
+                // 🔥 Supabase'den bu işe ait tahakkukları çek
+                const accResult = await accrualService.getAccrualsByTaskId(task.id);
+                const relatedAccruals = accResult.success ? accResult.data : [];
 
+                // 🔥 Supabase'den Anlık Portföy Çekimi
                 let ipRecord = null;
                 if (task.relatedIpRecordId) {
                     try {
-                        const { data: ipData } = await supabase.from('ip_records').select('*').eq('id', task.relatedIpRecordId).single();
-                        if (ipData) {
-                            ipRecord = { id: ipData.id, ...ipData.details, ...ipData };
+                        const { data: ipSnap } = await supabase.from('ip_records').select('*').eq('id', String(task.relatedIpRecordId)).maybeSingle();
+                        if (ipSnap) {
+                            ipRecord = ipSnap;
                         } else {
-                            const { data: suitData } = await supabase.from('suits').select('*').eq('id', task.relatedIpRecordId).single();
-                            if (suitData) ipRecord = { id: suitData.id, ...suitData.details, ...suitData };
+                            const { data: suitSnap } = await supabase.from('suits').select('*').eq('id', String(task.relatedIpRecordId)).maybeSingle();
+                            if (suitSnap) ipRecord = suitSnap;
                         }
                     } catch(e) { console.warn("Kayıt detayı çekilemedi:", e); }
                 }
+                
                 const transactionType = this.allTransactionTypes.find(t => String(t.id) === String(task.taskType));
                 const assignedUser = task.assignedTo_email ? { email: task.assignedTo_email, displayName: task.assignedTo_email } : null;
 
                 title.textContent = `İş Detayı (${task.id})`;
-                this.taskDetailManager.render(task, {
-                    ipRecord, transactionType, assignedUser, accruals: relatedAccruals || []
-                });
+                this.taskDetailManager.render(task, { ipRecord, transactionType, assignedUser, accruals: relatedAccruals });
             } catch (e) {
                 console.error("Detay yüklenemedi:", e);
                 this.taskDetailManager.showError('Hata oluştu.');
@@ -602,26 +563,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         async showCreateAccrualModal(taskId) {
             this.currentTaskForAccrual = this.allTasks.find(t => t.id === taskId);
             if (!this.currentTaskForAccrual) return;
-            
-            if (this.accrualFormManager) this.accrualFormManager.reset();
+            this.accrualFormManager.reset();
             
             const getEpats = (t) => {
                 if (!t) return null;
-                if (t.details && Array.isArray(t.details.documents)) return t.details.documents.find(d => d.type === 'epats_document');
-                if (Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                return (t.details && t.details.epatsDocument) || t.epatsDocument || t.epats_document || null;
+                if (t.documents && Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
+                return t.epats_doc_url ? { name: t.epats_doc_name, url: t.epats_doc_url, type: 'epats_document' } : null;
             };
 
             let epatsDoc = getEpats(this.currentTaskForAccrual);
-            const parentId = this.currentTaskForAccrual.relatedTaskId || this.currentTaskForAccrual.associatedTaskId || this.currentTaskForAccrual.triggeringTaskId;
+            const parentId = this.currentTaskForAccrual.transactionId || null;
             
             if (!epatsDoc && parentId) {
                 let parent = this.allTasks.find(t => String(t.id) === String(parentId));
-                
                 if (!parent) {
                     try {
-                        const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(parentId)).single();
-                        if (parentSnap) parent = { ...parentSnap.details, ...parentSnap };
+                        const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(parentId)).maybeSingle();
+                        if (parentSnap) parent = parentSnap;
                     } catch (e) { console.warn('Parent fetch error:', e); }
                 }
                 epatsDoc = getEpats(parent);
@@ -634,7 +592,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         async handleSaveNewAccrual() { 
             if (!this.currentTaskForAccrual) return;
 
-            const btn = document.getElementById('saveNewMyTaskAccrualBtn') || document.getElementById('submitNewAccrualBtn');
+            const btn = document.getElementById('saveNewAccrualBtn') || document.getElementById('submitNewAccrualBtn');
             if (btn) btn.disabled = true;
 
             const result = this.accrualFormManager.getData();
@@ -648,19 +606,19 @@ document.addEventListener('DOMContentLoaded', async () => {
             let loader = window.showSimpleLoading ? window.showSimpleLoading('Tahakkuk Kaydediliyor') : null;
 
             const { files, ...formDataNoFiles } = formData;
+
+            // 🔥 Supabase Storage
             let uploadedFiles = [];
-            
-            // Supabase Storage Upload
             if (files && files.length > 0) {
                 try {
                     const file = files[0];
-                    const cleanName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                    const path = `accruals/foreign_invoices/${Date.now()}_${cleanName}`;
+                    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                    const filePath = `foreign_invoices/${Date.now()}_${cleanFileName}`;
                     
-                    const { error: upErr } = await supabase.storage.from('task_documents').upload(path, file);
-                    if (upErr) throw upErr;
+                    const { error: uploadError } = await supabase.storage.from('accruals').upload(filePath, file);
+                    if (uploadError) throw uploadError;
 
-                    const { data: urlData } = supabase.storage.from('task_documents').getPublicUrl(path);
+                    const { data: urlData } = supabase.storage.from('accruals').getPublicUrl(filePath);
 
                     uploadedFiles.push({ 
                         name: file.name, 
@@ -677,33 +635,29 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            // Supabase Veritabanı Kayıt Formatı
             const newAccrual = {
-                task_id: this.currentTaskForAccrual.id,
+                taskId: this.currentTaskForAccrual.id,
+                taskTitle: this.currentTaskForAccrual.title,
+                ...formDataNoFiles,
+                tpeInvoiceNo: formDataNoFiles.tpeInvoiceNo?.trim() || null,
+                evrekaInvoiceNo: formDataNoFiles.evrekaInvoiceNo?.trim() || null,
+                totalAmountCurrency: formDataNoFiles.totalAmountCurrency || 'TRY',
+                remainingAmount: formDataNoFiles.totalAmount,
                 status: 'unpaid',
-                created_at: new Date().toISOString(),
-                evreka_invoice_no: formDataNoFiles.evrekaInvoiceNo?.trim() || null,
-                tpe_invoice_no: formDataNoFiles.tpeInvoiceNo?.trim() || null,
-                files: uploadedFiles, // 🔥 YENİ KÖPRÜ: Dosyaları Supabase'in ana 'files' sütununa yaz!
-                details: {
-                    taskTitle: this.currentTaskForAccrual.title,
-                    ...formDataNoFiles,
-                    totalAmountCurrency: formDataNoFiles.totalAmountCurrency || 'TRY',
-                    remainingAmount: formDataNoFiles.totalAmount,
-                    files: uploadedFiles
-                }
+                createdAt: new Date().toISOString(),
+                files: uploadedFiles
             };
 
             try {
-                const { error: addErr } = await supabase.from('accruals').insert(newAccrual);
+                const res = await accrualService.addAccrual(newAccrual);
                 if (loader) loader.hide();
 
-                if (!addErr) { 
+                if (res.success) { 
                     showNotification('Ek tahakkuk başarıyla oluşturuldu!', 'success'); 
                     this.closeModal('createMyTaskAccrualModal'); 
                     await this.loadAllData(); 
                 } else { 
-                    showNotification('Hata: ' + addErr.message, 'error'); 
+                    showNotification('Hata: ' + res.error, 'error'); 
                 }
             } catch (e) {
                 if (loader) loader.hide();
@@ -712,7 +666,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (btn) btn.disabled = false;
             }
         }
-
 
         async openCompleteAccrualModal(taskId) {
             const task = this.allTasks.find(t => t.id === taskId);
@@ -726,21 +679,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 const getEpats = (t) => {
                     if (!t) return null;
-                    if (t.details && Array.isArray(t.details.documents)) return t.details.documents.find(d => d.type === 'epats_document');
-                    if (Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                    return (t.details && t.details.epatsDocument) || t.epatsDocument || t.epats_document || null;
+                    if (t.documents && Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
+                    return t.epats_doc_url ? { name: t.epats_doc_name, url: t.epats_doc_url, type: 'epats_document' } : null;
                 };
 
                 let epatsDoc = getEpats(task);
-                const parentId = task.relatedTaskId || task.associatedTaskId || task.triggeringTaskId;
+                const parentId = task.transactionId || null;
 
                 if (!epatsDoc && parentId) {
                     let parent = this.allTasks.find(t => String(t.id) === String(parentId));
-                    
                     if (!parent) {
                         try {
-                            const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(parentId)).single();
-                            if (parentSnap) parent = { ...parentSnap.details, ...parentSnap };
+                            const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(parentId)).maybeSingle();
+                            if (parentSnap) parent = parentSnap;
                         } catch (e) { console.warn('Parent task fetch error:', e); }
                     }
                     epatsDoc = getEpats(parent);
@@ -748,12 +699,22 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 this.completeTaskFormManager.showEpatsDoc(epatsDoc);
                 
-                const targetAccrualId = task.details?.targetAccrualId;
+                const targetAccrualId = task.targetAccrualId || task.target_accrual_id; 
                 if (targetAccrualId) {
                     try {
                         const { data: accSnap } = await supabase.from('accruals').select('*').eq('id', String(targetAccrualId)).single();
                         if (accSnap) {
-                            this.completeTaskFormManager.setData({ ...accSnap.details, ...accSnap });
+                            const mappedAcc = {
+                                ...accSnap,
+                                totalAmount: accSnap.total_amount,
+                                remainingAmount: accSnap.remaining_amount,
+                                officialFee: accSnap.official_fee,
+                                serviceFee: accSnap.service_fee,
+                                vatRate: accSnap.vat_rate,
+                                tpeInvoiceNo: accSnap.tpe_invoice_no,
+                                evrekaInvoiceNo: accSnap.evreka_invoice_no
+                            };
+                            this.completeTaskFormManager.setData(mappedAcc);
                         }
                     } catch (e) {
                         console.warn('Target accrual fetch error:', e);
@@ -785,18 +746,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             let loader = window.showSimpleLoading ? window.showSimpleLoading('İşlem Tamamlanıyor') : null;
 
+            // 🔥 Supabase Storage
             let uploadedFiles = [];
             if (files && files.length > 0) {
                 try {
                     const file = files[0];
-                    const cleanName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                    const path = `accruals/foreign_invoices/${Date.now()}_${cleanName}`;
+                    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                    const filePath = `foreign_invoices/${Date.now()}_${cleanFileName}`;
                     
-                    const { error: upErr } = await supabase.storage.from('task_documents').upload(path, file);
-                    if (upErr) throw upErr;
+                    const { error: uploadError } = await supabase.storage.from('accruals').upload(filePath, file);
+                    if (uploadError) throw uploadError;
 
-                    const { data: urlData } = supabase.storage.from('task_documents').getPublicUrl(path);
-
+                    const { data: urlData } = supabase.storage.from('accruals').getPublicUrl(filePath);
                     uploadedFiles.push({
                         name: file.name,
                         url: urlData.publicUrl,
@@ -815,78 +776,67 @@ document.addEventListener('DOMContentLoaded', async () => {
             const cleanTitle = task.title ? task.title.replace('Tahakkuk Oluşturma: ', '') : 'Tahakkuk';
 
             const basePayload = {
-                task_id: task.relatedTaskId || taskId,
-                evreka_invoice_no: formDataNoFiles.evrekaInvoiceNo?.trim() || null,
-                tpe_invoice_no: formDataNoFiles.tpeInvoiceNo?.trim() || null,
-                details: {
-                    taskTitle: cleanTitle,
-                    ...formDataNoFiles
-                }
+                taskId: task.relatedIpRecordId || taskId, // Düzeltildi
+                taskTitle: cleanTitle,
+                ...formDataNoFiles,
+                tpeInvoiceNo: formDataNoFiles.tpeInvoiceNo?.trim() || null,
+                evrekaInvoiceNo: formDataNoFiles.evrekaInvoiceNo?.trim() || null
             };
 
-            const targetAccrualId = task.details?.targetAccrualId;
+            const targetAccrualId = task.targetAccrualId || task.target_accrual_id;
 
             try {
                 if (targetAccrualId) {
-                    const { data: existing, error: fetchErr } = await supabase.from('accruals').select('*').eq('id', String(targetAccrualId)).single();
-                    if (fetchErr || !existing) throw new Error('Güncellenecek tahakkuk bulunamadı.');
+                    const { data: existing } = await supabase.from('accruals').select('*').eq('id', String(targetAccrualId)).single();
+                    if (!existing) throw new Error('Güncellenecek tahakkuk bulunamadı.');
 
-                    const existingDetails = existing.details || {};
                     const mergedFiles = uploadedFiles.length > 0
-                        ? [ ...(existingDetails.files || []), ...uploadedFiles ]
-                        : (existingDetails.files || []);
+                        ? [ ...(existing.files || []), ...uploadedFiles ]
+                        : (existing.files || []);
 
                     let remainingAmountUpdate = {};
                     try {
-                        const sameRemaining = JSON.stringify(existingDetails.remainingAmount || null) === JSON.stringify(existingDetails.totalAmount || null);
-                        if (sameRemaining) remainingAmountUpdate = { remainingAmount: basePayload.details.totalAmount };
+                        const sameRemaining = JSON.stringify(existing.remaining_amount || null) === JSON.stringify(existing.total_amount || null);
+                        if (sameRemaining) remainingAmountUpdate = { remainingAmount: basePayload.totalAmount };
                     } catch (_) {}
 
                     const updates = {
                         ...basePayload,
                         files: mergedFiles,
-                        details: {
-                            ...existingDetails,
-                            ...basePayload.details,
-                            files: mergedFiles,
-                            ...remainingAmountUpdate
-                        }
+                        ...remainingAmountUpdate
                     };
 
-                    const { error: updErr } = await supabase.from('accruals').update(updates).eq('id', String(targetAccrualId));
-                    if (updErr) throw new Error(updErr.message);
+                    const updRes = await accrualService.updateAccrual(String(targetAccrualId), updates);
+                    if (!updRes.success) throw new Error(updRes.error);
 
-                    } else {
-                    const newAccrual = { 
-                        ...basePayload, 
+                } else {
+                    const newAccrual = {
+                        ...basePayload,
                         status: 'unpaid',
-                        files: uploadedFiles // 🔥 YENİ KÖPRÜ: Yeni tahakkukta ana sütuna yaz!
+                        remainingAmount: basePayload.totalAmount,
+                        files: uploadedFiles
                     };
-                    newAccrual.details.remainingAmount = basePayload.details.totalAmount;
-                    newAccrual.details.files = uploadedFiles;
 
-                    const { data: addRes, error: addErr } = await supabase.from('accruals').insert(newAccrual).select('id').single();
-                    if (addErr) throw new Error(addErr.message);
+                    const addRes = await accrualService.addAccrual(newAccrual);
+                    if (!addRes.success) throw new Error(addRes.error);
 
-                    // Tahakkuk ID'sini Task Details'e yaz
-                    await taskService.updateTask(taskId, {
-                        ...task,
-                        details: { ...(task.details || {}), targetAccrualId: addRes.id }
-                    });
+                    await taskService.updateTask(taskId, { target_accrual_id: addRes.data.id });
                 }
 
                 // Görevi kapat
+                const historyEntry = {
+                    action: targetAccrualId ? 'Tahakkuk güncellenerek görev tamamlandı.' : 'Tahakkuk oluşturularak görev tamamlandı.',
+                    timestamp: new Date().toISOString(),
+                    userEmail: this.currentUser.email
+                };
+                
+                const currentHistory = task.history ? [...task.history] : [];
+                currentHistory.push(historyEntry);
+
                 const updateData = {
-                    ...task,
                     status: 'completed',
-                    history: [
-                        ...(task.history || []),
-                        {
-                            action: targetAccrualId ? 'Tahakkuk güncellenerek görev tamamlandı.' : 'Tahakkuk oluşturularak görev tamamlandı.',
-                            timestamp: new Date().toISOString(),
-                            userEmail: this.currentUser.email
-                        }
-                    ]
+                    updatedAt: new Date().toISOString(),
+                    history: currentHistory
                 };
 
                 const taskResult = await taskService.updateTask(taskId, updateData);
@@ -908,7 +858,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         closeModal(modalId) {
             const m = document.getElementById(modalId);
             if(m) m.classList.remove('show');
-            
             if (modalId === 'createMyTaskAccrualModal' && this.accrualFormManager) {
                 this.accrualFormManager.reset();
                 this.currentTaskForAccrual = null;
