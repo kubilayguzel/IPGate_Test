@@ -519,62 +519,52 @@ export const ipRecordsService = {
 
     // C) İşlem Geçmişini Çeker (Transaction_documents ve Tasks ile İlişkilendirilmiş)
     async getRecordTransactions(recordId) {
-        // 1. İşlemleri çek
-        const { data: transactions, error } = await supabase
-            .from('transactions')
-            .select('*')
-            .eq('ip_record_id', recordId)
-            .order('created_at', { ascending: true });
+        if (!recordId) return { success: false, message: 'Kayıt ID yok.' };
 
-        if (error) return { success: false, error: error.message };
-        if (!transactions || transactions.length === 0) return { success: true, data: [] };
-
-        const txIds = transactions.map(t => t.id);
-        const taskIds = transactions.map(t => t.task_id).filter(Boolean);
-
-        // 2. İŞLEM EVRAKLARINI (transaction_documents) ÇEK
-        let txDocs = [];
         try {
-            const { data } = await supabase.from('transaction_documents').select('*').in('transaction_id', txIds);
-            if (data) txDocs = data;
-        } catch(e) {}
+            // 🔥 ÇÖZÜM: tasks!transactions_task_id_fkey(*) yazarak 
+            // Supabase'in "hangi ilişkiyi kullanmalıyım?" kafa karışıklığını giderdik.
+            const { data, error } = await supabase
+                .from('transactions')
+                .select(`
+                    *,
+                    transaction_documents(*),
+                    task_data:tasks!transactions_task_id_fkey(*)
+                `)
+                .eq('ip_record_id', String(recordId))
+                .order('created_at', { ascending: false });
 
-        // 3. İŞLEMLERE BAĞLI GÖREVLERİ (tasks) ÇEK
-        let tasksData = [];
-        try {
-            // Hem transaction_id ile hem de task_id ile bağlı olan görevleri bul
-            const res1 = await supabase.from('tasks').select('*').in('transaction_id', txIds);
-            const res2 = taskIds.length > 0 ? await supabase.from('tasks').select('*').in('id', taskIds) : { data: [] };
-            tasksData = [...(res1.data || []), ...(res2.data || [])];
-        } catch(e) {}
+            if (error) throw error;
+            if (!data) return { success: true, data: [] };
 
-        // 4. VERİLERİ BİRLEŞTİR (Relational Mapping)
-        const mappedTransactions = transactions.map(tx => {
-            const d = tx.details || {};
-            
-            // Bu işleme ait belgeleri ve görevleri eşleştir
-            const docs = txDocs.filter(td => td.transaction_id === tx.id);
-            const task = tasksData.find(t => t.transaction_id === tx.id || t.id === tx.task_id);
-
-            return {
-                ...d, // Eski JSON esnekliğini koru
-                ...tx, // Veritabanındaki tüm sütunları dahil et
-                id: tx.id, 
-                type: tx.transaction_type_id || d.type, 
-                timestamp: tx.created_at || d.timestamp,
-                date: tx.created_at || d.date, 
-                transactionHierarchy: tx.transaction_hierarchy || d.transactionHierarchy, 
-                parentId: tx.parent_id || d.parentId,
-                task_id: tx.task_id || d.triggeringTaskId,
+            // Arayüzün (PortfolioDetailManager & TransactionHelper) beklediği formata haritalıyoruz
+            const mappedData = data.map(t => {
+                const dateVal = t.transaction_date || t.created_at;
                 
-                // 🔥 KUSURSUZ İLİŞKİ: Belgeler ve Görevler artık doğrudan işlem objesinde!
-                transaction_documents: docs,
-                task_data: task || null
-            };
-        });
-        
-        return { success: true, data: mappedTransactions };
+                // Tasks JOIN'inden gelen veriyi obje formatına güvenceye alıyoruz
+                const taskObj = Array.isArray(t.task_data) ? t.task_data[0] : t.task_data;
+
+                return {
+                    ...t, 
+                    id: t.id,
+                    type: String(t.transaction_type_id || ''), 
+                    transactionHierarchy: t.transaction_hierarchy || 'parent', 
+                    parentId: t.parent_id || null, 
+                    timestamp: dateVal,
+                    date: dateVal,
+                    userEmail: t.user_email || t.user_name || 'Sistem',
+                    transaction_documents: t.transaction_documents || [],
+                    task_data: taskObj || null
+                };
+            });
+
+            return { success: true, data: mappedData };
+        } catch (error) {
+            console.error("İşlem geçmişi çekme hatası:", error);
+            return { success: false, error: error.message };
+        }
     },
+
     async getTransactionsForRecord(recordId) {
         const res = await this.getRecordTransactions(recordId);
         return { success: res.success, transactions: res.data, error: res.error };
