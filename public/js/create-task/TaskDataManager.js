@@ -15,8 +15,6 @@ export class TaskDataManager {
                 this.getCountries()
             ]);
 
-            // 🔥 ÇÖZÜM BURASI: SQL'den gelen alt_tireli verileri JS'nin beklediği camelCase formata çeviriyoruz.
-            // Bu sayede arayüzdeki "Diğer Marka İşlemleri" listesi tıkır tıkır dolacaktır.
             let formattedTransactionTypes = this._normalizeData(transactionTypes).map(t => ({
                 ...t,
                 ipType: t.ip_type || t.ipType,
@@ -28,7 +26,7 @@ export class TaskDataManager {
                 allIpRecords: this._normalizeData(ipRecords),
                 allPersons: this._normalizeData(persons),
                 allUsers: this._normalizeData(users),
-                allTransactionTypes: formattedTransactionTypes, // Düzenlenmiş listeyi gönderdik
+                allTransactionTypes: formattedTransactionTypes,
                 allCountries: this._normalizeData(countries)
             };
         } catch (error) {
@@ -78,6 +76,7 @@ export class TaskDataManager {
         } catch (err) { return []; }
     }
 
+    // 🔥 GÜNCELLENDİ: "details" objesine bağımlılık kaldırıldı. Direkt kolonlara bakar.
     async searchSuits(searchText, allowedTypeIds = []) {
         if (!searchText || searchText.length < 2) return [];
 
@@ -89,11 +88,9 @@ export class TaskDataManager {
             if (error) throw error;
 
             return data.map(doc => {
-                const details = doc.details || {};
-                
                 let validMatch = true;
                 if (allowedTypeIds && allowedTypeIds.length > 0 && allowedTypeIds.length <= 10) {
-                    if (!allowedTypeIds.includes(String(details.transactionTypeId))) validMatch = false;
+                    if (!allowedTypeIds.includes(String(doc.transaction_type_id))) validMatch = false;
                 }
                 
                 if(!validMatch) return null;
@@ -101,11 +98,10 @@ export class TaskDataManager {
                 return {
                     id: doc.id,
                     ...doc,
-                    ...details,
-                    displayFileNumber: doc.file_no || details.caseNo || doc.fileNumber || '-', 
-                    displayCourt: doc.court_name || details.court || doc.court || 'Mahkeme Yok',
-                    displayClient: doc.plaintiff || details.client?.name || doc.client || '-', 
-                    opposingParty: doc.defendant || details.opposingParty || doc.opposingParty || '-',
+                    displayFileNumber: doc.file_no || '-', 
+                    displayCourt: doc.court_name || 'Mahkeme Yok',
+                    displayClient: doc.client_name || doc.plaintiff || '-', 
+                    opposingParty: doc.opposing_party || doc.defendant || '-',
                     _source: 'suit' 
                 };
             }).filter(Boolean);
@@ -134,7 +130,6 @@ export class TaskDataManager {
     async getAssignmentRule(taskTypeId) {
         if (!taskTypeId) return null;
         try {
-            // Artık common_data yerine doğrudan kendi tablosuna (task_assignments) gidiyoruz
             const { data, error } = await supabase
                 .from('task_assignments')
                 .select('*')
@@ -143,7 +138,6 @@ export class TaskDataManager {
                 
             if (error || !data) return null;
 
-            // Arayüzün (main.js) beklediği camelCase formata çevirerek döndürüyoruz
             return {
                 transactionTypeId: data.id,
                 assignmentType: data.assignment_type,
@@ -159,7 +153,6 @@ export class TaskDataManager {
     async uploadFileToStorage(file, path) {
         if (!file || !path) return null;
         try {
-            // TaskSubmitHandler'da path zaten zaman damgasıyla geliyor, direkt kullanıyoruz
             const { error } = await supabase.storage.from('task_documents').upload(path, file);
             if (error) throw error;
             
@@ -187,19 +180,28 @@ export class TaskDataManager {
                (Array.isArray(result) ? result : []);
     }
 
-    async getRecordTransactions(recordId, collectionName = 'ipRecords') {
+    async getRecordTransactions(recordId, collectionName = 'ip_records') {
         if (!recordId) return { success: false, message: 'Kayıt ID yok.' };
         try {
-            const { data, error } = await supabase.from('transactions').select('*').eq('ip_record_id', String(recordId)).order('created_at', { ascending: false });
+            const { data, error } = await supabase
+                .from('transactions')
+                .select('*')
+                .eq('ip_record_id', String(recordId))
+                .order('created_at', { ascending: false });
+                
             if (error) throw error;
 
             const mappedData = data.map(t => ({
                 id: t.id,
-                ...t.details,
-                type: String(t.transaction_type_id || t.details?.type || '') 
+                ...t,
+                type: String(t.transaction_type_id || ''),
+                transactionTypeName: t.description || 'İşlem',
+                timestamp: t.transaction_date || t.created_at
             }));
 
             return { success: true, data: mappedData };
-        } catch (error) { return { success: false, error: error }; }
+        } catch (error) { 
+            return { success: false, error: error }; 
+        }
     }
 }
