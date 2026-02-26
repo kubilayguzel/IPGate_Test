@@ -68,7 +68,6 @@ export class AccrualUIManager {
 
         const rowsHtml = data.map((acc, index) => {
             try {
-                // KORUMA KALKANI: Hatalı satırları atlayıp tabloyu çökertmez
                 const isSelected = selectedIds.has(acc.id);
                 let sTxt = 'Bilinmiyor', sCls = 'badge-secondary';
                 if (acc.status === 'paid') { sTxt = 'Ödendi'; sCls = 'status-paid'; }
@@ -463,14 +462,24 @@ export class AccrualUIManager {
         document.getElementById(modalId).classList.remove('show');
     }
 
+    // 🔥 DÜZELTME: Hem Dizileri (Array) hem Objeleri hem de Düz Sayıları destekler
     _formatMoney(val, curr) {
+        if (!val) return '0 ' + (curr || 'TRY');
+        
         if (Array.isArray(val)) {
             if (val.length === 0) return '0 ' + (curr || 'TRY');
             return val.map(item => {
                 const num = parseFloat(item.amount) || 0;
-                return `${new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(num)} ${item.currency}`;
+                return `${new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(num)} ${item.currency || curr || 'TRY'}`;
             }).join(' + ');
         }
+        
+        // Supabase bazen Array yerine Object döndürebilir: {"amount": 100, "currency": "USD"}
+        if (typeof val === 'object') {
+            const num = parseFloat(val.amount) || 0;
+            return `${new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(num)} ${val.currency || curr || 'TRY'}`;
+        }
+        
         const num = parseFloat(val) || 0;
         return `${new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(num)} ${curr || 'TRY'}`;
     }
