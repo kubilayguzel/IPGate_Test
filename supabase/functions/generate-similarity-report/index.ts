@@ -9,27 +9,21 @@ const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-
 
 const FONT_FAMILY = "Montserrat"; const GLOBAL_FONT_SIZE = 18; 
 const COLORS = { CLIENT_HEADER: "1E40AF", SIMILAR_HEADER: "64748B", TEXT_DARK: "1E293B", NICE_BG: "F1F5F9", BORDER_LIGHT: "E2E8F0", DEADLINE_BG: "DBEAFE", DEADLINE_TEXT: "1E40AF", EXPERT_BG: "F8FAFC", EXPERT_BORDER: "1E40AF" };
-function isWeekend(date: Date) { return date.getDay() === 0 || date.getDay() === 6; }
 
-// 🔥 DÜZELTME 1: Resimler artık Link veya Base64 geliyor. Tam uyumlu hale getirildi.
 async function downloadImageAsBuffer(imagePath: string, supabase: any): Promise<ArrayBuffer | null> {
     if (!imagePath) return null;
     try {
-        // Base64 formatındaysa (Manuel eklenenler genelde böyledir)
         if (imagePath.startsWith('data:image')) {
             const base64Data = imagePath.split(',')[1];
             const binaryString = atob(base64Data);
-            const len = binaryString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); }
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) { bytes[i] = binaryString.charCodeAt(i); }
             return bytes.buffer;
         }
-        // Tam URL ise (Frontend publicUrl'e çevirip yolluyor)
         if (imagePath.startsWith('http')) { 
             const resp = await fetch(imagePath); 
             return resp.ok ? await resp.arrayBuffer() : null; 
         }
-        // Sadece storage path ise
         const { data, error } = await supabase.storage.from('brand_images').download(imagePath);
         if (error) return null; 
         return await data.arrayBuffer();
@@ -39,17 +33,9 @@ async function downloadImageAsBuffer(imagePath: string, supabase: any): Promise<
 async function createComparisonPage(group: any, supabase: any) {
     const similarMark = group.similarMark || {}; const monitoredMarks = group.monitoredMarks || []; const monitoredMark = monitoredMarks.length > 0 ? monitoredMarks[0] : {};
     const elements = []; const tableRows = [];
-    let docObjectionDeadline = "-";
-    try {
-        const bDateStr = similarMark.bulletinDate || similarMark.applicationDate;
-        if (bDateStr && typeof bDateStr === 'string') {
-            const parts = bDateStr.split(/[./-]/);
-            if (parts.length === 3) {
-                let bDate = parts[0].length === 4 ? new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])) : new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-                if (!isNaN(bDate.getTime())) { bDate.setMonth(bDate.getMonth() + 2); let iter = 0; while (isWeekend(bDate) && iter < 30) { bDate.setDate(bDate.getDate() + 1); iter++; } docObjectionDeadline = `${String(bDate.getDate()).padStart(2, '0')}.${String(bDate.getMonth() + 1).padStart(2, '0')}.${bDate.getFullYear()}`; }
-            }
-        }
-    } catch (e) {}
+
+    // 🔥 DÜZELTME: Ön yüzden hesaplanıp gelen hatasız tarihi kullanıyoruz!
+    const docObjectionDeadline = similarMark.calculatedDeadline || "-";
 
     let monitoredImageBuffer = await downloadImageAsBuffer(monitoredMark.imagePath || monitoredMark.brandImageUrl, supabase);
     let similarImageBuffer = await downloadImageAsBuffer(similarMark.imagePath || similarMark.brandImageUrl, supabase);
@@ -60,7 +46,14 @@ async function createComparisonPage(group: any, supabase: any) {
     tableRows.push(new TableRow({ children: [createVisualCell(monitoredImageBuffer), createVisualCell(similarImageBuffer)] }));
 
     const createInfoRow = (label: string, val1: string, val2: string, bgColor = "FFFFFF") => { return new TableRow({ children: [ new TableCell({ children: [ new Paragraph({ children: [new TextRun({ text: label, bold: true, size: GLOBAL_FONT_SIZE, color: COLORS.SIMILAR_HEADER, font: FONT_FAMILY })], spacing: { before: 80, after: 40 } }), new Paragraph({ children: [new TextRun({ text: val1 || "-", size: GLOBAL_FONT_SIZE, color: COLORS.TEXT_DARK, font: FONT_FAMILY })], spacing: { after: 80 } }) ], shading: { fill: bgColor }, margins: { left: 120 }, verticalAlign: "center", borders: { right: { style: BorderStyle.SINGLE, size: 2, color: COLORS.BORDER_LIGHT } } }), new TableCell({ children: [ new Paragraph({ children: [new TextRun({ text: label, bold: true, size: GLOBAL_FONT_SIZE, color: COLORS.SIMILAR_HEADER, font: FONT_FAMILY })], spacing: { before: 80, after: 40 } }), new Paragraph({ children: [new TextRun({ text: val2 || "-", size: GLOBAL_FONT_SIZE, color: COLORS.TEXT_DARK, font: FONT_FAMILY })], spacing: { after: 80 } }) ], shading: { fill: bgColor }, margins: { left: 120 }, verticalAlign: "center" }) ] }); };
-    const formatNiceClasses = (classes: any) => { if (!classes || classes.length === 0) return "-"; const classArray = Array.isArray(classes) ? classes : String(classes).split(',').map(s => s.trim()); return classArray.map((c:string) => `[${c}]`).join(" "); };
+    
+    // 🔥 DÜZELTME: Sınıf numaraları gelmese de kodun çökmesini engelleyen güvenli format
+    const formatNiceClasses = (classes: any) => { 
+        if (!classes || classes.length === 0) return "-"; 
+        const classArray = Array.isArray(classes) ? classes : String(classes).split(/[,\s]+/).filter(Boolean); 
+        if (classArray.length === 0) return "-";
+        return classArray.map((c:string) => `[${c}]`).join(" "); 
+    };
     
     tableRows.push(createInfoRow("Nice Sınıfları", formatNiceClasses(monitoredMark.niceClasses), formatNiceClasses(similarMark.niceClasses), COLORS.NICE_BG));
     tableRows.push(createInfoRow("Başvuru No", monitoredMark.applicationNo, similarMark.applicationNo));
@@ -82,7 +75,6 @@ async function createComparisonPage(group: any, supabase: any) {
     elements.push(new Paragraph({ text: "", spacing: { after: 400 } })); return elements;
 }
 
-// ANA FONKSİYON
 serve(async (req) => {
     if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -127,17 +119,8 @@ serve(async (req) => {
             const fileName = `${safeDocName}_Rapor.docx`;
             zip.file(fileName, docBuffer);
 
-            // Mail Bildirimi İçin Son Tarih Hesaplama
-            let mailObjectionDeadline = "-";
-            const bDateStr = matches[0]?.similarMark?.bulletinDate || matches[0]?.similarMark?.applicationDate;
-            if (bDateStr && typeof bDateStr === 'string') {
-                const parts = bDateStr.split(/[./-]/);
-                if (parts.length === 3) {
-                    let bDate = parts[0].length === 4 ? new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)) : new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-                    if (!isNaN(bDate.getTime())) { bDate.setMonth(bDate.getMonth() + 2); let iter = 0; while (isWeekend(bDate) && iter < 30) { bDate.setDate(bDate.getDate() + 1); iter++; } mailObjectionDeadline = `${String(bDate.getDate()).padStart(2, '0')}.${String(bDate.getMonth() + 1).padStart(2, '0')}.${bDate.getFullYear()}`; }
-                }
-            }
-
+            // 🔥 DÜZELTME: Mail taslağındaki son tarih de hatasız veriden alınacak
+            const mailObjectionDeadline = matches[0]?.similarMark?.calculatedDeadline || "-";
             const targetClientId = matches[0]?.monitoredMark?.clientId || matches[0]?.monitoredMark?.details?.clientId || null;
 
             if (targetClientId && bulletinNo) {
@@ -146,10 +129,8 @@ serve(async (req) => {
                 await supabase.storage.from('brand_images').upload(storagePath, docBuffer, { contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', upsert: true });
                 const { data: pUrlData } = supabase.storage.from('brand_images').getPublicUrl(storagePath);
 
-                // 🔥 DÜZELTME 2: `mail_notifications` tablosuna kayıt atılırken Supabase şemanıza uygun (`record_id` vb.) kolonlar kullanıldı.
-                // Not: 'files' diye ayrı bir kolon yerine, genelde her şeyi 'details' isimli JSONB kolonu içinde tutmak hata riskini sıfıra indirir.
                 const { error: mailError } = await supabase.from('mail_notifications').insert({
-                    record_id: targetClientId, // related_ip_record_id yerine record_id yapıldı
+                    record_id: targetClientId, 
                     subject: `${bulletinNo} Sayılı Bülten İzleme Raporu`,
                     body: `<p>Sayın İlgili,</p><p>${bulletinNo} sayılı bülten marka izleme raporunuz ekte sunulmuştur.</p>`,
                     status: 'awaiting_client_approval',
@@ -162,12 +143,9 @@ serve(async (req) => {
                         is_draft: true, 
                         notification_type: 'marka', 
                         source: 'bulletin_watch_system', 
-                        attachments: [{ fileName, storagePath, url: pUrlData.publicUrl }] // Dosyaları JSON içine gömdük
+                        attachments: [{ fileName, storagePath, url: pUrlData.publicUrl }] 
                     }
                 });
-
-                if (mailError) console.error("❌ Mail Bildirimi Eklenemedi:", mailError);
-                else console.log("✅ Mail Bildirimi Başarıyla Eklendi!");
             }
         }
 
