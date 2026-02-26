@@ -23,125 +23,176 @@ serve(async (req) => {
 
         const cleanMonitoredId = String(monitoredMarkId).trim();
 
-        // 1. İzlenen Markayı Çek
-        const { data: monitoredDataArr } = await supabase.from('monitoring_trademarks').select('*').eq('id', cleanMonitoredId).limit(1);
-        const monitoredData = monitoredDataArr?.[0] || {};
+        // 1. KENDİ MARKAMIZI (IP RECORD VEYA MONITORING) BUL
+        const { data: monData } = await supabase.from('monitoring_trademarks').select('*').eq('id', cleanMonitoredId).maybeSingle();
+        let targetIpRecordId = cleanMonitoredId;
+        if (monData && monData.ip_record_id) targetIpRecordId = monData.ip_record_id;
 
-        let ipRecord: any = {};
-        const { data: ipDataArr } = await supabase.from('ip_records').select('*').eq('id', cleanMonitoredId).limit(1);
-        if (ipDataArr && ipDataArr.length > 0) ipRecord = ipDataArr[0];
+        const { data: ipData } = await supabase.from('ip_records').select('*').eq('id', targetIpRecordId).maybeSingle();
 
-        // 2. Kendi Müvekkilimizi (Client) Bul
-        let clientId = ipRecord.client_id || null;
-        if (clientId && String(clientId).startsWith('owner_')) clientId = null;
-
+        let clientId = null;
         let ipAppName = "-";
-        if (clientId) {
-            const { data: personDataArr } = await supabase.from('persons').select('name, company_name').eq('id', clientId).limit(1);
-            if (personDataArr && personDataArr.length > 0) {
-                ipAppName = personDataArr[0].name || personDataArr[0].company_name || "-";
+        let ipTitle = "-";
+        let ipAppNo = "-";
+
+        if (ipData) {
+            ipTitle = ipData.title || ipData.brand_name || ipData.brand_text || "-";
+            ipAppNo = ipData.application_number || "-";
+            
+            const { data: applicantData } = await supabase.from('ip_record_applicants').select('person_id').eq('ip_record_id', ipData.id).order('order_index', { ascending: true }).limit(1).maybeSingle();
+            if (applicantData && applicantData.person_id) {
+                clientId = applicantData.person_id;
+                const { data: personData } = await supabase.from('persons').select('name').eq('id', clientId).maybeSingle();
+                if (personData) ipAppName = personData.name || "-";
             }
+        } else if (monData) {
+            ipTitle = monData.mark_name || "-";
+            ipAppNo = monData.application_no || "-";
+            ipAppName = monData.owner_name || "-";
         }
 
-        const ipTitle = ipRecord.title || ipRecord.mark_name || monitoredData.mark_name || "-";
-        const ipAppNo = ipRecord.application_number || monitoredData.application_no || "-";
-
-        // 3. ATAMA KONTROLÜ (Tip 20 Ataması)
+        // 2. ATAMA (Tip 20)
         let assignedUid = null;
         let assignedEmail = callerEmail || null;
-        const { data: assignDataArr } = await supabase.from('task_assignments').select('assignee_ids').eq('task_type', '20').limit(1);
-        if (assignDataArr && assignDataArr.length > 0 && assignDataArr[0].assignee_ids?.length > 0) {
-            assignedUid = assignDataArr[0].assignee_ids[0];
-            const { data: userDataArr } = await supabase.from('users').select('email').eq('id', assignedUid).limit(1);
-            if (userDataArr && userDataArr.length > 0) assignedEmail = userDataArr[0].email;
+        const { data: assignData } = await supabase.from('task_assignments').select('assignee_ids').eq('id', '20').maybeSingle();
+        if (assignData && assignData.assignee_ids && assignData.assignee_ids.length > 0) {
+            assignedUid = assignData.assignee_ids[0];
+            const { data: userData } = await supabase.from('users').select('email').eq('id', assignedUid).maybeSingle();
+            if (userData) assignedEmail = userData.email;
         }
 
-        // 4. TARİH HESAPLAMA
+        // 3. RESMİ SON TARİH HESAPLAMA
         let officialDueDate = null;
-        const { data: bulletinDataArr } = await supabase.from('trademark_bulletins').select('bulletin_date').eq('bulletin_no', String(bulletinNo).trim()).limit(1);
-        if (bulletinDataArr && bulletinDataArr.length > 0 && bulletinDataArr[0].bulletin_date) {
-            const bDate = new Date(bulletinDataArr[0].bulletin_date);
+        const { data: bulletinData } = await supabase.from('trademark_bulletins').select('bulletin_date').eq('bulletin_no', String(bulletinNo).trim()).maybeSingle();
+        if (bulletinData && bulletinData.bulletin_date) {
+            const bDate = new Date(bulletinData.bulletin_date);
             if (!isNaN(bDate.getTime())) {
-                const rawDue = new Date(bDate);
-                rawDue.setMonth(rawDue.getMonth() + 2);
+                bDate.setMonth(bDate.getMonth() + 2);
                 let iter = 0;
-                while (isWeekend(rawDue) && iter < 10) { rawDue.setDate(rawDue.getDate() + 1); iter++; }
-                officialDueDate = rawDue.toISOString();
+                while (isWeekend(bDate) && iter < 10) { bDate.setDate(bDate.getDate() + 1); iter++; }
+                officialDueDate = bDate.toISOString();
             }
         }
 
-        // 🔥 5. GÖREV ID ALIMI (RPC OLMADAN, DOĞRUDAN SAYAÇ OKUMA/YAZMA)
+        // 4. COUNTER MANTIĞI
         let taskId = crypto.randomUUID(); 
         try {
-            const { data: counterData } = await supabase.from('counters').select('count').eq('id', 'tasks').maybeSingle();
-            
-            let nextCount = 1000; // Varsayılan başlangıç
-            if (counterData && typeof counterData.count === 'number') {
-                nextCount = counterData.count + 1;
-                await supabase.from('counters').update({ count: nextCount }).eq('id', 'tasks');
+            const { data: counterData } = await supabase.from('counters').select('last_id').eq('id', 'tasks').maybeSingle();
+            let nextCount = 1000;
+            if (counterData && typeof counterData.last_id === 'number') {
+                nextCount = counterData.last_id + 1;
+                await supabase.from('counters').update({ last_id: nextCount }).eq('id', 'tasks');
             } else {
-                await supabase.from('counters').insert({ id: 'tasks', count: nextCount });
+                await supabase.from('counters').insert({ id: 'tasks', last_id: nextCount });
             }
-            taskId = String(nextCount); // Örn: "1054"
-        } catch (e) {
-            console.error("Sayaç okuma hatası:", e);
-        }
+            taskId = String(nextCount);
+        } catch (e) { console.error("Sayaç okuma hatası:", e); }
 
         const hitMarkName = similarMarkName || similarMark.markName || 'Bilinmeyen Marka';
         
-        // 🔥 6. RAKİP MARKAYA (THIRD PARTY) TRANSACTION EKLENMESİ
-        let createdTransactionId = null;
-        if (thirdPartyIpRecordId) {
-            const txPayload = {
-                ip_record_id: thirdPartyIpRecordId, // Rakibin portföy kaydı
-                type: '20', // Yayına İtiraz
-                designation: 'Yayına İtiraz',
-                description: 'Yayına İtiraz',
-                transaction_hierarchy: 'parent',
-                task_id: taskId,
-                opposition_owner: ipAppName, // Bizim müvekkilimizin adı
-                user_email: callerEmail || 'system@evreka.com',
-                user_id: assignedUid,
-                timestamp: new Date().toISOString()
-            };
-            const { data: txData } = await supabase.from('transactions').insert(txPayload).select('id').single();
-            if (txData) createdTransactionId = txData.id;
+        // 🚀 5. ÜÇÜNCÜ TARAF (THIRD PARTY) PORTFÖY KAYDINI OLUŞTUR
+        const thirdPartyPortfolioId = thirdPartyIpRecordId || crypto.randomUUID();
+        let hitImageUrl = bulletinRecordData?.imagePath || similarMark.imagePath || null;
+        if (hitImageUrl && !hitImageUrl.startsWith('http')) {
+            hitImageUrl = `https://guicrctynauzxhyfpdfe.supabase.co/storage/v1/object/public/brand_images/${hitImageUrl}`;
         }
 
-        // 7. TASK KAYDI
+        const portfolioData = {
+            id: thirdPartyPortfolioId,
+            title: hitMarkName,
+            status: 'published_in_bulletin',
+            ip_type: 'trademark',
+            brand_name: hitMarkName,
+            brand_text: hitMarkName,
+            description: `Bülten benzerlik araması ile otomatik oluşturulan rakip kaydı.`,
+            created_from: 'bulletin_record',
+            brand_image_url: hitImageUrl,
+            application_date: similarMark.applicationDate || null,
+            portfolio_status: 'active',
+            record_owner_type: 'third_party',
+            application_number: similarMark.applicationNo || null,
+            has_registration_cert: false,
+            transaction_hierarchy: 'parent',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        };
+        const { error: ipError } = await supabase.from('ip_records').insert(portfolioData);
+        if (ipError) throw new Error(`Rakip Portföy Kayıt Hatası: ${ipError.message}`);
+
+        // 🚀 6. RAKİBİN ALTINA İŞLEM (TRANSACTION) EKLE
+        const transactionId = crypto.randomUUID();
+        const txPayload = {
+            id: transactionId,
+            ip_record_id: thirdPartyPortfolioId,
+            transaction_type_id: '20', 
+            description: 'Yayına İtiraz',
+            transaction_hierarchy: 'parent',
+            task_id: null, // 🔥 CRASH FIX: Çakışmayı (Circular Dependency) önlemek için önce boş bırakıyoruz!
+            opposition_owner: ipAppName, 
+            user_id: assignedUid,
+            user_email: callerEmail || 'system@evreka.com',
+            transaction_date: new Date().toISOString(),
+            created_at: new Date().toISOString()
+        };
+        const { error: txError } = await supabase.from('transactions').insert(txPayload);
+        if (txError) throw new Error(`İşlem (Transaction) Kayıt Hatası: ${txError.message}`);
+
+        let parsedNiceClasses = [];
+        if (Array.isArray(similarMark.niceClasses)) {
+            parsedNiceClasses = similarMark.niceClasses.map(String);
+        } else if (typeof similarMark.niceClasses === 'string') {
+            parsedNiceClasses = similarMark.niceClasses.split(/[,\s/]+/).filter(Boolean);
+        }
+
+        let hitHoldersStr = "-";
+        let rawHolders = similarMark.holders || bulletinRecordData?.holders;
+        if (rawHolders) {
+            if (Array.isArray(rawHolders)) {
+                hitHoldersStr = rawHolders.map((h: any) => typeof h === 'object' ? (h.name || h.holderName || h.title) : h).join(', ');
+            } else if (typeof rawHolders === 'string') {
+                hitHoldersStr = rawHolders;
+            }
+        }
+
+        // 🚀 7. KENDİ DOSYAMIZA (TASK) GÖREVİ EKLE
         const taskPayload = {
             id: taskId,
             task_type: '20',
             status: 'awaiting_client_approval',
             priority: 'medium',
-            related_ip_record_id: ipRecord.id || null, 
-            related_ip_record_title: ipTitle,
+            related_ip_record_id: thirdPartyPortfolioId,
+            related_ip_record_title: hitMarkName,
             client_id: clientId,
-            transaction_id: createdTransactionId, // Rakip işlemle bağlandı
+            transaction_id: transactionId, 
             assigned_to_uid: assignedUid, 
             assigned_to_email: assignedEmail,
             created_by_email: callerEmail || 'system',
             title: `Yayına İtiraz: ${hitMarkName} (Bülten No: ${bulletinNo})`,
             description: `"${ipTitle}" markamız için bültende benzer bulunan "${hitMarkName}" markasına itiraz işi.`,
-            iprecord_application_no: ipAppNo,
-            iprecord_title: ipTitle,
-            iprecord_applicant_name: ipAppName,
+            iprecord_application_no: similarMark.applicationNo || "-",
+            iprecord_title: hitMarkName,
+            iprecord_applicant_name: hitHoldersStr,
             due_date: officialDueDate,
             official_due_date: officialDueDate,
             target_app_no: similarMark.applicationNo || null,
-            target_nice_classes: Array.isArray(similarMark.niceClasses) ? similarMark.niceClasses : [],
+            target_nice_classes: parsedNiceClasses,
             bulletin_no: String(bulletinNo),
             similarity_score: similarMark.similarityScore || 0,
             related_party_id: clientId,
-            related_party_name: ipAppName
+            related_party_name: ipAppName,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
         };
-
         const { error: taskErr } = await supabase.from('tasks').insert(taskPayload);
         if (taskErr) throw new Error(`Task kayıt hatası: ${taskErr.message}`);
+
+        // 🚀 8. İŞLEMİ (TRANSACTION) TASK ID İLE GÜNCELLE (Döngüyü Hatasız Kapat)
+        await supabase.from('transactions').update({ task_id: taskId }).eq('id', transactionId);
 
         return new Response(JSON.stringify({ success: true, taskId: taskId, message: "İtiraz işi başarıyla oluşturuldu." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
 
     } catch (error: any) {
+        console.error("❌ Edge Function Çöktü:", error.message);
         return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
     }
 });
