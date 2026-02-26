@@ -625,9 +625,17 @@ tr.selected-row:hover {
 
             if (error) throw error;
 
+            // 🔥 DÜZELTME: Verinin Array mi yoksa String mi olduğunu kontrol eden akıllı dönüştürücü
+            const ensureArray = (val) => {
+                if (!val) return [];
+                if (Array.isArray(val)) return val; // Zaten diziyse direkt döndür
+                if (typeof val === 'string') return val.split(',').map(s => s.trim()).filter(Boolean);
+                return [val];
+            };
+
             // Supabase (snake_case) -> Arayüz (camelCase) Çevirisi
             const mappedData = data.map(d => {
-                const bts = d.brand_text_search ? d.brand_text_search.split(',').map(s=>s.trim()).filter(Boolean) : [];
+                const bts = ensureArray(d.brand_text_search);
                 return {
                     id: d.id,
                     title: d.mark_name || '-',
@@ -638,8 +646,8 @@ tr.selected-row:hover {
                     ownerName: d.owner_name || '-',
                     brandTextSearch: bts,
                     searchMarkName: bts.length > 0 ? bts[0] : (d.mark_name || ''),
-                    niceClassSearch: d.nice_class_search ? d.nice_class_search.split(',').map(s=>s.trim()).filter(Boolean) : [],
-                    niceClasses: d.nice_classes ? d.nice_classes.split(',').map(s=>s.trim()).filter(Boolean) : [],
+                    niceClassSearch: ensureArray(d.nice_class_search),
+                    niceClasses: ensureArray(d.nice_classes),
                     imagePath: d.image_path,
                     brandImageUrl: d.image_path,
                     createdAt: d.created_at,
@@ -653,7 +661,7 @@ tr.selected-row:hover {
             return { success: false, data: [], error: err.message };
         }
     }
-
+    
     const MERGE_FIELDS = [
         'title', 'markName', 'brandImageUrl', 'applicationNumber', 'applicationNo', 'applicationDate',
         'status', 'niceClasses', 'owners', 'applicants', 'goodsAndServicesByClass', 'ownerName', 'owner'
@@ -919,7 +927,8 @@ tr.selected-row:hover {
                 let imageUrl = r.brandImageUrl || r.imagePath || r.image;
                 if (imageUrl && imageUrl.trim() !== '') {
                     if (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
-                        const { data } = supabase.storage.from('trademarks').getPublicUrl(imageUrl);
+                        // 🔥 DÜZELTME: Bucket adı 'brand_images' olarak değiştirildi
+                        const { data } = supabase.storage.from('brand_images').getPublicUrl(imageUrl);
                         imageUrl = data.publicUrl || imageUrl;
                     }
                     return `<img src="${imageUrl}" alt="Görsel" class="trademark-image-thumbnail" loading="lazy" style="width: 80px; height: 80px; object-fit: contain; border-radius: 6px; border: 1px solid #ddd;" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';"><span style="display:none; color:#999; font-size:12px;">🖼️ Yok</span>`;
@@ -1210,7 +1219,8 @@ tr.selected-row:hover {
                       if (currentSelectedItem.brandImageUrl && currentSelectedItem.brandImageUrl.trim() !== '') {
                           let imageUrl = currentSelectedItem.brandImageUrl;
                           if (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
-                               const { data } = supabase.storage.from('trademarks').getPublicUrl(imageUrl);
+                               // 🔥 DÜZELTME: Bucket adı 'brand_images' olarak değiştirildi
+                               const { data } = supabase.storage.from('brand_images').getPublicUrl(imageUrl);
                                imageUrl = data.publicUrl || imageUrl;
                           }
                           imgEl.src = imageUrl;
@@ -1309,8 +1319,10 @@ tr.selected-row:hover {
           
           try {
               const { error } = await supabase.from('monitoring_trademarks').update({
-                  brand_text_search: brandTextArray.join(', '),
-                  nice_class_search: niceClassArray.join(', ')
+                  // 🔥 DÜZELTME: Veritabanı yapısına uygun olarak .join(', ') KALDIRILDI ve direkt Array olarak gönderildi
+                  brand_text_search: brandTextArray,
+                  nice_class_search: niceClassArray,
+                  search_mark_name: searchMarkNameValue
               }).eq('id', currentSelectedItem.id);
 
               if (!error) {
