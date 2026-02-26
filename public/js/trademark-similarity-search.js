@@ -645,42 +645,77 @@ const loadBulletinOptions = async () => {
     const bulletinSelect = document.getElementById('bulletinSelect');
     bulletinSelect.innerHTML = '<option value="">Bülten seçin...</option>';
     
+    // 1. Mevcut (Sistemde Kayıtlı) Bültenleri Çek
     const { data: registeredData } = await supabase.from('trademark_bulletins').select('*').order('bulletin_no', { ascending: false });
-    // Eski tablo yerine arama geçmişinden (search_progress) tamamlanmışları çekiyoruz
-    const { data: cacheData } = await supabase.from('search_progress').select('bulletin_id').eq('status', 'completed');
     
+    // 2. Kalıcı tablodan arama yapılmış bülten ID'lerini çek (Limit 2000 vererek sadece ID'leri hızlıca alıyoruz)
+    const { data: cacheData } = await supabase
+        .from('monitoring_trademark_records')
+        .select('bulletin_id')
+        .not('bulletin_id', 'is', null)
+        .neq('bulletin_id', 'GLOBAL') // Manuel olanları hariç tut
+        .limit(2000); 
+        
     const allBulletins = new Map();
     
+    // Önce kayıtlı bültenleri haritaya ekle
     if (registeredData) {
         registeredData.forEach(data => {
             const bulletinKey = `${data.bulletin_no}_${(data.bulletin_date || '').replace(/\D/g, '')}`;
-            allBulletins.set(bulletinKey, { bulletinNo: data.bulletin_no, bulletinKey, hasOriginalBulletin: true, displayName: `${data.bulletin_no} - ${data.bulletin_date || ''} (Kayıtlı)` });
+            allBulletins.set(bulletinKey, { 
+                bulletinNo: data.bulletin_no, 
+                bulletinKey, 
+                hasOriginalBulletin: true, 
+                displayName: `${data.bulletin_no} - ${data.bulletin_date || ''} (Kayıtlı)` 
+            });
         });
     }
     
+    // Sonra geçmiş arama sonuçlarından (bellek) gelenleri haritaya ekle
     if (cacheData) {
         cacheData.forEach(rec => {
             if(!rec.bulletin_id || String(rec.bulletin_id).includes('GLOBAL')) return;
 
+            // bulletin_id: "484_20260112" şeklinde geliyor
             const parts = String(rec.bulletin_id).split('_');
-            const normalizedKey = `${parts[0]}_${(parts[1] || '').replace(/\D/g, '')}`;
+            const bulletinNo = parts[0]; // "484"
+            const dateRaw = parts[1] || ''; // "20260112"
             
+            const normalizedKey = `${bulletinNo}_${dateRaw.replace(/\D/g, '')}`;
+            
+            // Eğer haritada (Kayıtlılarda) yoksa, tarihi düzgünleştirip Bellek olarak ekle
             if (!allBulletins.has(normalizedKey)) {
+                
+                // YYYYMMDD formatını DD.MM.YYYY formatına çevir
+                let displayDate = dateRaw;
+                if (dateRaw.length === 8 && !isNaN(dateRaw)) {
+                    const yyyy = dateRaw.substring(0, 4);
+                    const mm = dateRaw.substring(4, 6);
+                    const dd = dateRaw.substring(6, 8);
+                    displayDate = `${dd}.${mm}.${yyyy}`;
+                }
+
                 allBulletins.set(normalizedKey, { 
-                    bulletinNo: parts[0], 
+                    bulletinNo: bulletinNo, 
                     bulletinKey: normalizedKey, 
                     hasOriginalBulletin: false, 
-                    displayName: `${parts[0]} (Bellek)` 
+                    // Örn: "484 - 12.01.2026 (Bellek)" şeklinde görünecek
+                    displayName: displayDate ? `${bulletinNo} - ${displayDate} (Bellek)` : `${bulletinNo} (Bellek)` 
                 });
             }
         });
     }
 
-    Array.from(allBulletins.values()).sort((a, b) => parseInt(b.bulletinNo || 0) - parseInt(a.bulletinNo || 0)).forEach(bulletin => {
-        const option = document.createElement('option');
-        option.value = bulletin.bulletinKey; option.dataset.hasOriginalBulletin = bulletin.hasOriginalBulletin; option.textContent = bulletin.displayName;
-        bulletinSelect.appendChild(option);
-    });
+    // Haritayı bülten numarasına göre büyükten küçüğe sırala ve Select box'a bas
+    Array.from(allBulletins.values())
+        .sort((a, b) => parseInt(b.bulletinNo || 0) - parseInt(a.bulletinNo || 0))
+        .forEach(bulletin => {
+            const option = document.createElement('option');
+            option.value = bulletin.bulletinKey; 
+            option.dataset.hasOriginalBulletin = bulletin.hasOriginalBulletin; 
+            option.textContent = bulletin.displayName;
+            bulletinSelect.appendChild(option);
+        });
 };
 
 const formatCacheData = (r) => ({
