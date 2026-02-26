@@ -1,7 +1,7 @@
 // public/js/task-management/triggered-tasks.js
 
-// 🔥 DÜZELTME: 'functions' importu kaldırıldı. Sadece Supabase servisleri var.
-import { authService, taskService, accrualService, personService, transactionTypeService, supabase } from '../../supabase-config.js';
+// 🔥 Firebase importları kaldırıldı
+import { authService, taskService, ipRecordsService, accrualService, personService, transactionTypeService, supabase } from '../../supabase-config.js';
 import { showNotification, TASK_STATUS_MAP, formatToTRDate } from '../../utils.js';
 import { loadSharedLayout } from '../layout-loader.js';
 
@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.allTasks = [];
             this.allIpRecords = [];
             this.allPersons = [];
+            this.allAccruals = [];
             this.allTransactionTypes = [];
 
             this.processedData = [];
@@ -43,14 +44,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.taskDetailManager = new TaskDetailManager('modalBody');
             this.accrualFormManager = new AccrualFormManager('accrualFormContainer', 'triggeredAccrual');
 
-            // Supabase Auth
-            authService.isSupabaseAvailable = true;
             const user = authService.getCurrentUser();
             if (user) {
                 this.currentUser = user;
                 this.loadAllData();
             } else {
-                window.location.href = 'index.html';
+                window.location.href = '/index.html';
             }
         }
 
@@ -72,30 +71,24 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (loader) loader.style.display = 'block';
 
             try {
-                // Supabase'deki rol/yetki kontrolü
-                const isSuper = this.currentUser?.isSuperAdmin || this.currentUser?.role === 'super_admin';
+                // Auth kullanıcısının yetkilerini kontrol edelim
+                const isSuper = this.currentUser?.isSuperAdmin || false;
                 const targetStatus = 'awaiting_client_approval';
 
-                const [tasksResult, transTypesResult, personsResult] = await Promise.all([
+                const [tasksResult, transTypesResult] = await Promise.all([
                     taskService.getTasksByStatus(targetStatus, isSuper ? null : this.currentUser.uid),
-                    transactionTypeService.getTransactionTypes(),
-                    personService.getPersons() // Accrual form için gerekli
+                    transactionTypeService.getTransactionTypes()
                 ]);
 
                 this.allTasks = tasksResult.success ? tasksResult.data : [];
                 this.allTransactionTypes = transTypesResult.success ? transTypesResult.data : [];
-                this.allPersons = personsResult.success ? personsResult.data : [];
-
-                // Accrual Form'a kişileri aktar
-                this.accrualFormManager.allPersons = this.allPersons;
-                this.accrualFormManager.render();
 
                 this.processData(); 
 
                 if (loader) loader.style.display = 'none';
-
             } catch (error) {
                 console.error("Yükleme Hatası:", error);
+            } finally {
                 if (loader) loader.style.display = 'none';
             }
         }
@@ -107,11 +100,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             const relevantTasks = this.allTasks.filter(task => this.triggeredTaskStatuses.includes(task.status));
 
             this.processedData = relevantTasks.map(task => {
-                const applicationNumber = task.iprecordApplicationNo || task.details?.iprecordApplicationNo || "-";
-                const relatedRecordTitle = task.iprecordTitle || task.details?.iprecordTitle || task.relatedIpRecordTitle || "-";
-                const applicantName = task.iprecordApplicantName || task.details?.iprecordApplicantName || "-";
+                const applicationNumber = task.iprecordApplicationNo || "-";
+                const relatedRecordTitle = task.iprecordTitle || task.relatedIpRecordTitle || "-";
+                const applicantName = task.iprecordApplicantName || "-";
 
-                const transactionTypeObj = transTypeMap.get(String(task.taskType || task.task_type));
+                const transactionTypeObj = transTypeMap.get(String(task.taskType));
                 const taskTypeDisplayName = transactionTypeObj ? (transactionTypeObj.alias || transactionTypeObj.name) : (task.taskType || 'Bilinmiyor');
 
                 const parseDate = (d) => {
@@ -119,8 +112,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     return new Date(d);
                 };
 
-                const operationalDueObj = parseDate(task.dueDate || task.due_date || task.operationalDueDate); 
-                const officialDueObj = parseDate(task.officialDueDate || task.official_due_date);
+                const operationalDueObj = parseDate(task.dueDate || task.operationalDueDate); 
+                const officialDueObj = parseDate(task.officialDueDate);
                 const statusText = this.statusDisplayMap[task.status] || task.status;
                 const searchString = `${task.id} ${applicationNumber} ${relatedRecordTitle} ${applicantName} ${taskTypeDisplayName} ${statusText}`.toLowerCase();
 
@@ -187,6 +180,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (isEmptyB) return 1;
 
                 if (valA instanceof Date && valB instanceof Date) return (valA - valB) * multiplier;
+                if (valA instanceof Date) return -1 * multiplier; 
+                if (valB instanceof Date) return 1 * multiplier;
 
                 if (key === 'id') {
                     const numA = parseInt(String(valA), 10);
@@ -218,7 +213,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             const tbody = document.getElementById('myTasksTableBody');
             const noRecordsMsg = document.getElementById('noTasksMessage');
             if(!tbody) return;
-            
             tbody.innerHTML = '';
 
             if (this.filteredData.length === 0) {
@@ -227,19 +221,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             if(noRecordsMsg) noRecordsMsg.style.display = 'none';
 
-            let currentData = this.pagination ? this.pagination.getCurrentPageData(this.filteredData) : this.filteredData;
+            let currentData = this.filteredData;
+            if (this.pagination) {
+                currentData = this.pagination.getCurrentPageData(this.filteredData);
+            }
 
             currentData.forEach(task => {
                 const row = document.createElement('tr');
-                const safeStatus = task.status || '';
-                const statusClass = `status-${safeStatus.replace(/ /g, '_').toLowerCase()}`;
+                const statusClass = `status-${task.status.replace(/ /g, '_').toLowerCase()}`;
                 
                 const opDate = formatToTRDate(task.operationalDueObj);
                 const offDate = formatToTRDate(task.officialDueObj);
 
                 const opISO = task.operationalDueObj ? task.operationalDueObj.toISOString().slice(0,10) : '';
                 const offISO = task.officialDueObj ? task.officialDueObj.toISOString().slice(0,10) : '';
-
+                
                 const actionMenuHtml = `
                     <div class="dropdown">
                         <button class="btn btn-sm btn-light text-secondary rounded-circle" type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
@@ -274,7 +270,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <td data-field="operationalDue" data-date="${opISO}">${opDate}</td>
                     <td data-field="officialDue" data-date="${offISO}">${offDate}</td>
                     <td><span class="status-badge ${statusClass}">${task.statusText}</span></td>
-                    <td class="text-center" style="overflow:visible;">${actionMenuHtml}</td>
+                    <td class="text-center" style="overflow:visible;">
+                        ${actionMenuHtml}
+                    </td>
                 `;
                 tbody.appendChild(row);
             });
@@ -282,12 +280,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (window.DeadlineHighlighter) {
                 setTimeout(() => window.DeadlineHighlighter.refresh('triggeredTasks'), 50);
             }
-            if(window.$) $('.dropdown-toggle').dropdown();
+            if (window.$) $('.dropdown-toggle').dropdown();
         }
 
         async showTaskDetail(taskId) { 
             const task = this.allTasks.find(t => t.id === taskId);
-            if (!task) return;
+            if (!task || !this.taskDetailManager) return;
 
             const modal = document.getElementById('taskDetailModal');
             const title = document.getElementById('modalTaskTitle');
@@ -295,31 +293,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             title.textContent = 'Yükleniyor...';
             this.taskDetailManager.showLoading();
 
+            // 🔥 Supabase'den Anlık Çekim
             let ipRecord = null;
-            const recId = task.relatedIpRecordId || task.ip_record_id;
-            if (recId) {
+            if (task.relatedIpRecordId) {
                 try {
-                    const { data: ipSnap } = await supabase.from('ip_records').select('*').eq('id', String(recId)).single();
+                    const { data: ipSnap } = await supabase.from('ip_records').select('*').eq('id', String(task.relatedIpRecordId)).maybeSingle();
                     if (ipSnap) {
-                        ipRecord = { id: ipSnap.id, ...ipSnap.details, ...ipSnap };
+                        ipRecord = ipSnap;
                     } else {
-                        const { data: suitSnap } = await supabase.from('suits').select('*').eq('id', String(recId)).single();
-                        if (suitSnap) ipRecord = { id: suitSnap.id, ...suitSnap.details, ...suitSnap };
+                        const { data: suitSnap } = await supabase.from('suits').select('*').eq('id', String(task.relatedIpRecordId)).maybeSingle();
+                        if (suitSnap) ipRecord = suitSnap;
                     }
                 } catch(e) { console.warn("Kayıt detayı çekilemedi:", e); }
             }
 
-            const transactionType = this.allTransactionTypes.find(t => String(t.id) === String(task.taskType || task.task_type));
+            const transactionType = this.allTransactionTypes.find(t => String(t.id) === String(task.taskType));
             const assignedUser = task.assignedTo_email ? { email: task.assignedTo_email } : null;
             
-            // Tahakkukları çek
-            const { data: relatedAccruals } = await supabase.from('accruals').select('*').eq('task_id', String(task.id));
+            const accResult = await accrualService.getAccrualsByTaskId(task.id);
+            const relatedAccruals = accResult.success ? accResult.data : [];
 
             title.textContent = `İş Detayı (${task.id})`;
-            
-            this.taskDetailManager.render(task, {
-                ipRecord, transactionType, assignedUser, accruals: relatedAccruals || []
-            });
+            this.taskDetailManager.render(task, { ipRecord, transactionType, assignedUser, accruals: relatedAccruals });
         }
 
         async showAccrualModal(taskId) {
@@ -331,21 +326,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             const getEpats = (t) => {
                 if (!t) return null;
-                if (t.details && Array.isArray(t.details.documents)) return t.details.documents.find(d => d.type === 'epats_document');
-                if (Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                return (t.details && t.details.epatsDocument) || t.epatsDocument || t.epats_document || null;
+                if (t.documents && Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
+                return t.epats_doc_url ? { name: t.epats_doc_name, url: t.epats_doc_url, type: 'epats_document' } : null;
             };
 
             let epatsDoc = getEpats(this.currentTaskForAccrual);
-            const parentId = this.currentTaskForAccrual.relatedTaskId || this.currentTaskForAccrual.associatedTaskId || this.currentTaskForAccrual.triggeringTaskId;
+            const parentId = this.currentTaskForAccrual.transactionId || null;
             
             if (!epatsDoc && parentId) {
                 let parent = this.allTasks.find(t => String(t.id) === String(parentId));
                 if (!parent) {
                     try {
-                        const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(parentId)).single();
-                        if (parentSnap) parent = { ...parentSnap.details, ...parentSnap };
-                    } catch (e) {}
+                        const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(parentId)).maybeSingle();
+                        if (parentSnap) parent = parentSnap;
+                    } catch (e) { console.warn('Parent fetch error:', e); }
                 }
                 epatsDoc = getEpats(parent);
             }
@@ -362,32 +356,27 @@ document.addEventListener('DOMContentLoaded', async () => {
                 showNotification(result.error, 'error');
                 return;
             }
-            const formData = result.data;
-            const { files, ...formDataNoFiles } = formData;
-
+            
             const newAccrual = {
-                task_id: this.currentTaskForAccrual.id,
+                taskId: this.currentTaskForAccrual.id,
+                taskTitle: this.currentTaskForAccrual.title,
+                ...result.data, 
                 status: 'unpaid',
-                created_at: new Date().toISOString(),
-                details: {
-                    taskTitle: this.currentTaskForAccrual.title,
-                    ...formDataNoFiles,
-                    remainingAmount: formDataNoFiles.totalAmount
-                }
+                createdAt: new Date().toISOString()
             };
 
             try {
-                const { error } = await accrualService.addAccrual(newAccrual);
-                if (!error) {
+                const res = await accrualService.addAccrual(newAccrual);
+                if (res.success) {
                     showNotification('Tahakkuk oluşturuldu.', 'success');
                     this.closeModal('createMyTaskAccrualModal');
                     await this.loadAllData();
                 } else {
-                    showNotification('Hata: ' + error.message, 'error');
+                    showNotification('Hata: ' + res.error, 'error');
                 }
             } catch(e) { showNotification('Hata oluştu.', 'error'); }
         }
-        
+
         showStatusChangeModal(taskId) {
             this.currentTaskForStatusChange = this.allTasks.find(t => t.id === taskId);
             if(!this.currentTaskForStatusChange) return;
@@ -414,13 +403,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     timestamp: new Date().toISOString(),
                     userEmail: this.currentUser.email
                 };
-
-                const currentHistory = this.currentTaskForStatusChange.history || [];
+                
+                const history = this.currentTaskForStatusChange.history ? [...this.currentTaskForStatusChange.history] : [];
+                history.push(newHistoryEntry);
 
                 await taskService.updateTask(this.currentTaskForStatusChange.id, {
-                    ...this.currentTaskForStatusChange, // Mevcut veriyi koru
                     status: newStatus,
-                    history: [...currentHistory, newHistoryEntry]
+                    history: history
                 });
                 
                 showNotification('Durum güncellendi ve işleme alındı.', 'success');
@@ -433,8 +422,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         setupStaticEventListeners() {
             document.getElementById('searchInput')?.addEventListener('input', (e) => this.handleSearch(e.target.value));
-            document.getElementById('statusFilter')?.addEventListener('change', (e) => {
-                const query = document.getElementById('searchInput')?.value || '';
+            document.getElementById('statusFilter')?.addEventListener('change', () => {
+                const query = document.getElementById('searchInput').value;
                 this.handleSearch(query);
             });
 
@@ -442,19 +431,23 @@ document.addEventListener('DOMContentLoaded', async () => {
                 th.addEventListener('click', () => this.handleSort(th.dataset.sort));
             });
 
-            document.getElementById('myTasksTableBody')?.addEventListener('click', (e) => {
-                const btn = e.target.closest('.action-btn');
-                if (!btn) return;
-                const taskId = btn.dataset.id;
+            const tbody = document.getElementById('myTasksTableBody');
+            if(tbody) {
+                tbody.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.action-btn');
+                    if (!btn) return;
+                    const taskId = btn.dataset.id;
 
-                if (btn.classList.contains('view-btn')) this.showTaskDetail(taskId);
-                else if (btn.classList.contains('edit-btn')) window.location.href = `task-update.html?id=${taskId}`;
-                else if (btn.classList.contains('add-accrual-btn')) this.showAccrualModal(taskId);
-                else if (btn.classList.contains('change-status-btn')) this.showStatusChangeModal(taskId);
-            });
+                    if (btn.classList.contains('view-btn')) this.showTaskDetail(taskId);
+                    else if (btn.classList.contains('edit-btn')) window.location.href = `task-update.html?id=${taskId}`;
+                    else if (btn.classList.contains('add-accrual-btn')) this.showAccrualModal(taskId);
+                    else if (btn.classList.contains('change-status-btn')) this.showStatusChangeModal(taskId);
+                });
+            }
 
             const closeModal = (id) => this.closeModal(id);
             document.getElementById('closeTaskDetailModal')?.addEventListener('click', () => closeModal('taskDetailModal'));
+            
             document.getElementById('closeMyTaskAccrualModal')?.addEventListener('click', () => closeModal('createMyTaskAccrualModal'));
             document.getElementById('cancelCreateMyTaskAccrualBtn')?.addEventListener('click', () => closeModal('createMyTaskAccrualModal'));
             document.getElementById('saveNewMyTaskAccrualBtn')?.addEventListener('click', () => this.handleSaveAccrual());
@@ -463,14 +456,26 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById('cancelChangeTriggeredTaskStatusBtn')?.addEventListener('click', () => closeModal('changeTriggeredTaskStatusModal'));
             document.getElementById('saveChangeTriggeredTaskStatusBtn')?.addEventListener('click', () => this.handleUpdateStatus());
 
-            // 🔥 DÜZELTME: Firebase Cloud Function yerini Supabase Edge uyarısına bıraktı.
+            // 🔥 YENİ: Firebase Edge Functions yerine Supabase Functions Invoke kullanılıyor
             document.getElementById('manualRenewalTriggerBtn')?.addEventListener('click', async () => {
-                showNotification('Yenileme otomasyonu Supabase sistemine aktarılmaktadır. Kısa süre içinde aktif olacaktır.', 'info');
+                showNotification('Kontrol ediliyor...', 'info');
+                try {
+                    const { data, error } = await supabase.functions.invoke('checkAndCreateRenewalTasks');
+                    if (error) throw error;
+                    
+                    if (data && data.success) {
+                        showNotification(`${data.count} görev oluşturuldu.`, 'success');
+                        this.loadAllData();
+                    } else {
+                        showNotification(data?.error || 'Bilinmeyen Hata', 'error');
+                    }
+                } catch(e) { showNotification(e.message, 'error'); }
             });
         }
 
         closeModal(modalId) {
-            document.getElementById(modalId)?.classList.remove('show');
+            const m = document.getElementById(modalId);
+            if(m) m.classList.remove('show');
             if (modalId === 'createMyTaskAccrualModal' && this.accrualFormManager) {
                 this.accrualFormManager.reset();
             }
