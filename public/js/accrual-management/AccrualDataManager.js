@@ -19,12 +19,16 @@ export class AccrualDataManager {
         this.processedData = [];
     }
 
+    // 🔥 DÜZELTME: Storage Bucket adını gelen yola göre dinamik seçer
     async uploadFileToStorage(file, path) {
         if (!file) return null;
         try {
-            const { error } = await supabase.storage.from('task_documents').upload(path, file);
+            const bucketName = path.includes('task_documents') ? 'task_documents' : 'accruals';
+            const cleanPath = path.replace('accruals/', ''); // Çift klasörlemeyi önlemek için
+
+            const { error } = await supabase.storage.from(bucketName).upload(cleanPath, file);
             if (error) throw error;
-            const { data } = supabase.storage.from('task_documents').getPublicUrl(path);
+            const { data } = supabase.storage.from(bucketName).getPublicUrl(cleanPath);
             return data.publicUrl;
         } catch (err) {
             console.error("Dosya yükleme hatası:", err);
@@ -34,7 +38,6 @@ export class AccrualDataManager {
 
     async fetchAllData() {
         try {
-            console.time("Veri Yükleme Süresi");
             console.log("📥 Veri çekme işlemi başladı...");
 
             const accPromise = supabase.from('accruals').select('*').limit(10000).order('created_at', { ascending: false });
@@ -45,20 +48,39 @@ export class AccrualDataManager {
                 transactionTypeService.getTransactionTypes()
             ]);
 
-            this.allAccruals = accRes.data ? accRes.data.map(row => ({
-                ...(row.details || {}),
-                id: String(row.id),
-                taskId: row.task_id || row.details?.taskId,
-                type: row.type || row.details?.type,
-                status: row.status || row.details?.status,
-                createdAt: row.created_at ? new Date(row.created_at) : new Date(0),
-                updatedAt: row.updated_at || row.details?.updatedAt,
-                isForeignTransaction: row.is_foreign_transaction ?? row.details?.isForeignTransaction ?? false,
-                tpeInvoiceNo: row.tpe_invoice_no || row.details?.tpeInvoiceNo,
-                evrekaInvoiceNo: row.evreka_invoice_no || row.details?.evrekaInvoiceNo,
-                // 🔥 DÜZELTME: Dosyaları Supabase native sütunundan da çek
-                files: row.files || row.details?.files || []
-            })) : [];
+            // 🔥 DÜZELTME: Sadece details değil, Supabase'in KENDİ NATIVE KOLONLARINI da haritalıyoruz!
+            this.allAccruals = accRes.data ? accRes.data.map(row => {
+                const d = row.details || {};
+                return {
+                    ...d,
+                    id: String(row.id),
+                    taskId: row.task_id || d.taskId,
+                    taskTitle: row.task_title || d.taskTitle,
+                    type: row.type || d.type,
+                    status: row.status || d.status,
+                    createdAt: row.created_at ? new Date(row.created_at) : new Date(0),
+                    updatedAt: row.updated_at || d.updatedAt,
+                    isForeignTransaction: row.is_foreign_transaction ?? d.isForeignTransaction ?? false,
+                    tpeInvoiceNo: row.tpe_invoice_no || d.tpeInvoiceNo,
+                    evrekaInvoiceNo: row.evreka_invoice_no || d.evrekaInvoiceNo,
+                    files: row.files || d.files || [],
+                    
+                    // Native Finansal Kolonlar
+                    officialFee: row.official_fee || d.officialFee || null,
+                    serviceFee: row.service_fee || d.serviceFee || null,
+                    totalAmount: row.total_amount || d.totalAmount || [],
+                    remainingAmount: row.remaining_amount || d.remainingAmount || [],
+                    vatRate: row.vat_rate || d.vatRate || 20,
+                    applyVatToOfficialFee: row.apply_vat_to_official_fee ?? d.applyVatToOfficialFee ?? false,
+                    paidOfficialAmount: row.paid_official_amount || d.paidOfficialAmount || 0,
+                    paidServiceAmount: row.paid_service_amount || d.paidServiceAmount || 0,
+                    paymentDate: row.payment_date || d.paymentDate || null,
+                    
+                    // Native Taraf Kolonları
+                    tpInvoiceParty: row.tp_invoice_party_id ? { id: row.tp_invoice_party_id, name: row.tp_invoice_party_name } : d.tpInvoiceParty,
+                    serviceInvoiceParty: row.service_invoice_party_id ? { id: row.service_invoice_party_id, name: row.service_invoice_party_name } : d.serviceInvoiceParty,
+                };
+            }) : [];
 
             this.allUsers = usersRes?.success ? (usersRes.data || []) : [];
             
@@ -76,7 +98,6 @@ export class AccrualDataManager {
             this._buildSearchStrings();
             this.processedData = [...this.allAccruals];
             
-            console.timeEnd("Veri Yükleme Süresi");
             console.log(`✅ Yüklenen: ${this.allAccruals.length} Tahakkuk, ${Object.keys(this.allTasks).length} İş, ${this.allIpRecords.length} Dosya.`);
             return true;
 
@@ -124,9 +145,6 @@ export class AccrualDataManager {
             supabase.from('suits').select('*').in('id', validIds)
         ]);
 
-        if (ipRes.error) console.error("IP Records çekilemedi:", ipRes.error);
-        if (suitRes.error) console.error("Suits çekilemedi:", suitRes.error);
-
         const mapRecords = (rows, type) => {
             if (!rows) return;
             rows.forEach(row => {
@@ -143,36 +161,6 @@ export class AccrualDataManager {
 
         mapRecords(ipRes.data, 'ip');
         mapRecords(suitRes.data, 'suit');
-    }
-
-    async _fetchBatch(tableName, ids, type) {
-        try {
-            const { data, error } = await supabase.from(tableName).select('*').in('id', ids);
-            if (error) throw error;
-            
-            data.forEach(row => {
-                const d = row.details || {};
-                const item = { id: String(row.id), ...d, ...row };
-                
-                if (type === 'task') {
-                    item.taskType = row.task_type || d.taskType || d.specificTaskType || item.taskType;
-                    item.relatedIpRecordId = row.ip_record_id || d.relatedIpRecordId || d.relatedRecordId || item.relatedIpRecordId;
-                    item.assignedTo_uid = row.assigned_to_user_id || d.assignedTo_uid || item.assignedTo_uid;
-                    item.title = row.title || d.title || item.title;
-                    item.epatsDocument = row.epatsDocument || d.epatsDocument || d.details?.epatsDocument || item.epatsDocument;
-                    
-                    this.allTasks[item.id] = item;
-                } else if (type === 'ipRecord' || type === 'suit') {
-                    item.applicationNumber = row.application_number || row.file_no || d.applicationNumber || d.applicationNo || d.caseNo || item.applicationNumber || item.applicationNo;
-                    item.markName = row.title || row.mark_name || row.court_name || d.markName || d.title || d.name || d.court || item.markName || item.title || item.name;
-                    
-                    this.allIpRecords.push(item);
-                    this.ipRecordsMap[item.id] = item; 
-                }
-            });
-        } catch (err) {
-            console.error(`${type} chunk hatası:`, err);
-        }
     }
 
     _buildSearchStrings() {
@@ -310,7 +298,6 @@ export class AccrualDataManager {
             
             if (data && !error) {
                 const d = data.details || {};
-                
                 let epats = data.epats_document || d.epatsDocument || (d.details && d.details.epatsDocument) || null;
                 
                 if (typeof epats === 'string') {
@@ -331,14 +318,12 @@ export class AccrualDataManager {
                 return task;
             }
             return this.allTasks[String(taskId)] || null;
-        } catch (e) {
-            console.error('Task fetch error:', e);
-            return null;
-        }
+        } catch (e) { return null; }
     }
 
+    // 🔥 DÜZELTME: Ödemeler alındığında asıl/native sütunları güncelleyen yapı kuruldu
     async _updateAccrualDb(id, updates) {
-        const { data: curr } = await supabase.from('accruals').select('details').eq('id', id).single();
+        const { data: curr } = await supabase.from('accruals').select('details').eq('id', id).maybeSingle();
         const newDetails = { ...(curr?.details || {}), ...updates };
         
         const payload = {
@@ -346,11 +331,14 @@ export class AccrualDataManager {
             updated_at: new Date().toISOString()
         };
 
+        // Önemli verileri KESİNLİKLE ana sütunlara (native columns) da yazıyoruz
         if (updates.status) payload.status = updates.status;
         if (updates.foreignStatus) payload.status = updates.foreignStatus; 
         if (updates.paymentDate || updates.foreignPaymentDate) payload.payment_date = updates.paymentDate || updates.foreignPaymentDate;
         
-        // 🔥 DÜZELTME: Dosyaları sadece details'e değil doğrudan ana sütuna da yazıyoruz
+        if (updates.remainingAmount !== undefined) payload.remaining_amount = updates.remainingAmount;
+        if (updates.paidOfficialAmount !== undefined) payload.paid_official_amount = updates.paidOfficialAmount;
+        if (updates.paidServiceAmount !== undefined) payload.paid_service_amount = updates.paidServiceAmount;
         if (updates.files) payload.files = updates.files;
 
         const { error } = await supabase.from('accruals').update(payload).eq('id', id);
@@ -387,7 +375,7 @@ export class AccrualDataManager {
         const { error } = await supabase.from('accruals').insert({
             id: accrualData.id, task_id: null, type: accrualData.type || 'Hizmet', 
             status: newStatus, created_at: accrualData.createdAt, 
-            files: newFiles, // 🔥 DÜZELTME: Yeni oluştururken de dosyayı sütuna yaz
+            files: newFiles, 
             details: accrualData
         });
 
