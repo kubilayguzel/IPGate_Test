@@ -83,7 +83,6 @@ function visualMismatchPenalty(a: string, b: string) {
     return penalty;
 }
 
-// 🚀 CPU DOSTU, ÖNBELLEKLİ LEVENSHTEIN (Hızlandırıldı)
 const v0 = new Int32Array(512);
 const v1 = new Int32Array(512);
 
@@ -145,26 +144,25 @@ function calculateSimilarityScoreInternal(cleanedHitName: string, cleanedSearchN
     return { finalScore: Math.max(0.0, Math.min(1.0, finalScore)), positionalExactMatchScore }; 
 }
 
-
 // --- ANA YÖNLENDİRİCİ FONKSİYON ---
 serve(async (req) => {
     if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
     try {
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!; // Service Role şart
+        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         const supabase = createClient(supabaseUrl, supabaseKey);
         const body = await req.json();
 
         // =========================================================================
-        // ZİNCİRLEME WORKER MODU (CPU Limitini aşmamak için kendi kendini çağırır)
+        // PARALEL WORKER MODU (İşçiler)
         // =========================================================================
         if (body.action === 'worker') {
-            const { jobId, monitoredMarks, selectedBulletinId, lastId, processedCount, totalBulletinRecords } = body;
+            const { jobId, workerId, monitoredMarks, selectedBulletinId, lastId, processedCount, totalBulletinRecords } = body;
             const bulletinNo = selectedBulletinId.split('_')[0];
-            const BATCH_SIZE = 500; // Güvenli CPU limiti için her seferinde 500 kayıt
+            const BATCH_SIZE = 500; // Bülten kayıtlarını 500'er 500'er çekeriz
 
-            // İzlenen markaları 1 kere temizle (1 Milyon kere temizlemesini önler!)
+            // 1. Markaları Hazırla
             const preparedMarks = monitoredMarks.map((mark: any) => {
                 const primaryName = (mark.searchMarkName || mark.markName || '').trim();
                 const alternatives = Array.isArray(mark.brandTextSearch) ? mark.brandTextSearch : [];
@@ -180,7 +178,7 @@ serve(async (req) => {
                 return { ...mark, searchTerms, orangeSet, blueSet };
             });
 
-            // 500 Kayıt Çek
+            // 2. Bültenden Sıradaki Kaydı Çek
             const { data: hits, error } = await supabase
                 .from('trademark_bulletin_records')
                 .select('id, application_no, application_date, mark_name, nice_classes, holders, image_path')
@@ -191,26 +189,43 @@ serve(async (req) => {
 
             if (error) throw error;
 
-            // KAYIT KALMADIYSA İŞİ BİTİR
+            // 3. EĞER BÜLTEN KAYDI BİTTİYSE: İŞÇİ TAMAMLANDI
             if (!hits || hits.length === 0) {
-                await supabase.from('search_progress_workers').update({ status: 'completed', progress: 100 }).eq('id', `${jobId}_main`);
-                await supabase.from('search_progress').update({ status: 'completed' }).eq('id', jobId);
-                console.log(`✅ Job ${jobId} başarıyla tamamlandı.`);
+                await supabase.from('search_progress_workers').update({ status: 'completed' }).eq('id', `${jobId}_w${workerId}`);
+                
+                const { data: activeWorkers } = await supabase.from('search_progress_workers').select('id').eq('job_id', jobId).eq('status', 'processing');
+                
+                if (!activeWorkers || activeWorkers.length === 0) {
+                    await supabase.from('search_progress').update({ status: 'completed' }).eq('id', jobId);
+                    console.log(`🎉 TÜM İŞÇİLER BİTİRDİ! Ana Job ${jobId} tamamlandı.`);
+                }
+                
                 return new Response(JSON.stringify({ success: true, finished: true }), { headers: corsHeaders });
             }
 
-            const newLastId = hits[hits.length - 1].id;
+            let newLastId = hits[hits.length - 1].id;
+            let actualProcessedCount = 0;
             const uiResults = [];
-            const permanentRecords = [];
+            const permanentRecords = []; // 🔥 KALICI TABLO EKLENDİ
 
-            // Karşılaştırmalar
-            for (const hit of hits) {
+            // 4. KRONOMETRE
+            const startTime = Date.now();
+            const CPU_TIME_LIMIT = 1500; // 1.5 Saniyede kes
+
+            for (let i = 0; i < hits.length; i++) {
+                if (Date.now() - startTime > CPU_TIME_LIMIT) {
+                    newLastId = i > 0 ? hits[i - 1].id : hits[0].id; // 🔥 Güvenli Çıkış
+                    break;
+                }
+
+                actualProcessedCount++;
+                const hit = hits[i];
                 const hitClasses = typeof hit.nice_classes === 'string' ? hit.nice_classes.split(/[^\d]+/).map(c => String(c).replace(/\D/g, '')).filter(Boolean) : [];
-                const cleanedHitName = cleanMarkName(hit.mark_name || ''); // 1 kere temizlenir
+                const cleanedHitName = cleanMarkName(hit.mark_name || ''); 
 
                 for (const mark of preparedMarks) {
-                    const classColors: Record<string, string> = {};
                     let hasPoolMatch = false;
+                    const classColors: Record<string, string> = {};
 
                     hitClasses.forEach((hc: string) => {
                         if (mark.orangeSet.has(hc)) { classColors[hc] = 'orange'; hasPoolMatch = true; }
@@ -222,17 +237,18 @@ serve(async (req) => {
 
                         if (!hasPoolMatch && !isExactPrefixSuffix) continue;
 
-                        // Temizlenmiş stringleri direkt gönder (Büyük CPU Tasarrufu)
                         const { finalScore, positionalExactMatchScore } = calculateSimilarityScoreInternal(cleanedHitName, searchItem.cleanedSearchName);
 
                         if (finalScore < 0.5 && positionalExactMatchScore < 0.5 && !isExactPrefixSuffix) continue;
 
+                        // Arayüz İçin
                         uiResults.push({
                             job_id: jobId, monitored_trademark_id: mark.id, mark_name: hit.mark_name,
                             application_no: hit.application_no, nice_classes: hit.nice_classes, similarity_score: finalScore,
                             holders: hit.holders, image_path: hit.image_path
                         });
 
+                        // 🔥 Kalıcı Tablo İçin (Bunu silmiştim, geri eklendi)
                         let holdersData = hit.holders;
                         if (typeof holdersData === 'string') { holdersData = holdersData.split(',').map((h: string) => h.trim()); }
 
@@ -245,39 +261,35 @@ serve(async (req) => {
                             nice_classes: hit.nice_classes || '', positional_exact_match_score: positionalExactMatchScore,
                             similarity_score: finalScore, source: 'new'
                         });
+
                         break;
                     }
                 }
             }
 
-            // Veritabanına Yaz
+            // 5. BULUNANLARI YAZ
             if (uiResults.length > 0) {
                 await supabase.from('search_progress_results').insert(uiResults);
-                await supabase.from('monitoring_trademark_records').insert(permanentRecords);
+                await supabase.from('monitoring_trademark_records').insert(permanentRecords); // 🔥 Kalıcı kayıt yapıldı
                 
                 const { data: jobData } = await supabase.from('search_progress').select('current_results').eq('id', jobId).single();
                 await supabase.from('search_progress').update({ current_results: (jobData?.current_results || 0) + uiResults.length }).eq('id', jobId);
             }
 
-            const newProcessedCount = processedCount + hits.length;
+            // 6. İLERLEME YÜZDESİNİ HESAPLA (UI İçin)
+            const newProcessedCount = processedCount + actualProcessedCount;
             const progressPercent = Math.min(100, Math.floor((newProcessedCount / totalBulletinRecords) * 100));
-            await supabase.from('search_progress_workers').upsert({ id: `${jobId}_main`, job_id: jobId, status: 'processing', progress: progressPercent });
+            await supabase.from('search_progress_workers').upsert({ id: `${jobId}_w${workerId}`, job_id: jobId, status: 'processing', progress: progressPercent });
 
-            // 🔥 ZİNCİRLEME ÇAĞRI: Kendini sonraki sayfa için arka planda çağır! (CPU Limitini Sıfırlar)
-            if (hits.length === BATCH_SIZE) {
-                EdgeRuntime.waitUntil(
-                    supabase.functions.invoke('perform-trademark-similarity-search', {
-                        body: { action: 'worker', jobId, monitoredMarks, selectedBulletinId, lastId: newLastId, processedCount: newProcessedCount, totalBulletinRecords },
-                        headers: { Authorization: `Bearer ${supabaseKey}` }
-                    })
-                );
-            } else {
-                await supabase.from('search_progress_workers').update({ status: 'completed', progress: 100 }).eq('id', `${jobId}_main`);
-                await supabase.from('search_progress').update({ status: 'completed' }).eq('id', jobId);
-                console.log(`✅ Job ${jobId} başarıyla tamamlandı.`);
-            }
+            // 7. ZİNCİRE DEVAM ET
+            EdgeRuntime.waitUntil(
+                supabase.functions.invoke('perform-trademark-similarity-search', {
+                    body: { action: 'worker', jobId, workerId, monitoredMarks, selectedBulletinId, lastId: newLastId, processedCount: newProcessedCount, totalBulletinRecords },
+                    headers: { Authorization: `Bearer ${supabaseKey}` }
+                })
+            );
 
-            return new Response(JSON.stringify({ success: true, processed: hits.length }), { headers: corsHeaders });
+            return new Response(JSON.stringify({ success: true, workerId }), { headers: corsHeaders });
         }
 
         // =========================================================================
@@ -288,22 +300,36 @@ serve(async (req) => {
 
         const jobId = `job_${Date.now()}`;
         const bulletinNo = selectedBulletinId.split('_')[0];
-
-        await supabase.from('search_progress').insert({ id: jobId, status: 'started', current_results: 0, total_records: monitoredMarks.length });
         
-        // Progress bar için toplam bülten kaydını bul
+        // Bültenin toplam kaydını bul (Yüzde hesabı için)
         const { count } = await supabase.from('trademark_bulletin_records').select('*', { count: 'exact', head: true }).eq('bulletin_no', bulletinNo);
         const totalRecords = count || 1;
 
-        // İlk işçiyi arka planda ateşle
-        EdgeRuntime.waitUntil(
-            supabase.functions.invoke('perform-trademark-similarity-search', {
-                body: { action: 'worker', jobId, monitoredMarks, selectedBulletinId, lastId: '0', processedCount: 0, totalBulletinRecords: totalRecords },
-                headers: { Authorization: `Bearer ${supabaseKey}` }
-            })
-        );
+        await supabase.from('search_progress').insert({ id: jobId, status: 'processing', current_results: 0, total_records: totalRecords });
+        
+        // MARKALARI 10 EŞİT PARÇAYA BÖL
+        const WORKER_COUNT = 10;
+        const chunkSize = Math.ceil(monitoredMarks.length / WORKER_COUNT);
+        
+        const workerRecords = [];
+        for (let i = 0; i < WORKER_COUNT; i++) {
+            const chunk = monitoredMarks.slice(i * chunkSize, (i + 1) * chunkSize);
+            if (chunk.length === 0) continue;
+            
+            const workerId = i + 1;
+            workerRecords.push({ id: `${jobId}_w${workerId}`, job_id: jobId, status: 'processing', progress: 0 });
 
-        console.log(`🚀 Arama Tetiklendi: ${jobId}`);
+            EdgeRuntime.waitUntil(
+                supabase.functions.invoke('perform-trademark-similarity-search', {
+                    body: { action: 'worker', jobId, workerId, monitoredMarks: chunk, selectedBulletinId, lastId: '0', processedCount: 0, totalBulletinRecords: totalRecords },
+                    headers: { Authorization: `Bearer ${supabaseKey}` }
+                })
+            );
+        }
+
+        await supabase.from('search_progress_workers').insert(workerRecords);
+
+        console.log(`🚀 Paralel Arama Tetiklendi: ${jobId} (${workerRecords.length} İşçi Başladı)`);
 
         return new Response(JSON.stringify({ success: true, jobId }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
