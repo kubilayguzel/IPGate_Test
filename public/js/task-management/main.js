@@ -1,7 +1,8 @@
 // public/js/task-management/main.js
 
-import { authService, taskService, ipRecordsService, personService, transactionTypeService, supabase } from '../../supabase-config.js';
-import { showNotification, TASK_STATUS_MAP } from '../../utils.js';
+// 🔥 Firebase yerine Supabase importları ve servisleri
+import { authService, taskService, ipRecordsService, accrualService, personService, transactionTypeService, supabase } from '../../supabase-config.js';
+import { showNotification } from '../../utils.js';
 import { loadSharedLayout } from '../layout-loader.js';
 
 // Modüller
@@ -40,7 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Seçili İşlem Durumları
             this.selectedTaskForAssignment = null;
             this.currentTaskForAccrual = null;
-            this.selectedTaskIds = new Set(); 
+            this.selectedTaskIds = new Set();
             this.tasksToAssign = []; 
 
             // Component Yöneticileri
@@ -51,11 +52,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.activeMainTab = 'active'; 
             this.activeSubTab = 'active';  
 
-            this.statusDisplayMap = TASK_STATUS_MAP || {
-                'open': 'Açık', 'in-progress': 'Devam Ediyor', 'completed': 'Tamamlandı',
-                'pending': 'Beklemede', 'cancelled': 'İptal Edildi', 'on-hold': 'Askıda',
-                'awaiting-approval': 'Onay Bekliyor', 'awaiting_client_approval': 'Müvekkil Onayı Bekliyor',
-                'client_approval_opened': 'Müvekkil Onayı - Açıldı', 'client_approval_closed': 'Müvekkil Onayı - Kapatıldı',
+            this.statusDisplayMap = {
+                'open': 'Açık',
+                'in-progress': 'Devam Ediyor',
+                'completed': 'Tamamlandı',
+                'pending': 'Beklemede',
+                'cancelled': 'İptal Edildi',
+                'on-hold': 'Askıda',
+                'awaiting-approval': 'Onay Bekliyor',
+                'awaiting_client_approval': 'Müvekkil Onayı Bekliyor',
+                'client_approval_opened': 'Müvekkil Onayı - Açıldı',
+                'client_approval_closed': 'Müvekkil Onayı - Kapatıldı',
                 'client_no_response_closed': 'Müvekkil Cevaplamadı - Kapatıldı'
             };
         }
@@ -64,8 +71,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.setupStaticEventListeners();
             this.initializePagination();
 
-            // Supabase Auth
-            authService.isSupabaseAvailable = true;
             const user = authService.getCurrentUser();
             if (user) {
                 this.currentUser = user;
@@ -74,9 +79,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 window.location.href = 'index.html';
             }
 
-            // Sekmeler arası canlı yenileme
+            // YENİ SEKMELERDE YAPILAN DÜZENLEMELERİ (TASK UPDATE) CANLI YAKALA
             window.addEventListener('storage', async (e) => {
                 if (e.key === 'crossTabUpdatedTaskId' && e.newValue) {
+                    console.log('🔄 Görev başka bir sekmede güncellendi, İş Yönetimi listesi yenileniyor...');
                     await this.loadAllData();
                     localStorage.removeItem('crossTabUpdatedTaskId');
                 }
@@ -108,11 +114,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             try {
-                // 1. Görevleri çek
-                const tasksResult = await taskService.getTasksForUser(this.currentUser.uid);
+                // 1. Görevleri her zaman taze çek
+                const tasksResult = await taskService.getTasksForUser(); // _enrichTasksWithRelations kullanıyor
                 this.allTasks = tasksResult.success ? tasksResult.data : [];
 
-                // 2. Sabit sözlükleri çek
+                // 2. Sabit sözlükleri sadece BOŞSA çek
                 const fetchPromises = [];
                 if (this.allPersons.length === 0) fetchPromises.push(personService.getPersons());
                 if (this.allUsers.length === 0) fetchPromises.push(taskService.getAllUsers());
@@ -128,7 +134,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 this.buildMaps();
                 this.initForms();
 
-                // 3. Tabloyu çiz
                 this.processData();
                 if (this.pagination) {
                     this.pagination.update(this.filteredData.length);
@@ -159,10 +164,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         initForms() {
-            this.createTaskFormManager = new AccrualFormManager('createTaskAccrualFormContainer', 'createTask', this.allPersons);
+            this.createTaskFormManager = new AccrualFormManager(
+                'createTaskAccrualFormContainer', 
+                'createTask', 
+                this.allPersons
+            );
             this.createTaskFormManager.render();
 
-            this.completeTaskFormManager = new AccrualFormManager('completeAccrualFormContainer', 'comp', this.allPersons);
+            this.completeTaskFormManager = new AccrualFormManager(
+                'completeAccrualFormContainer', 
+                'comp', 
+                this.allPersons
+            );
             this.completeTaskFormManager.render();
             
             this.taskDetailManager = new TaskDetailManager('modalBody');
@@ -171,26 +184,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         processData(preservePage = false) {
             const parseDate = (d) => {
                 if (!d) return null;
-                const parsed = new Date(d);
-                if (isNaN(parsed.getTime())) return null; // 🔥 YENİ: Tarih geçersizse çökmesini engeller
-                return parsed; 
+                return new Date(d); 
             };
 
             this.processedData = this.allTasks.map(task => {
-                const details = task.details || {};
-                const appNo = task.iprecordApplicationNo || details.iprecordApplicationNo || "-";
-                const recordTitle = task.iprecordTitle || details.iprecordTitle || task.relatedIpRecordTitle || "-";
-                const applicantName = task.iprecordApplicantName || details.iprecordApplicantName || "-";
+                const appNo = task.iprecordApplicationNo || "-";
+                const recordTitle = task.iprecordTitle || task.relatedIpRecordTitle || "-";
+                const applicantName = task.iprecordApplicantName || "-";
 
-                const transactionTypeObj = this.transactionTypesMap.get(task.taskType || task.task_type);
+                const transactionTypeObj = this.transactionTypesMap.get(task.taskType);
                 const taskTypeDisplay = transactionTypeObj ? (transactionTypeObj.alias || transactionTypeObj.name) : (task.taskType || 'Bilinmiyor');
 
-                const assignedUser = this.usersMap.get(task.assignedTo_uid || task.assigned_to_user_id);
+                const assignedUser = this.usersMap.get(task.assignedTo_uid);
                 const assignedToDisplay = assignedUser ? (assignedUser.displayName || assignedUser.email) : 'Atanmamış';
 
-                const operationalDueObj = parseDate(task.dueDate || task.due_date || task.operationalDueDate || task.operational_due_date); 
+                const operationalDueObj = parseDate(task.operationalDueDate); 
                 const operationalDueDisplay = operationalDueObj ? operationalDueObj.toLocaleDateString('tr-TR') : 'Belirtilmemiş';
-                const officialDueObj = parseDate(task.officialDueDate || task.official_due_date); 
+                const officialDueObj = parseDate(task.officialDueDate); 
                 const officialDueDisplay = officialDueObj ? officialDueObj.toLocaleDateString('tr-TR') : 'Belirtilmemiş';
 
                 const statusText = this.statusDisplayMap[task.status] || task.status;
@@ -231,11 +241,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 if (this.activeMainTab === 'active') {
                     matchesTab = !isAccrualTask && !isFinished;
-                } else if (this.activeMainTab === 'completed') {
+                } 
+                else if (this.activeMainTab === 'completed') {
                     matchesTab = !isAccrualTask && isFinished;
-                } else if (this.activeMainTab === 'accrual') {
+                } 
+                else if (this.activeMainTab === 'accrual') {
                     if (isAccrualTask) {
-                        matchesTab = this.activeSubTab === 'active' ? !isFinished : isFinished;
+                        matchesTab = (this.activeSubTab === 'active') ? !isFinished : isFinished;
                     }
                 }
 
@@ -245,7 +257,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.sortData();
 
             if (this.pagination) {
-                if (!preservePage) this.pagination.reset();
+                if (!preservePage) {
+                    this.pagination.reset();
+                }
                 this.pagination.update(this.filteredData.length);
             }
             
@@ -259,6 +273,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 this.sortState.key = key;
                 this.sortState.direction = 'asc';
             }
+            
             this.sortData();
             this.renderTable();
         }
@@ -268,8 +283,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             const multiplier = direction === 'asc' ? 1 : -1;
 
             this.filteredData.sort((a, b) => {
-                let valA = a[key] || '';
-                let valB = b[key] || '';
+                let valA = a[key];
+                let valB = b[key];
+
+                if (valA == null) valA = '';
+                if (valB == null) valB = '';
 
                 if (valA instanceof Date && valB instanceof Date) return (valA - valB) * multiplier;
                 if (valA instanceof Date) return -1 * multiplier; 
@@ -278,7 +296,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (key === 'id') {
                     const numA = parseFloat(String(valA).replace(/[^0-9]/g, ''));
                     const numB = parseFloat(String(valB).replace(/[^0-9]/g, ''));
-                    if (!isNaN(numA) && !isNaN(numB)) return (numA - numB) * multiplier;
+                    if (!isNaN(numA) && !isNaN(numB)) {
+                        return (numA - numB) * multiplier;
+                    }
                 }
 
                 return String(valA).localeCompare(String(valB), 'tr') * multiplier;
@@ -314,12 +334,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (noRecordsMsg) noRecordsMsg.style.display = 'none';
             }
 
-            let currentData = this.pagination ? this.pagination.getCurrentPageData(this.filteredData) : this.filteredData;
-            let html = '';
+            let currentData = this.filteredData;
+            if (this.pagination) {
+                currentData = this.pagination.getCurrentPageData(this.filteredData);
+            }
 
+            let html = '';
             currentData.forEach(task => {
                 const safeStatus = (task.status || '').toString();
                 const statusClass = `status-${safeStatus.replace(/ /g, '_').toLowerCase()}`;
+                
                 const safePriority = (task.priority || 'normal').toString();
                 const priorityClass = `priority-${safePriority.toLowerCase()}`;
 
@@ -335,8 +359,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                         <td>${task.taskTypeDisplay}</td>
                         <td><span class="priority-badge ${priorityClass}">${safePriority}</span></td>
                         <td>${task.assignedToDisplay}</td>
-                        <td data-field="operationalDue" data-date="${task.operationalDueObj ? task.operationalDueObj.toISOString() : ''}">${task.operationalDueDisplay}</td>
-                        <td data-field="officialDue" data-date="${task.officialDueObj ? task.officialDueObj.toISOString() : ''}">${task.officialDueDisplay}</td>
+                        <td data-field="operationalDue" data-date="${task.operationalDue}">${task.operationalDueDisplay}</td>
+                        <td data-field="officialDue" data-date="${task.officialDue}">${task.officialDueDisplay}</td>
                         <td><span class="status-badge ${statusClass}">${task.statusText}</span></td>
                         <td class="text-center" style="overflow:visible;">${this.getActionButtonsHtml(task)}</td>
                     </tr>
@@ -360,6 +384,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (selectAllCb) {
                 const newSelectAll = selectAllCb.cloneNode(true);
                 selectAllCb.parentNode.replaceChild(newSelectAll, selectAllCb);
+                
                 newSelectAll.addEventListener('change', (e) => {
                     const isChecked = e.target.checked;
                     rowCbs.forEach(cb => {
@@ -375,7 +400,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 cb.addEventListener('change', (e) => {
                     if (e.target.checked) this.selectedTaskIds.add(e.target.value);
                     else this.selectedTaskIds.delete(e.target.value);
-                    if (selectAllCb) selectAllCb.checked = Array.from(rowCbs).every(c => c.checked);
+                    
+                    if (selectAllCb) {
+                        selectAllCb.checked = Array.from(rowCbs).every(c => c.checked);
+                    }
                     this.updateBatchAssignButton();
                 });
             });
@@ -422,6 +450,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <button class="btn btn-sm btn-light text-secondary rounded-circle" type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
                     <i class="fas fa-ellipsis-v" style="pointer-events: none;"></i>
                 </button>
+                
                 <div class="dropdown-menu dropdown-menu-right shadow-sm border-0 p-2" style="min-width: auto;">
                     <div class="d-flex justify-content-center align-items-center" style="gap: 5px;">
                         ${buttonsHtml}
@@ -431,6 +460,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             `;
         }
 
+        // --- EVENT LISTENERS ---
         setupStaticEventListeners() {
             const mainTabs = document.querySelectorAll('#mainTaskTabs .nav-link');
             const subTabContainer = document.getElementById('accrualSubTabsContainer');
@@ -438,12 +468,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             mainTabs.forEach(tab => {
                 tab.addEventListener('click', (e) => {
                     e.preventDefault();
-                    mainTabs.forEach(t => { t.classList.remove('active'); t.style.color = '#6c757d'; });
+                    
+                    mainTabs.forEach(t => {
+                        t.classList.remove('active');
+                        t.style.color = '#6c757d';
+                    });
                     e.currentTarget.classList.add('active');
                     e.currentTarget.style.color = '#495057';
+
                     this.activeMainTab = e.currentTarget.dataset.tab;
-                    if (this.activeMainTab === 'accrual') subTabContainer.style.display = 'block';
-                    else subTabContainer.style.display = 'none';
+
+                    if (this.activeMainTab === 'accrual') {
+                        subTabContainer.style.display = 'block';
+                    } else {
+                        subTabContainer.style.display = 'none';
+                    }
+
                     this.handleSearch();
                 });
             });
@@ -463,7 +503,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (searchInput) {
                 searchInput.addEventListener('input', (e) => {
                     if (this.searchTimeout) clearTimeout(this.searchTimeout);
-                    this.searchTimeout = setTimeout(() => { this.handleSearch(e.target.value); }, 300);
+                    this.searchTimeout = setTimeout(() => {
+                        this.handleSearch(e.target.value);
+                    }, 300);
                 });
             }
 
@@ -478,7 +520,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const headers = document.querySelectorAll('#tasksTableHeaderRow th[data-sort]');
             headers.forEach(th => {
                 th.style.cursor = 'pointer';
-                th.addEventListener('click', () => { this.handleSort(th.dataset.sort); });
+                th.addEventListener('click', () => {
+                    this.handleSort(th.dataset.sort);
+                });
             });
 
             const tbody = document.getElementById('tasksTableBody');
@@ -488,6 +532,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (!btn) return;
                     e.preventDefault();
                     e.stopPropagation();
+                    
                     const taskId = btn.dataset.id;
                     
                     if (btn.classList.contains('edit-btn')) {
@@ -518,16 +563,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             document.getElementById('cancelAssignmentBtn')?.addEventListener('click', () => this.closeModal('assignTaskModal'));
             document.getElementById('saveNewAssignmentBtn')?.addEventListener('click', () => this.saveNewAssignment());
+
             document.getElementById('cancelCreateTaskAccrualBtn')?.addEventListener('click', () => this.closeModal('createTaskAccrualModal'));
             document.getElementById('saveNewAccrualBtn')?.addEventListener('click', () => this.handleSaveNewAccrual());
+
             document.getElementById('cancelCompleteAccrualBtn')?.addEventListener('click', () => this.closeModal('completeAccrualTaskModal'));
             document.getElementById('submitCompleteAccrualBtn')?.addEventListener('click', () => this.handleCompleteAccrualSubmission());
             document.getElementById('batchAssignBtn')?.addEventListener('click', () => this.openAssignTaskModal());
-            document.getElementById('btnExportSelected')?.addEventListener('click', (e) => { e.preventDefault(); this.exportToExcel('selected'); });
-            document.getElementById('btnExportAll')?.addEventListener('click', (e) => { e.preventDefault(); this.exportToExcel('all'); });      
+            
+            document.getElementById('btnExportSelected')?.addEventListener('click', (e) => { 
+                e.preventDefault(); 
+                this.exportToExcel('selected'); 
+            });
+            document.getElementById('btnExportAll')?.addEventListener('click', (e) => { 
+                e.preventDefault(); 
+                this.exportToExcel('all'); 
+            });      
+                
         }
 
-        // --- İŞLEMLER ---
+        // --- İŞLEMLER ve MODALLAR ---
+
         async showTaskDetailModal(taskId) {
             const modalElement = document.getElementById('taskDetailModal');
             const modalTitle = document.getElementById('modalTaskTitle');
@@ -538,36 +594,42 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.taskDetailManager.showLoading();
 
             try {
-                // Taze Veri Çekimi
-                const { data: taskSnap, error: taskErr } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
-                if (taskErr || !taskSnap) {
+                // 🔥 Supabase: Görevi Çek
+                const taskResult = await taskService.getTaskById(taskId);
+                if (!taskResult.success) {
                     this.taskDetailManager.showError('Bu iş kaydı bulunamadı.');
                     return;
                 }
-                const task = { id: taskSnap.id, ...(taskSnap.details || {}), ...taskSnap };
+                const task = taskResult.data;
                 modalTitle.textContent = `İş Detayı (${task.id})`;
 
+                // 🔥 Supabase: İlişkili Portföyü Çek
                 let ipRecord = null;
-                const recId = task.relatedIpRecordId || task.ip_record_id;
-                if (recId) {
+                if (task.relatedIpRecordId) {
                     try {
-                        const { data: ipSnap } = await supabase.from('ip_records').select('*').eq('id', String(recId)).single();
-                        if (ipSnap) {
-                            ipRecord = { id: ipSnap.id, ...ipSnap.details, ...ipSnap };
+                        const { data: ipData } = await supabase.from('ip_records').select('*').eq('id', String(task.relatedIpRecordId)).maybeSingle();
+                        if (ipData) {
+                            ipRecord = ipData;
                         } else {
-                            const { data: suitSnap } = await supabase.from('suits').select('*').eq('id', String(recId)).single();
-                            if (suitSnap) ipRecord = { id: suitSnap.id, ...suitSnap.details, ...suitSnap };
+                            const { data: suitData } = await supabase.from('suits').select('*').eq('id', String(task.relatedIpRecordId)).maybeSingle();
+                            if (suitData) ipRecord = suitData;
                         }
-                    } catch(e) {}
+                    } catch(e) { console.warn("Kayıt detayı çekilemedi:", e); }
                 }
-                
-                const transactionType = this.transactionTypesMap.get(task.taskType || task.task_type);
-                const assignedUser = this.usersMap.get(task.assignedTo_uid || task.assigned_to_user_id);
-                
-                const { data: accData } = await supabase.from('accruals').select('*').eq('task_id', String(task.id));
-                const relatedAccruals = accData ? accData.map(d => ({ id: d.id, ...d.details, ...d })) : [];
 
-                this.taskDetailManager.render(task, { ipRecord, transactionType, assignedUser, accruals: relatedAccruals });
+                const transactionType = this.transactionTypesMap.get(task.taskType);
+                const assignedUser = this.usersMap.get(task.assignedTo_uid);
+                
+                // 🔥 Supabase: Bu işe ait tahakkukları çek
+                const accResult = await accrualService.getAccrualsByTaskId(task.id);
+                const relatedAccruals = accResult.success ? accResult.data : [];
+
+                this.taskDetailManager.render(task, {
+                    ipRecord: ipRecord,
+                    transactionType: transactionType,
+                    assignedUser: assignedUser,
+                    accruals: relatedAccruals
+                });
 
             } catch (error) {
                 console.error(error);
@@ -577,15 +639,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         openAssignTaskModal(taskId = null) {
             this.tasksToAssign = [];
+            
             if (taskId) {
                 const t = this.allTasks.find(task => task.id === String(taskId));
                 if(t) this.tasksToAssign.push(t);
-            } else {
+            } 
+            else {
                 this.tasksToAssign = this.allTasks.filter(t => this.selectedTaskIds.has(String(t.id)));
             }
 
             if (this.tasksToAssign.length === 0) { 
-                showNotification('Atanacak iş bulunamadı veya seçilmedi.', 'error'); return; 
+                showNotification('Atanacak iş bulunamadı veya seçilmedi.', 'error'); 
+                return; 
             }
 
             const select = document.getElementById('newAssignedTo');
@@ -595,7 +660,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const opt = document.createElement('option');
                     opt.value = user.id;
                     opt.textContent = user.displayName || user.email;
-                    if (this.tasksToAssign.length === 1 && (user.id === this.tasksToAssign[0].assignedTo_uid || user.id === this.tasksToAssign[0].assigned_to_user_id)) {
+                    if (this.tasksToAssign.length === 1 && user.id === this.tasksToAssign[0].assignedTo_uid) {
                         opt.selected = true;
                     }
                     select.appendChild(opt);
@@ -613,21 +678,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             try {
                 const assignPromises = this.tasksToAssign.map(task => {
-                    const assignedEmail = task.assignedTo_email || task.assignedToEmail || 'Atanmamış';
+                    const updateData = { assignedTo_uid: uid, assignedTo_email: user.email };
                     const historyEntry = { 
-                        action: `İş yeniden atandı: ${assignedEmail} -> ${user.email}`, 
+                        action: `İş yeniden atandı: ${task.assignedTo_email || 'Atanmamış'} -> ${user.email}`, 
                         timestamp: new Date().toISOString(), 
                         userEmail: this.currentUser.email 
                     };
+                    
                     let history = task.history ? [...task.history] : [];
                     history.push(historyEntry);
+                    updateData.history = history;
 
-                    return taskService.updateTask(task.id, {
-                        ...task,
-                        assignedTo_uid: uid, 
-                        assignedToEmail: user.email,
-                        history: history 
-                    });
+                    return taskService.updateTask(task.id, updateData);
                 });
 
                 await Promise.all(assignPromises); 
@@ -651,18 +713,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         async deleteTask(taskId) {
-            // Şimdilik sadece uyarı veriyoruz çünkü task silme methodu taskService içinde eklenmediyse diye
-            if (confirm('Bu görevi silmek istediğinize emin misiniz?')) {
+            if (confirm('Bu görevi ve ilişkili verileri silmek istediğinize emin misiniz?')) {
                 let loader = window.showSimpleLoading ? window.showSimpleLoading('Siliniyor') : null;
-                try {
-                    const { error } = await supabase.from('tasks').delete().eq('id', String(taskId));
-                    if(error) throw error;
-                    if (loader) loader.hide();
+                
+                // Supabase: Görev silme (taskService içinde deleteTask metodunuz olduğunu varsayarak)
+                const { error } = await supabase.from('tasks').delete().eq('id', String(taskId));
+                
+                if (loader) loader.hide();
+                
+                if (!error) { 
                     showNotification('Silindi.', 'success'); 
                     await this.loadAllData(); 
-                } catch(e) {
-                    if (loader) loader.hide();
-                    showNotification('Hata: ' + e.message, 'error'); 
+                } else { 
+                    showNotification('Hata: ' + error.message, 'error'); 
                 }
             }
         }
@@ -678,33 +741,33 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 const getEpats = (t) => {
                     if (!t) return null;
-                    if (t.details && Array.isArray(t.details.documents)) return t.details.documents.find(d => d.type === 'epats_document');
-                    if (Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                    return (t.details && t.details.epatsDocument) || t.epatsDocument || t.epats_document || null;
+                    if (t.documents && Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
+                    return t.epatsDocument || null;
                 };
 
                 let epatsDoc = getEpats(this.currentTaskForAccrual);
-                const parentId = this.currentTaskForAccrual.relatedTaskId || this.currentTaskForAccrual.associatedTaskId || this.currentTaskForAccrual.triggeringTaskId;
+                const parentId = this.currentTaskForAccrual.transactionId || null; // Supabase tarafında parent takibi transaction tablosundan yapılır genelde
                 
                 if (!epatsDoc && parentId) {
-                    let parent = this.allTasks.find(t => String(t.id) === String(parentId));
-                    if (!parent) {
-                        try {
-                            const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(parentId)).single();
-                            if (parentSnap) parent = { ...parentSnap.details, ...parentSnap };
-                        } catch (e) {}
-                    }
-                    epatsDoc = getEpats(parent);
+                    try {
+                        const { data: tx } = await supabase.from('transactions').select('task_id').eq('id', parentId).maybeSingle();
+                        if (tx && tx.task_id) {
+                            const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(tx.task_id)).maybeSingle();
+                            if (parentSnap) epatsDoc = getEpats(parentSnap);
+                        }
+                    } catch (e) { console.warn('Parent task fetch error:', e); }
                 }
+                
                 this.createTaskFormManager.showEpatsDoc(epatsDoc);
             }
+            
             document.getElementById('createTaskAccrualModal').classList.add('show');
         }
 
         async handleSaveNewAccrual() { 
             if (!this.currentTaskForAccrual) return;
 
-            const btn = document.getElementById('saveNewAccrualBtn');
+            const btn = document.getElementById('saveNewAccrualBtn') || document.getElementById('submitNewAccrualBtn');
             if (btn) btn.disabled = true;
 
             const result = this.createTaskFormManager.getData();
@@ -716,19 +779,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const formData = result.data;
             let loader = window.showSimpleLoading ? window.showSimpleLoading('Tahakkuk Kaydediliyor') : null;
+
             const { files, ...formDataNoFiles } = formData;
 
+            // 🔥 Supabase Storage Dosya Yükleme
             let uploadedFiles = [];
             if (files && files.length > 0) {
                 try {
                     const file = files[0];
-                    const cleanName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                    const path = `accruals/foreign_invoices/${Date.now()}_${cleanName}`;
+                    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                    const filePath = `foreign_invoices/${Date.now()}_${cleanFileName}`;
                     
-                    const { error: upErr } = await supabase.storage.from('task_documents').upload(path, file);
-                    if (upErr) throw upErr;
+                    const { error: uploadError } = await supabase.storage.from('accruals').upload(filePath, file);
+                    if (uploadError) throw uploadError;
 
-                    const { data: urlData } = supabase.storage.from('task_documents').getPublicUrl(path);
+                    const { data: urlData } = supabase.storage.from('accruals').getPublicUrl(filePath);
 
                     uploadedFiles.push({ 
                         name: file.name, 
@@ -745,31 +810,33 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
+            // JSONB'ye uyumlu hale getirilmiş payload
             const newAccrual = {
-                task_id: this.currentTaskForAccrual.id,
+                taskId: this.currentTaskForAccrual.id,
+                taskTitle: this.currentTaskForAccrual.title,
+
+                ...formDataNoFiles,
+
+                tpeInvoiceNo: formDataNoFiles.tpeInvoiceNo?.trim() || null,
+                evrekaInvoiceNo: formDataNoFiles.evrekaInvoiceNo?.trim() || null,
+                totalAmountCurrency: formDataNoFiles.totalAmountCurrency || 'TRY',
+                remainingAmount: formDataNoFiles.totalAmount,
+
                 status: 'unpaid',
-                created_at: new Date().toISOString(),
-                evreka_invoice_no: formDataNoFiles.evrekaInvoiceNo?.trim() || null,
-                tpe_invoice_no: formDataNoFiles.tpeInvoiceNo?.trim() || null,
-                details: {
-                    taskTitle: this.currentTaskForAccrual.title,
-                    ...formDataNoFiles,
-                    totalAmountCurrency: formDataNoFiles.totalAmountCurrency || 'TRY',
-                    remainingAmount: formDataNoFiles.totalAmount,
-                    files: uploadedFiles
-                }
+                createdAt: new Date().toISOString(),
+                files: uploadedFiles
             };
 
             try {
-                const { error: addErr } = await supabase.from('accruals').insert(newAccrual);
+                const res = await accrualService.addAccrual(newAccrual); // config.js içindeki dönüşüm halledecek
                 if (loader) loader.hide();
 
-                if (!addErr) { 
+                if (res.success) { 
                     showNotification('Ek tahakkuk başarıyla oluşturuldu!', 'success'); 
                     this.closeModal('createTaskAccrualModal'); 
                     await this.loadAllData(); 
                 } else { 
-                    showNotification('Hata: ' + addErr.message, 'error'); 
+                    showNotification('Hata: ' + res.error, 'error'); 
                 }
             } catch (e) {
                 if (loader) loader.hide();
@@ -787,39 +854,52 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if(this.completeTaskFormManager) {
                 this.completeTaskFormManager.reset();
+                
                 const getEpats = (t) => {
                     if (!t) return null;
-                    if (t.details && Array.isArray(t.details.documents)) return t.details.documents.find(d => d.type === 'epats_document');
-                    if (Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                    return (t.details && t.details.epatsDocument) || t.epatsDocument || t.epats_document || null;
+                    if (t.documents && Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
+                    return t.epatsDocument || null;
                 };
 
                 let epatsDoc = getEpats(task);
-                const parentId = task.relatedTaskId || task.associatedTaskId || task.triggeringTaskId;
+                const parentId = task.transactionId || null;
                 
                 if (!epatsDoc && parentId) {
-                    let parent = this.allTasks.find(t => String(t.id) === String(parentId));
-                    if (!parent) {
-                        try {
-                            const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(parentId)).single();
-                            if (parentSnap) parent = { ...parentSnap.details, ...parentSnap };
-                        } catch (e) {}
-                    }
-                    epatsDoc = getEpats(parent);
+                    try {
+                        const { data: tx } = await supabase.from('transactions').select('task_id').eq('id', parentId).maybeSingle();
+                        if (tx && tx.task_id) {
+                            const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(tx.task_id)).maybeSingle();
+                            if (parentSnap) epatsDoc = getEpats(parentSnap);
+                        }
+                    } catch (e) { console.warn('Parent task fetch error:', e); }
                 }
                 
                 this.completeTaskFormManager.showEpatsDoc(epatsDoc);
 
-                const targetAccrualId = task.details?.targetAccrualId;
+                const targetAccrualId = task.targetAccrualId || task.target_accrual_id; // Yeni jsonb olmayan yapıya göre
                 if (targetAccrualId) {
                     try {
                         const { data: accSnap } = await supabase.from('accruals').select('*').eq('id', String(targetAccrualId)).single();
                         if (accSnap) {
-                            this.completeTaskFormManager.setData({ ...accSnap.details, ...accSnap });
+                            // Backend'den (snake) gelen veriyi UI'a (camel) mapleyerek Set et
+                            const mappedAcc = {
+                                ...accSnap,
+                                totalAmount: accSnap.total_amount,
+                                remainingAmount: accSnap.remaining_amount,
+                                officialFee: accSnap.official_fee,
+                                serviceFee: accSnap.service_fee,
+                                vatRate: accSnap.vat_rate,
+                                tpeInvoiceNo: accSnap.tpe_invoice_no,
+                                evrekaInvoiceNo: accSnap.evreka_invoice_no
+                            };
+                            this.completeTaskFormManager.setData(mappedAcc);
                         }
-                    } catch (e) {}
+                    } catch (e) {
+                        console.warn('Target accrual fetch error:', e);
+                    }
                 }
             }
+
             document.getElementById('completeAccrualTaskModal').classList.add('show');
         }
 
@@ -843,18 +923,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             let loader = window.showSimpleLoading ? window.showSimpleLoading('İşlem Tamamlanıyor') : null;
 
+            // 🔥 Supabase Storage
             let uploadedFiles = [];
             if (files && files.length > 0) {
                 try {
                     const file = files[0];
-                    const cleanName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                    const path = `accruals/foreign_invoices/${Date.now()}_${cleanName}`;
+                    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                    const filePath = `foreign_invoices/${Date.now()}_${cleanFileName}`;
                     
-                    const { error: upErr } = await supabase.storage.from('task_documents').upload(path, file);
-                    if (upErr) throw upErr;
+                    const { error: uploadError } = await supabase.storage.from('accruals').upload(filePath, file);
+                    if (uploadError) throw uploadError;
 
-                    const { data: urlData } = supabase.storage.from('task_documents').getPublicUrl(path);
-
+                    const { data: urlData } = supabase.storage.from('accruals').getPublicUrl(filePath);
+                    
                     uploadedFiles.push({
                         name: file.name,
                         url: urlData.publicUrl,
@@ -873,62 +954,57 @@ document.addEventListener('DOMContentLoaded', async () => {
             const cleanTitle = task.title ? task.title.replace('Tahakkuk Oluşturma: ', '') : 'Tahakkuk';
 
             const basePayload = {
-                task_id: task.relatedTaskId || taskId,
-                evreka_invoice_no: formDataNoFiles.evrekaInvoiceNo?.trim() || null,
-                tpe_invoice_no: formDataNoFiles.tpeInvoiceNo?.trim() || null,
-                details: {
-                    taskTitle: cleanTitle,
-                    ...formDataNoFiles
-                }
+                taskId: task.relatedTaskId || taskId,
+                taskTitle: cleanTitle,
+                ...formDataNoFiles,
+                tpeInvoiceNo: formDataNoFiles.tpeInvoiceNo?.trim() || null,
+                evrekaInvoiceNo: formDataNoFiles.evrekaInvoiceNo?.trim() || null
             };
 
-            const targetAccrualId = task.details?.targetAccrualId;
+            const targetAccrualId = task.targetAccrualId || task.target_accrual_id;
 
             try {
                 if (targetAccrualId) {
-                    const { data: existing, error: fetchErr } = await supabase.from('accruals').select('*').eq('id', String(targetAccrualId)).single();
-                    if (fetchErr || !existing) throw new Error('Güncellenecek tahakkuk bulunamadı.');
+                    const { data: existing } = await supabase.from('accruals').select('*').eq('id', String(targetAccrualId)).single();
+                    if (!existing) throw new Error('Güncellenecek tahakkuk bulunamadı.');
 
-                    const existingDetails = existing.details || {};
-                    const mergedFiles = uploadedFiles.length > 0 ? [ ...(existingDetails.files || []), ...uploadedFiles ] : (existingDetails.files || []);
+                    const mergedFiles = uploadedFiles.length > 0
+                        ? [ ...(existing.files || []), ...uploadedFiles ]
+                        : (existing.files || []);
 
                     let remainingAmountUpdate = {};
                     try {
-                        if (JSON.stringify(existingDetails.remainingAmount || null) === JSON.stringify(existingDetails.totalAmount || null)) {
-                            remainingAmountUpdate = { remainingAmount: basePayload.details.totalAmount };
-                        }
+                        const sameRemaining = JSON.stringify(existing.remaining_amount || null) === JSON.stringify(existing.total_amount || null);
+                        if (sameRemaining) remainingAmountUpdate = { remainingAmount: basePayload.totalAmount };
                     } catch (_) {}
 
                     const updates = {
                         ...basePayload,
-                        details: {
-                            ...existingDetails,
-                            ...basePayload.details,
-                            files: mergedFiles,
-                            ...remainingAmountUpdate
-                        }
+                        files: mergedFiles,
+                        ...remainingAmountUpdate
                     };
 
-                    const { error: updErr } = await supabase.from('accruals').update(updates).eq('id', String(targetAccrualId));
-                    if (updErr) throw new Error(updErr.message);
+                    const updRes = await accrualService.updateAccrual(String(targetAccrualId), updates);
+                    if (!updRes.success) throw new Error(updRes.error);
 
                 } else {
-                    const newAccrual = { ...basePayload, status: 'unpaid' };
-                    newAccrual.details.remainingAmount = basePayload.details.totalAmount;
-                    newAccrual.details.files = uploadedFiles;
+                    const newAccrual = {
+                        ...basePayload,
+                        status: 'unpaid',
+                        remainingAmount: basePayload.totalAmount,
+                        files: uploadedFiles
+                    };
 
-                    const { data: addRes, error: addErr } = await supabase.from('accruals').insert(newAccrual).select('id').single();
-                    if (addErr) throw new Error(addErr.message);
+                    const addRes = await accrualService.addAccrual(newAccrual);
+                    if (!addRes.success) throw new Error(addRes.error);
 
-                    await taskService.updateTask(taskId, {
-                        ...task,
-                        details: { ...(task.details || {}), targetAccrualId: addRes.id }
-                    });
+                    await taskService.updateTask(taskId, { target_accrual_id: addRes.data.id });
                 }
 
+                // Görevi kapat
                 const updateData = {
-                    ...task,
                     status: 'completed',
+                    updatedAt: new Date().toISOString(),
                     history: [
                         ...(task.history || []),
                         {
@@ -957,14 +1033,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         async exportToExcel(mode) {
             let dataToExport = [];
+
             if (mode === 'selected') {
-                if (this.selectedTaskIds.size === 0) { showNotification('Lütfen iş seçiniz.', 'warning'); return; }
+                if (this.selectedTaskIds.size === 0) {
+                    showNotification('Lütfen en az bir iş seçiniz.', 'warning');
+                    return;
+                }
                 dataToExport = this.processedData.filter(item => this.selectedTaskIds.has(String(item.id)));
             } else {
                 dataToExport = [...this.filteredData];
             }
 
-            if (dataToExport.length === 0) { showNotification('Aktarılacak veri yok.', 'warning'); return; }
+            if (dataToExport.length === 0) {
+                showNotification('Aktarılacak veri bulunamadı.', 'warning');
+                return;
+            }
 
             let loader = window.showSimpleLoading ? window.showSimpleLoading('Excel Hazırlanıyor') : null;
 
@@ -973,7 +1056,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     return new Promise((resolve, reject) => {
                         if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
                         const script = document.createElement('script');
-                        script.src = src; script.onload = resolve; script.onerror = reject;
+                        script.src = src;
+                        script.onload = resolve;
+                        script.onerror = reject;
                         document.head.appendChild(script);
                     });
                 };
@@ -1017,11 +1102,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 const buffer = await workbook.xlsx.writeBuffer();
                 const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-                window.saveAs(blob, `Is_Yonetimi_${new Date().toISOString().slice(0, 10)}.xlsx`);
-                showNotification('Excel oluşturuldu.', 'success');
+                const dateStr = new Date().toISOString().slice(0, 10);
+                window.saveAs(blob, `Is_Yonetimi_Export_${dateStr}.xlsx`);
+                
+                showNotification('Excel başarıyla oluşturuldu.', 'success');
             } catch (error) {
-                console.error(error);
-                showNotification('Excel oluşturulamadı.', 'error');
+                console.error('Excel Export Hatası:', error);
+                showNotification('Excel oluşturulurken bir hata oluştu.', 'error');
             } finally {
                 if (loader) loader.hide();
             }
@@ -1035,5 +1122,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    new TaskManagementModule().init();
+    const module = new TaskManagementModule();
+    module.init();
+
+    if (window.DeadlineHighlighter) {
+        window.DeadlineHighlighter.init();
+        window.DeadlineHighlighter.registerList('taskManagement', {
+            container: '#taskManagementTable',
+            rowSelector: '#tasksTableBody tr',
+            dateFields: [
+                { name: 'operationalDue', selector: '[data-field="operationalDue"]' },
+                { name: 'officialDue',    selector: '[data-field="officialDue"]' }
+            ],
+            strategy: 'earliest',
+            applyTo: 'row',
+            showLegend: true
+        });
+    }
 });
