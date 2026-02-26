@@ -11,12 +11,28 @@ const FONT_FAMILY = "Montserrat"; const GLOBAL_FONT_SIZE = 18;
 const COLORS = { CLIENT_HEADER: "1E40AF", SIMILAR_HEADER: "64748B", TEXT_DARK: "1E293B", NICE_BG: "F1F5F9", BORDER_LIGHT: "E2E8F0", DEADLINE_BG: "DBEAFE", DEADLINE_TEXT: "1E40AF", EXPERT_BG: "F8FAFC", EXPERT_BORDER: "1E40AF" };
 function isWeekend(date: Date) { return date.getDay() === 0 || date.getDay() === 6; }
 
+// 🔥 DÜZELTME 1: Resimler artık Link veya Base64 geliyor. Tam uyumlu hale getirildi.
 async function downloadImageAsBuffer(imagePath: string, supabase: any): Promise<ArrayBuffer | null> {
     if (!imagePath) return null;
     try {
-        if (imagePath.startsWith('http')) { const resp = await fetch(imagePath); return resp.ok ? await resp.arrayBuffer() : null; }
+        // Base64 formatındaysa (Manuel eklenenler genelde böyledir)
+        if (imagePath.startsWith('data:image')) {
+            const base64Data = imagePath.split(',')[1];
+            const binaryString = atob(base64Data);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); }
+            return bytes.buffer;
+        }
+        // Tam URL ise (Frontend publicUrl'e çevirip yolluyor)
+        if (imagePath.startsWith('http')) { 
+            const resp = await fetch(imagePath); 
+            return resp.ok ? await resp.arrayBuffer() : null; 
+        }
+        // Sadece storage path ise
         const { data, error } = await supabase.storage.from('brand_images').download(imagePath);
-        if (error) return null; return await data.arrayBuffer();
+        if (error) return null; 
+        return await data.arrayBuffer();
     } catch (e) { return null; }
 }
 
@@ -111,7 +127,7 @@ serve(async (req) => {
             const fileName = `${safeDocName}_Rapor.docx`;
             zip.file(fileName, docBuffer);
 
-            // Mail Bildirimi İçin Son Tarih
+            // Mail Bildirimi İçin Son Tarih Hesaplama
             let mailObjectionDeadline = "-";
             const bDateStr = matches[0]?.similarMark?.bulletinDate || matches[0]?.similarMark?.applicationDate;
             if (bDateStr && typeof bDateStr === 'string') {
@@ -130,21 +146,28 @@ serve(async (req) => {
                 await supabase.storage.from('brand_images').upload(storagePath, docBuffer, { contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', upsert: true });
                 const { data: pUrlData } = supabase.storage.from('brand_images').getPublicUrl(storagePath);
 
-                // 🔥 ŞEMA UYUMLU MAİL KAYDI
+                // 🔥 DÜZELTME 2: `mail_notifications` tablosuna kayıt atılırken Supabase şemanıza uygun (`record_id` vb.) kolonlar kullanıldı.
+                // Not: 'files' diye ayrı bir kolon yerine, genelde her şeyi 'details' isimli JSONB kolonu içinde tutmak hata riskini sıfıra indirir.
                 const { error: mailError } = await supabase.from('mail_notifications').insert({
-                    related_ip_record_id: targetClientId,
+                    record_id: targetClientId, // related_ip_record_id yerine record_id yapıldı
                     subject: `${bulletinNo} Sayılı Bülten İzleme Raporu`,
                     body: `<p>Sayın İlgili,</p><p>${bulletinNo} sayılı bülten marka izleme raporunuz ekte sunulmuştur.</p>`,
                     status: 'awaiting_client_approval',
-                    files: [{ fileName, storagePath, url: pUrlData.publicUrl }],
+                    created_at: new Date().toISOString(),
                     details: {
-                        client_id: targetClientId, applicant_name: ownerNameKey, bulletin_no: String(bulletinNo), objection_deadline: mailObjectionDeadline,
-                        mode: 'draft', is_draft: true, notification_type: 'marka', source: 'bulletin_watch_system', task_attachments: [{ name: fileName, storagePath, url: pUrlData.publicUrl }]
+                        client_id: targetClientId, 
+                        applicant_name: ownerNameKey, 
+                        bulletin_no: String(bulletinNo), 
+                        objection_deadline: mailObjectionDeadline,
+                        is_draft: true, 
+                        notification_type: 'marka', 
+                        source: 'bulletin_watch_system', 
+                        attachments: [{ fileName, storagePath, url: pUrlData.publicUrl }] // Dosyaları JSON içine gömdük
                     }
                 });
 
                 if (mailError) console.error("❌ Mail Bildirimi Eklenemedi:", mailError);
-                else console.log("✅ Mail Bildirimi Eklendi!");
+                else console.log("✅ Mail Bildirimi Başarıyla Eklendi!");
             }
         }
 
