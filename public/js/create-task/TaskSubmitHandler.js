@@ -86,11 +86,14 @@ export class TaskSubmitHandler {
                 }
             } else if (selectedTaskType.alias === 'Başvuru' && selectedTaskType.ipType === 'trademark') {
                 ipTitle = document.getElementById('brandExampleText')?.value || taskTitle || "-";
+                
+                // 🔥 Başvuru sahibini kesin olarak yakalıyoruz
                 if (selectedApplicants && selectedApplicants.length > 0) {
                     ipAppName = selectedApplicants[0].name || "-";
                 }
             }
 
+            // Supabase'e uygun snake_case ve düzleştirilmiş veri yapısı
             let taskData = {
                 task_type: String(selectedTaskType.id),
                 title: taskTitle,
@@ -106,8 +109,17 @@ export class TaskSubmitHandler {
                 iprecord_title: ipTitle,
                 iprecord_applicant_name: ipAppName,
 
-                documents: [] 
+                documents: [],
+                history: [] // 🔥 History dizisi
             };
+
+            // 🔥 Orijinal History İlk Kayıt Logu (Görev oluşturuldu bilgisi)
+            const currentUser = authService.getCurrentUser();
+            taskData.history.push({
+                action: "Görev oluşturuldu",
+                timestamp: new Date().toISOString(),
+                userEmail: currentUser?.email || currentUser?.displayName || 'Bilinmiyor'
+            });
 
             const manualDueDate = document.getElementById('taskDueDate')?.value;
             if (manualDueDate) {
@@ -116,7 +128,17 @@ export class TaskSubmitHandler {
                 taskData.operational_due_date = new Date(manualDueDate).toISOString();
             }
 
+            // Party ve Owner (Sahip) Atamaları
             this._enrichTaskWithParties(taskData, selectedTaskType, selectedRelatedParties, selectedRelatedParty, selectedIpRecord);
+
+            // 🔥 Başvuru işlemiyse taskOwner'ı ve ilgili tarafı ekstradan doldur
+            if (selectedTaskType.alias === 'Başvuru' && selectedTaskType.ipType === 'trademark') {
+                if (selectedApplicants && selectedApplicants.length > 0) {
+                    taskData.task_owner = selectedApplicants.map(p => String(p.id));
+                    taskData.related_party_id = selectedApplicants[0].id;
+                    taskData.related_party_name = selectedApplicants[0].name;
+                }
+            }
             
             if (selectedIpRecord && (selectedIpRecord.source === 'bulletin' || selectedIpRecord._source === 'bulletin' || !selectedIpRecord.record_owner_type)) {
                 const newRealRecordId = await this._createRecordFromBulletin(selectedIpRecord);
