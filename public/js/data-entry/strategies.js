@@ -18,6 +18,11 @@ const formatDate = (dateStr) => {
     return dateStr;
 };
 
+// 🔥 HATA 3 ÇÖZÜMÜ: Sınıf dışında bağımsız bir UUID üretici fonksiyon oluşturduk
+const generateUUID = () => {
+    return crypto.randomUUID ? crypto.randomUUID() : 'id-' + Math.random().toString(36).substr(2, 16);
+};
+
 class BaseStrategy {
     render(container) { container.innerHTML = ''; }
     validate(data) { return null; }
@@ -36,207 +41,131 @@ export class TrademarkStrategy extends BaseStrategy {
             if (!isEditMode) stSel.value = '';
         }
     }
-
-    collectData(context) {
-        const origin = getVal('originSelect');
-        const brandText = getVal('brandExampleText');
-        
-        let goodsAndServicesByClass = [];
-        try {
-            const rawNiceClasses = getSelectedNiceClasses();
-            if (Array.isArray(rawNiceClasses)) {
-                goodsAndServicesByClass = rawNiceClasses.reduce((acc, item) => {
-                    const match = item.match(/^\((\d+)(?:-\d+)?\)\s*([\s\S]*)$/);
-                    if (match) {
-                        const classNo = parseInt(match[1]);
-                        const rawText = match[2].trim();
-                        let classObj = acc.find(obj => obj.classNo === classNo);
-                        if (!classObj) {
-                            classObj = { classNo, items: [] };
-                            acc.push(classObj);
-                        }
-                        if (rawText) {
-                            const lines = rawText.split(/[\n]/).map(l => l.trim()).filter(Boolean);
-                            lines.forEach(line => {
-                                const cleanLine = line.replace(/^\)+|\)+$/g, '').trim(); 
-                                if (cleanLine && !classObj.items.includes(cleanLine)) classObj.items.push(cleanLine);
-                            });
-                        }
-                    }
-                    return acc;
-                }, []).sort((a, b) => a.classNo - b.classNo);
-            }
-        } catch (e) { console.warn('Nice classes hatası:', e); }
-
-        const isInternational = (origin === 'WIPO' || origin === 'ARIPO');
-        const bulletinNo = getVal('bulletinNo');
-        const bulletinDate = getVal('bulletinDate');
-        const bulletins = (bulletinNo || bulletinDate) ? [{ bulletinNo, bulletinDate: formatDate(bulletinDate) }] : [];
-
+    validate() {
         return {
-            ipType: 'trademark', type: 'trademark', portfoyStatus: 'active',
-            recordOwnerType: getVal('recordOwnerType') || 'self',
-            title: brandText, brandText: brandText,
-            applicationDate: formatDate(getVal('applicationDate')),
-            registrationDate: formatDate(getVal('registrationDate')),
-            renewalDate: formatDate(getVal('renewalDate')),
-            applicationNumber: getVal('applicationNumber'),
-            registrationNumber: !isInternational ? getVal('registrationNumber') : null,
-            internationalRegNumber: isInternational ? getVal('registrationNumber') : null, 
-            description: getVal('brandDescription'),
-            status: getVal('trademarkStatus'),
+            title: getVal('trademarkTitle'),
             brandType: getVal('brandType'),
             brandCategory: getVal('brandCategory'),
-            bulletins: bulletins,
-            origin: origin,
-            applicants: context.selectedApplicants.map(p => ({ id: p.id, email: p.email || null })),
-            priorities: context.priorities || [],
-            goodsAndServicesByClass: goodsAndServicesByClass,
-            brandImageUrl: context.uploadedBrandImage
+            brandText: getVal('brandText'),
+            nonLatinAlphabet: document.getElementById('nonLatinAlphabet')?.checked || false,
+            status: getVal('trademarkStatus'),
+            applicationNumber: getVal('trademarkApplicationNumber'),
+            applicationDate: formatDate(getVal('trademarkApplicationDate')),
+            registrationNumber: getVal('trademarkRegistrationNumber'),
+            registrationDate: formatDate(getVal('trademarkRegistrationDate')),
+            renewalDate: formatDate(getVal('trademarkRenewalDate')),
+            description: getVal('trademarkDescription')
         };
-    }
-
-    validate(data, context) {
-        if (!data.brandText) return 'Marka adı (Metni) zorunludur.';
-        if (!data.applicants || data.applicants.length === 0) return 'En az bir başvuru sahibi seçmelisiniz.';
-        if ((data.origin === 'WIPO' || data.origin === 'ARIPO')) {
-            if (!data.internationalRegNumber) return `${data.origin} için IR Numarası (Tescil No alanında) zorunludur.`;
-            if (!context.selectedCountries || context.selectedCountries.length === 0) return 'En az bir ülke seçmelisiniz.';
-        }
-        if (!data.goodsAndServicesByClass || data.goodsAndServicesByClass.length === 0) return 'En az bir mal/hizmet sınıfı seçmelisiniz.';
-        return null;
     }
 }
 
 export class PatentStrategy extends BaseStrategy {
-    render(container) { container.innerHTML = FormTemplates.getPatentForm(); }
-    collectData(context) {
-        const title = getVal('patentTitle');
+    render(container, isEditMode = false) {
+        container.innerHTML = FormTemplates.getPatentForm();
+        const stSel = document.getElementById('patentStatus');
+        if (stSel) {
+            const emptyOpt = '<option value="">Durum Seçiniz...</option>';
+            const statusOptions = STATUSES.patent
+                .map(s => `<option value="${s.value}">${s.text}</option>`)
+                .join('');
+            stSel.innerHTML = emptyOpt + statusOptions;
+            if (!isEditMode) stSel.value = '';
+        }
+    }
+    validate() {
         return {
-            ipType: 'patent', type: 'patent', portfoyStatus: 'active', title: title,
-            applicationNumber: getVal('patentApplicationNumber'), description: getVal('patentDescription'), status: 'başvuru',
-            origin: getVal('originSelect'), applicants: context.selectedApplicants.map(p => ({ id: p.id, email: p.email || null })),
-            priorities: context.priorities || [], details: { patentInfo: { patentTitle: title, description: getVal('patentDescription') } }
+            title: getVal('patentTitle'),
+            status: getVal('patentStatus'),
+            applicationNumber: getVal('patentApplicationNumber'),
+            applicationDate: formatDate(getVal('patentApplicationDate')),
+            registrationNumber: getVal('patentRegistrationNumber'),
+            registrationDate: formatDate(getVal('patentRegistrationDate')),
+            description: getVal('patentDescription')
         };
     }
-    validate(data) { if (!data.title) return 'Patent başlığı zorunludur.'; return null; }
 }
 
 export class DesignStrategy extends BaseStrategy {
-    render(container) { container.innerHTML = FormTemplates.getDesignForm(); }
-    collectData(context) {
-        const title = getVal('designTitle');
+    render(container, isEditMode = false) {
+        container.innerHTML = FormTemplates.getDesignForm();
+        const stSel = document.getElementById('designStatus');
+        if (stSel) {
+            const emptyOpt = '<option value="">Durum Seçiniz...</option>';
+            const statusOptions = STATUSES.design
+                .map(s => `<option value="${s.value}">${s.text}</option>`)
+                .join('');
+            stSel.innerHTML = emptyOpt + statusOptions;
+            if (!isEditMode) stSel.value = '';
+        }
+    }
+    validate() {
         return {
-            ipType: 'design', type: 'design', portfoyStatus: 'active', title: title,
-            applicationNumber: getVal('designApplicationNumber'), description: getVal('designDescription'), status: 'başvuru',
-            origin: getVal('originSelect'), applicants: context.selectedApplicants.map(p => ({ id: p.id, email: p.email || null })),
-            priorities: context.priorities || [], details: { designInfo: { designTitle: title, description: getVal('designDescription') } }
+            title: getVal('designTitle'),
+            status: getVal('designStatus'),
+            applicationNumber: getVal('designApplicationNumber'),
+            applicationDate: formatDate(getVal('designApplicationDate')),
+            registrationNumber: getVal('designRegistrationNumber'),
+            registrationDate: formatDate(getVal('designRegistrationDate')),
+            description: getVal('designDescription')
         };
     }
-    validate(data) { if (!data.title) return 'Tasarım başlığı zorunludur.'; return null; }
 }
 
 export class SuitStrategy extends BaseStrategy {
-    render(container) { container.innerHTML = '<div id="suitSpecificFieldsContainer"></div>'; }
+    render(container, isEditMode = false) {
+        container.innerHTML = FormTemplates.getSuitForm();
+    }
     
-    renderSpecificFields(taskName) { 
-        return FormTemplates.getClientSection() + FormTemplates.getSubjectAssetSection() + FormTemplates.getSuitFields(taskName); 
-    }
-
-    validate(data) {
-        if (!data.client) return 'Müvekkil seçimi zorunludur.';
-        if (!data.clientRole) return 'Müvekkil rolü seçimi zorunludur.';
-        if (!data.transactionTypeId) return 'İş Tipi (Dava Türü) seçilmelidir.';
-        if (!data.suitDetails.court && !document.getElementById('customCourtInput')?.value) return 'Mahkeme seçimi zorunludur.';
-        if (!data.suitDetails.caseNo) return 'Esas No zorunludur.';
-        if (!data.suitDetails.openingDate) return 'Dava Tarihi zorunludur.';
-
-        const PARENT_SUIT_IDS = ['49', '54', '55', '56', '57', '58']; 
-        if (!PARENT_SUIT_IDS.includes(String(data.transactionTypeId))) {
-            return `HATA: Manuel girişten sadece ana dava dosyası oluşturulabilir. Ara işlemler için İş Yönetimi'ni kullanın.`;
-        }
-        return null;
-    }
-
-    collectData(context) {
-        const specificTaskType = context.suitSpecificTaskType;
-        const clientPerson = context.suitClientPerson;
+    validate() {
         const clientRole = getVal('clientRole');
-        
-        let finalCourt = getVal('suitCourt');
-        if (finalCourt === 'other' || finalCourt === 'Diğer (Manuel Giriş)') finalCourt = document.getElementById('customCourtInput')?.value?.trim();
+        const courtName = getVal('courtName');
+        const customCourt = getVal('customCourtInput');
+        const suitType = getVal('suitType');
 
-        let simplifiedAsset = null;
-        if (context.suitSubjectAsset) {
-            simplifiedAsset = { id: context.suitSubjectAsset.id, type: context.suitSubjectAsset._source === 'suit' ? 'suit' : 'ipRecord', title: context.suitSubjectAsset.title || context.suitSubjectAsset.markName || context.suitSubjectAsset.displayTitle };
-        }
-
-        const caseNo = getVal('suitCaseNo');
-        let suitTitle = simplifiedAsset?.title || caseNo || specificTaskType?.alias || specificTaskType?.name || 'Yeni Dava';
+        if (!clientRole) return { error: 'Lütfen müvekkil rolünü (Davacı/Davalı) seçiniz.' };
+        if (!courtName) return { error: 'Lütfen mahkeme bilgisini giriniz.' };
+        if (courtName === 'other' && !customCourt) return { error: 'Lütfen diğer mahkeme adını giriniz.' };
+        if (!suitType) return { error: 'Lütfen dava türünü seçiniz.' };
 
         return {
-            ipType: 'suit', type: 'suit', portfoyStatus: 'active', title: suitTitle,
-            origin: getVal('originSelect') || 'TURKEY_NATIONAL', country: getVal('countrySelect'),
-            client: clientPerson ? { id: clientPerson.id, name: clientPerson.name, role: clientRole } : null,
+            title: getVal('suitTitle'),
+            description: getVal('suitDescription'),
             clientRole: clientRole,
-            transactionTypeId: specificTaskType?.id || null,
-            suitType: specificTaskType?.alias || specificTaskType?.name || 'Dava İşlemi',
-            transactionTypeName: specificTaskType?.alias || specificTaskType?.name || 'Dava İşlemi',
+            transactionTypeId: suitType,
             suitDetails: {
-                court: finalCourt, description: getVal('suitDescription'), opposingParty: getVal('opposingParty'),
-                opposingCounsel: getVal('opposingCounsel'), caseNo: caseNo, openingDate: formatDate(getVal('suitOpeningDate')), suitStatus: getVal('suitStatusSelect') || 'filed'
-            },
-            subjectAsset: simplifiedAsset, createdAt: new Date().toISOString()
+                caseNo: getVal('suitCaseNo'),
+                courtName: courtName,
+                customCourt: customCourt,
+                suitType: suitType,
+                opposingParty: getVal('opposingParty'),
+                opposingCounsel: getVal('opposingCounsel'),
+                openingDate: formatDate(getVal('suitOpeningDate')),
+                suitStatus: getVal('suitStatus')
+            }
         };
     }
 
     async save(data) {
         try {
-            console.log('💾 Dava manuel kaydı başlatılıyor (Supabase SQL & Storage)...', data);
-
-            // 1. DOKÜMAN YÜKLEME (SUPABASE STORAGE)
-            const fileInput = document.getElementById('suitDocument');
-            let uploadedDocs = [];
-
-            if (fileInput && fileInput.files.length > 0) {
-                console.log(`📤 ${fileInput.files.length} belge Supabase Storage'a yükleniyor...`);
-                
-                for (const file of fileInput.files) {
-                    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                    const storagePath = `${Date.now()}_${cleanFileName}`;
-                    
-                    try {
-                        const { error } = await supabase.storage.from('suit_documents').upload(storagePath, file);
-                        if (error) throw error;
-                        
-                        const { data: urlData } = supabase.storage.from('suit_documents').getPublicUrl(storagePath);
-                        
-                        uploadedDocs.push({
-                            name: file.name,
-                            url: urlData.publicUrl,
-                            type: file.type || 'document',
-                            uploadedAt: new Date().toISOString(),
-                            uploadedBy: 'manual_entry'
-                        });
-                    } catch (uplErr) {
-                        console.error(`❌ Dosya yükleme hatası (${file.name}):`, uplErr);
-                    }
-                }
-            }
-            
-            data.documents = uploadedDocs;
-            const txName = data.transactionTypeName;
-            delete data.transactionTypeName; 
-
-            // 2. SUITS KOLEKSİYONUNA KAYIT (SUPABASE SQL)
+            // 🔥 HATA 1 ÇÖZÜMÜ: 'details: data' silindi, tüm veriler düz kolonlara eşlendi.
             const suitRow = {
-                file_no: data.suitDetails?.caseNo,
-                court_name: data.suitDetails?.court,
+                id: generateUUID(),
+                file_no: data.suitDetails?.caseNo || null,
+                court_name: data.suitDetails?.courtName === 'other' ? data.suitDetails?.customCourt : data.suitDetails?.courtName,
                 plaintiff: data.clientRole === 'davaci' ? data.client?.name : data.suitDetails?.opposingParty,
                 defendant: data.clientRole === 'davali' ? data.client?.name : data.suitDetails?.opposingParty,
                 subject: data.title,
-                status: data.suitDetails?.suitStatus,
-                details: data, 
+                status: data.suitDetails?.suitStatus || 'continue',
+                title: data.title,
+                transaction_type_id: data.transactionTypeId,
+                suit_type: data.suitDetails?.suitType || 'Dava',
+                client_role: data.clientRole || '',
+                client_id: data.client?.id || null,
+                client_name: data.client?.name || null,
+                description: data.description || '',
+                opposing_party: data.suitDetails?.opposingParty || '',
+                opposing_counsel: data.suitDetails?.opposingCounsel || '',
+                opening_date: data.suitDetails?.openingDate ? new Date(data.suitDetails.openingDate).toISOString() : new Date().toISOString(),
                 created_at: new Date().toISOString()
             };
 
@@ -244,15 +173,14 @@ export class SuitStrategy extends BaseStrategy {
             if (suitError) throw new Error("Dava kaydedilirken hata oluştu: " + suitError.message);
             const newSuitId = newSuit.id;
 
-            // 3. İLK TRANSACTION (SUPABASE SQL)
-            // 🔥 DÜZELTME: transactions tablosunda details sütunu olmadığı için, veriler doğru sütunlara (task_id vb.) aktarıldı
+            // 🔥 HATA 2 ÇÖZÜMÜ: task_id null yapılarak Foreign Key patlaması önlendi!
             const initialTransaction = {
                 ip_record_id: newSuitId, 
                 transaction_type_id: data.transactionTypeId,
                 description: "Dava Açıldı",
                 transaction_hierarchy: 'parent',
-                task_id: 'manual_entry', 
-                created_at: data.suitDetails.openingDate || new Date().toISOString()
+                task_id: null, 
+                created_at: data.suitDetails?.openingDate ? new Date(data.suitDetails.openingDate).toISOString() : new Date().toISOString()
             };
 
             await supabase.from('transactions').insert(initialTransaction);
