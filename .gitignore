@@ -9,3 +9,5 @@ firebase-key.json
 export-supabase.js
 supabase_schema_and_sample.json
 supabase_sample.json
+*.js
+*.json
