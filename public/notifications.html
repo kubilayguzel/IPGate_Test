@@ -299,11 +299,26 @@
     }
 
     function getToCc(notification) {
-      // Artık parseRow sayesinde details objesi %100 düzgün!
-      const to = notification.recipient ? notification.recipient.split(',').map(s => s.trim()).filter(Boolean) : [];
+      // 1. TO (Alıcı) Listesi için güvenli dönüştürme
+      let to = [];
+      // Hem yeni to_list kolonuna hem de eski recipient kolonuna destek veriyoruz
+      let rawTo = notification.to_list || notification.recipient; 
+      
+      if (Array.isArray(rawTo)) {
+          to = rawTo;
+      } else if (typeof rawTo === 'string') {
+          to = rawTo.split(',').map(s => s.trim()).filter(Boolean);
+      }
+
+      // 2. CC (Bilgi) Listesi için güvenli dönüştürme
       let cc = [];
-      if (notification.cc_list) cc = notification.cc_list.split(',').map(s => s.trim()).filter(Boolean);
-      else if (notification.details?.cc_list) cc = Array.isArray(notification.details.cc_list) ? notification.details.cc_list : [];
+      if (Array.isArray(notification.cc_list)) {
+          cc = notification.cc_list;
+      } else if (typeof notification.cc_list === 'string') {
+          cc = notification.cc_list.split(',').map(s => s.trim()).filter(Boolean);
+      } else if (notification.details?.cc_list) {
+          cc = Array.isArray(notification.details.cc_list) ? notification.details.cc_list : [];
+      }
       
       return { toList: to, ccList: cc };
     }
