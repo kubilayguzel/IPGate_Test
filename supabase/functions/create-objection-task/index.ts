@@ -51,15 +51,11 @@ serve(async (req) => {
             ipAppName = monData.owner_name || "-";
         }
 
-        // 2. ATAMA (Tip 20)
-        let assignedUid = null;
-        let assignedEmail = callerEmail || null;
-        const { data: assignData } = await supabase.from('task_assignments').select('assignee_ids').eq('id', '20').maybeSingle();
-        if (assignData && assignData.assignee_ids && assignData.assignee_ids.length > 0) {
-            assignedUid = assignData.assignee_ids[0];
-            const { data: userData } = await supabase.from('users').select('email').eq('id', assignedUid).maybeSingle();
-            if (userData) assignedEmail = userData.email;
-        }
+        // 🔥 2. ATAMA (DÜZELTİLDİ)
+        // İş "awaiting_client_approval" statüsünde açıldığı için task_assignments tablosundaki 
+        // standart kuralı eziyoruz ve doğrudan onay sürecinden sorumlu kişiye atıyoruz.
+        const assignedUid = "dqk6yRN7Kwgf6HIJldLt9Uz77RU2"; 
+        const assignedEmail = "selcanakoglu@evrekapatent.com";
 
         // 3. RESMİ SON TARİH HESAPLAMA
         let officialDueDate = null;
@@ -90,7 +86,7 @@ serve(async (req) => {
 
         const hitMarkName = similarMarkName || similarMark.markName || 'Bilinmeyen Marka';
         
-        // 🚀 5. ÜÇÜNCÜ TARAF (THIRD PARTY) PORTFÖY KAYDINI OLUŞTUR
+        // 5. ÜÇÜNCÜ TARAF (THIRD PARTY) PORTFÖY KAYDINI OLUŞTUR
         const thirdPartyPortfolioId = thirdPartyIpRecordId || crypto.randomUUID();
         let hitImageUrl = bulletinRecordData?.imagePath || similarMark.imagePath || null;
         if (hitImageUrl && !hitImageUrl.startsWith('http')) {
@@ -119,7 +115,7 @@ serve(async (req) => {
         const { error: ipError } = await supabase.from('ip_records').insert(portfolioData);
         if (ipError) throw new Error(`Rakip Portföy Kayıt Hatası: ${ipError.message}`);
 
-        // 🚀 6. RAKİBİN ALTINA İŞLEM (TRANSACTION) EKLE
+        // 6. RAKİBİN ALTINA İŞLEM (TRANSACTION) EKLE
         const transactionId = crypto.randomUUID();
         const txPayload = {
             id: transactionId,
@@ -127,7 +123,7 @@ serve(async (req) => {
             transaction_type_id: '20', 
             description: 'Yayına İtiraz',
             transaction_hierarchy: 'parent',
-            task_id: null, // 🔥 CRASH FIX: Çakışmayı (Circular Dependency) önlemek için önce boş bırakıyoruz!
+            task_id: null, // Çakışmayı önlemek için boş bırakıyoruz
             opposition_owner: ipAppName, 
             user_id: assignedUid,
             user_email: callerEmail || 'system@evreka.com',
@@ -154,7 +150,7 @@ serve(async (req) => {
             }
         }
 
-        // 🚀 7. KENDİ DOSYAMIZA (TASK) GÖREVİ EKLE
+        // 7. KENDİ DOSYAMIZA (TASK) GÖREVİ EKLE
         const taskPayload = {
             id: taskId,
             task_type: '20',
@@ -186,7 +182,7 @@ serve(async (req) => {
         const { error: taskErr } = await supabase.from('tasks').insert(taskPayload);
         if (taskErr) throw new Error(`Task kayıt hatası: ${taskErr.message}`);
 
-        // 🚀 8. İŞLEMİ (TRANSACTION) TASK ID İLE GÜNCELLE (Döngüyü Hatasız Kapat)
+        // 8. İŞLEMİ (TRANSACTION) TASK ID İLE GÜNCELLE
         await supabase.from('transactions').update({ task_id: taskId }).eq('id', transactionId);
 
         return new Response(JSON.stringify({ success: true, taskId: taskId, message: "İtiraz işi başarıyla oluşturuldu." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
