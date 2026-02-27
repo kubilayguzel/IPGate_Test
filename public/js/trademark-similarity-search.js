@@ -1,6 +1,6 @@
 // public/js/trademark-similarity-search.js
 
-import { supabase, taskService } from '../supabase-config.js'; // 🔥 taskService import edildi
+import { supabase, taskService, mailService } from '../supabase-config.js'; 
 import { runTrademarkSearch } from './trademark-similarity/run-search.js';
 import Pagination from './pagination.js';
 import { loadSharedLayout } from './layout-loader.js';
@@ -1347,74 +1347,59 @@ const handleReportGeneration = async (event, options = {}) => {
             link.download = isGlobal ? `Toplu_Rapor.zip` : `${ownerName.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 25)}_Rapor.zip`;
             document.body.appendChild(link); link.click(); document.body.removeChild(link);
 
-            // Sadece tek bir adet Mail Taslağı bırakıyoruz (Şablon Kullanarak)
+            // 🔥 TO/CC ve Ek Dosya (Attachment) İşlemleriyle Birlikte Mail Taslağı
             if (createTasks && reportData.length > 0) {
                 try {
                     const firstMark = reportData[0].monitoredMark;
                     const targetRecordId = filteredResults[0].monitoredTrademarkId;
                     
-                    // Gerçek Client ID'yi Bul
                     let finalClientId = null;
                     if (targetRecordId) {
-                        const { data: applicantData } = await supabase
-                            .from('ip_record_applicants')
-                            .select('person_id')
-                            .eq('ip_record_id', targetRecordId)
-                            .order('order_index', { ascending: true })
-                            .limit(1)
-                            .maybeSingle();
-
-                        if (applicantData && applicantData.person_id) {
-                            finalClientId = applicantData.person_id;
-                        }
+                        const { data: applicantData } = await supabase.from('ip_record_applicants').select('person_id').eq('ip_record_id', targetRecordId).order('order_index', { ascending: true }).limit(1).maybeSingle();
+                        if (applicantData && applicantData.person_id) finalClientId = applicantData.person_id;
                     }
 
-                    // 🔥 CRASH FIX: Bülten Tarihini burada (Mail atarken) tekrar çekip tanımlıyoruz!
+                    // 1. 🔥 YENİ: Merkezi mailService ile TO ve CC Hesapla
+                    const mailRecipients = await mailService.resolveMailRecipients(targetRecordId, '20', finalClientId);
+                    const finalTo = mailRecipients.to || [];
+                    const finalCc = mailRecipients.cc || [];
+
+                    // 2. Şablon Değişkenleri
                     let realBulletinDateStr = null;
                     const { data: bData } = await supabase.from('trademark_bulletins').select('bulletin_date').eq('bulletin_no', bulletinNo).limit(1).maybeSingle();
-                    if (bData && bData.bulletin_date) {
-                        realBulletinDateStr = bData.bulletin_date;
-                    }
+                    if (bData && bData.bulletin_date) realBulletinDateStr = bData.bulletin_date;
 
-                    // Resmi Son Tarihi JS Üzerinden Hesapla (Şablon İçin)
                     let objectionDeadline = "-";
                     if (realBulletinDateStr) {
                         const bDate = new Date(realBulletinDateStr);
                         if (!isNaN(bDate.getTime())) {
                             bDate.setMonth(bDate.getMonth() + 2);
                             let iter = 0;
-                            while ((bDate.getDay() === 0 || bDate.getDay() === 6) && iter < 30) {
-                                bDate.setDate(bDate.getDate() + 1);
-                                iter++;
-                            }
+                            while ((bDate.getDay() === 0 || bDate.getDay() === 6) && iter < 30) { bDate.setDate(bDate.getDate() + 1); iter++; }
                             objectionDeadline = `${String(bDate.getDate()).padStart(2, '0')}.${String(bDate.getMonth() + 1).padStart(2, '0')}.${bDate.getFullYear()}`;
                         }
                     }
 
-                    // ŞABLONU ÇEK VE DEĞİŞKENLERİ YERLEŞTİR
                     let subject = `${bulletinNo} Sayılı Bülten İzleme Raporu`;
                     let body = "<p>Sayın İlgili,</p><p>Marka izleme raporunuz ekte sunulmuştur.</p>";
 
                     const { data: tmplData } = await supabase.from('mail_templates').select('*').eq('id', 'tmpl_watchnotice').maybeSingle();
-                    
                     if (tmplData) {
                         subject = tmplData.subject || subject;
                         body = tmplData.body || body;
-
                         const replacements = {
                             "{{bulletinNo}}": String(bulletinNo),
                             "{{muvekkil_adi}}": firstMark.ownerName || "Sayın İlgili",
                             "{{objection_deadline}}": objectionDeadline
                         };
-
                         for (const [key, val] of Object.entries(replacements)) {
                             subject = subject.split(key).join(val);
                             body = body.split(key).join(val);
                         }
                     }
 
-                    // VERİTABANINA KAYDET
-                    await supabase.from('mail_notifications').insert({
+                    // 3. Veritabanına Kaydet (TO ve CC dahil)
+                    const { data: insertedMail, error: mailError } = await supabase.from('mail_notifications').insert({
                         related_ip_record_id: targetRecordId,
                         client_id: finalClientId,
                         bulletin_no: String(bulletinNo),
@@ -1422,13 +1407,42 @@ const handleReportGeneration = async (event, options = {}) => {
                         subject: subject,
                         body: body,
                         template_id: "tmpl_watchnotice",
+                        to_list: finalTo,  // Otomatik TO
+                        cc_list: finalCc,  // Otomatik CC
                         status: "awaiting_client_approval", 
                         notification_type: "marka",
                         source: "bulletin_watch_system",
                         is_draft: true
-                    });
+                    }).select('id').single();
+
+                    if (mailError) throw mailError;
+
+                    // 4. 🔥 ATTACHMENT: Zip Raporunu Storage'a Yükle ve Mail'e Bağla
+                    if (insertedMail && insertedMail.id) {
+                        try {
+                            const zipFileName = `${ownerName.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 25)}_Rapor_${bulletinNo}.zip`;
+                            const storagePath = `mail_attachments/${Date.now()}_${zipFileName}`;
+                            
+                            // Önceden oluşturulmuş Blob'u (ZIP) yüklüyoruz
+                            const { error: uploadError } = await supabase.storage.from('task_documents').upload(storagePath, blob);
+                            
+                            if (!uploadError) {
+                                const { data: urlData } = supabase.storage.from('task_documents').getPublicUrl(storagePath);
+                                
+                                await supabase.from('mail_notification_attachments').insert({
+                                    notification_id: insertedMail.id,
+                                    url: urlData.publicUrl,
+                                    file_name: zipFileName,
+                                    storage_path: storagePath
+                                });
+                                console.log("✅ Ek (Attachment) başarıyla mail taslağına bağlandı!");
+                            }
+                        } catch (attErr) {
+                            console.error("Ek dosya (Attachment) eklenirken hata:", attErr);
+                        }
+                    }
                     
-                    console.log("✅ Taslak Mail Şablon Kullanılarak Başarıyla Oluşturuldu!");
+                    console.log("✅ Taslak Mail, TO/CC ve Ekleriyle Birlikte Başarıyla Oluşturuldu!");
 
                 } catch (e) { console.error("Mail oluşturma hatası:", e); }
 
