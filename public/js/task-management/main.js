@@ -67,13 +67,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             };
         }
 
-        init() {
+        async init() {
             this.setupStaticEventListeners();
             this.initializePagination();
 
-            const user = authService.getCurrentUser();
-            if (user) {
-                this.currentUser = user;
+            // 🔥 SADECE BURASI DEĞİŞTİ: Yeni Supabase Auth Yapısı
+            const session = await authService.getCurrentSession();
+            if (session) {
+                const { data: profile } = await supabase.from('users').select('*').eq('id', session.user.id).single();
+                this.currentUser = { ...session.user, ...(profile || {}), uid: session.user.id };
                 this.loadAllData();
             } else {
                 window.location.href = 'index.html';
@@ -154,12 +156,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         buildMaps() {
             this.usersMap.clear();
             this.allUsers.forEach(u => {
-                if(u.id) this.usersMap.set(u.id, u);
+                // 🔥 ÇÖZÜM 1: Eşleşme hatasını önlemek için ID'leri kesin olarak String yapıyoruz
+                if(u.id) this.usersMap.set(String(u.id), u);
             });
 
             this.transactionTypesMap.clear();
             this.allTransactionTypes.forEach(t => {
-                if(t.id) this.transactionTypesMap.set(t.id, t);
+                // 🔥 ÇÖZÜM 1: Tip ID'lerini String'e çeviriyoruz
+                if(t.id) this.transactionTypesMap.set(String(t.id), t);
             });
         }
 
@@ -188,17 +192,19 @@ document.addEventListener('DOMContentLoaded', async () => {
             };
 
             this.processedData = this.allTasks.map(task => {
-                const appNo = task.iprecordApplicationNo || "-";
-                const recordTitle = task.iprecordTitle || task.relatedIpRecordTitle || "-";
-                const applicantName = task.iprecordApplicantName || "-";
+                // 🔥 ÇÖZÜM 2: Supabase'den gelen her türlü isimlendirme ihtimaline karşı yedek (fallback) zinciri kuruldu
+                const appNo = task.iprecordApplicationNo || task.target_app_no || task.iprecord_application_no || "-";
+                const recordTitle = task.iprecordTitle || task.relatedIpRecordTitle || task.iprecord_title || "-";
+                const applicantName = task.iprecordApplicantName || task.relatedPartyName || task.iprecord_applicant_name || "-";
 
-                const transactionTypeObj = this.transactionTypesMap.get(task.taskType);
+                // String dönüşümü ile kesin tip eşleşmesi
+                const transactionTypeObj = this.transactionTypesMap.get(String(task.taskType));
                 const taskTypeDisplay = transactionTypeObj ? (transactionTypeObj.alias || transactionTypeObj.name) : (task.taskType || 'Bilinmiyor');
 
-                const assignedUser = this.usersMap.get(task.assignedTo_uid);
-                const assignedToDisplay = assignedUser ? (assignedUser.displayName || assignedUser.email) : 'Atanmamış';
+                const assignedUser = this.usersMap.get(String(task.assignedTo_uid));
+                const assignedToDisplay = assignedUser ? (assignedUser.displayName || assignedUser.email) : (task.assignedTo_email || 'Atanmamış');
 
-                const operationalDueObj = parseDate(task.operationalDueDate); 
+                const operationalDueObj = parseDate(task.operationalDueDate || task.dueDate); 
                 const operationalDueDisplay = operationalDueObj ? operationalDueObj.toLocaleDateString('tr-TR') : 'Belirtilmemiş';
                 const officialDueObj = parseDate(task.officialDueDate); 
                 const officialDueDisplay = officialDueObj ? officialDueObj.toLocaleDateString('tr-TR') : 'Belirtilmemiş';
