@@ -29,19 +29,23 @@ export class PersonDataManager {
         return await personService.getRelatedPersons(personId);
     }
 
-    async uploadDocument(file) {
+    // 🔥 GÜNCEL: Dosyalar 'documents' kovasına, 'persons/{personId}/' klasörüne yüklenir
+    // (Yeni eklenen bir kişi ise henüz ID'si olmadığı için geçici 'temp' klasörüne atılabilir)
+    async uploadDocument(file, personId = 'temp') {
         try {
             const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-            const path = `person_documents/${Date.now()}_${cleanFileName}`;
+            // Yeni Yol Yapısı: persons/12345-uuid.../16789_vekalet.pdf
+            const path = `persons/${personId}/${Date.now()}_${cleanFileName}`;
 
+            // 'person_documents' YERİNE MERKEZİ 'documents' KOVASI KULLANILIYOR
             const { data, error } = await supabase.storage
-                .from('person_documents')
+                .from('documents')
                 .upload(path, file, { cacheControl: '3600', upsert: false });
 
             if (error) throw error;
 
             const { data: urlData } = supabase.storage
-                .from('person_documents')
+                .from('documents')
                 .getPublicUrl(path);
 
             return urlData.publicUrl;
@@ -51,16 +55,17 @@ export class PersonDataManager {
         }
     }
 
-    // 🔥 YENİ: Storage'dan Dosya Silme İşlemi
+    // 🔥 GÜNCEL: Storage'dan Dosya Silme İşlemi ('documents' kovası)
     async deleteDocument(url) {
         if (!url) return;
         try {
             // Public URL'den dosyanın Bucket içindeki tam yolunu (path) çıkarıyoruz
-            const bucketStr = '/object/public/person_documents/';
+            const bucketStr = '/object/public/documents/';
             const idx = url.indexOf(bucketStr);
             if (idx !== -1) {
                 const filePath = decodeURIComponent(url.substring(idx + bucketStr.length));
-                const { error } = await supabase.storage.from('person_documents').remove([filePath]);
+                
+                const { error } = await supabase.storage.from('documents').remove([filePath]);
                 
                 if (error) {
                     console.error("Storage dosya silme hatası:", error);
