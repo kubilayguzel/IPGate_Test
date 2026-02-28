@@ -138,7 +138,6 @@ export class PortfolioRenderer {
         const titleText = record.title || record.brandText || '-';
         const appNoText = record.applicationNumber || (isWipoParent ? irNo : '-'); 
         
-        // 🔥 GÜNCELLEME: Çözümlenmiş başvuru sahibini kullan
         const applicantText = record.formattedApplicantName || record.applicantName || '-';
 
         let html = `
@@ -162,13 +161,10 @@ export class PortfolioRenderer {
             html += `<td title="${appNoText}">${appNoText}</td>`;
         }
         
-        // 🔥 GÜNCELLEME: Tarihi direkt çözümleyiciden çekip ekrana bas
         html += `<td>${record.formattedApplicationDate || '-'}</td>`;
-        
         html += `<td>${isChild ? '' : this.getStatusBadge(record)}</td>`;
         html += `<td><small title="${applicantText}">${applicantText}</small></td>`;
         
-        // 🔥 GÜNCELLEME: Nice sınıflarını direkt çözümleyiciden al
         const niceText = record.formattedNiceClasses || '-';
         html += `<td title="${niceText}">${niceText}</td>`;
         
@@ -266,7 +262,7 @@ export class PortfolioRenderer {
 
     formatDate(d) {
         if (!d) return '-';
-        if (typeof d === 'object' && d._seconds) d = new Date(d._seconds * 1000);
+        // 🔥 YENİ: Firebase (_seconds) kontrolü silindi, doğrudan string/date işleniyor.
         return formatToTRDate(d);
     }
     
@@ -294,9 +290,10 @@ export class PortfolioRenderer {
         
         if (color === 'secondary') {
              const s = String(rawStatus).toLowerCase();
-             if (['registered', 'approved', 'active', 'tescilli', 'finalized', 'kesinleşti'].includes(s)) color = 'success';
-             else if (['filed', 'application', 'pending', 'published', 'decision_pending', 'karar bekleniyor'].includes(s)) color = 'warning';
-             else if (['rejected', 'refused', 'cancelled', 'reddedildi'].includes(s)) color = 'danger';
+             // Supabase/PostgreSQL ile gelen Türkçe statülerin doğru renklendirilmesi:
+             if (['registered', 'approved', 'active', 'tescilli', 'finalized', 'kesinleşti', 'kabul'].includes(s)) color = 'success';
+             else if (['filed', 'application', 'pending', 'published', 'decision_pending', 'karar bekleniyor', 'başvuru', 'yayında'].includes(s)) color = 'warning';
+             else if (['rejected', 'refused', 'cancelled', 'reddedildi', 'iptal', 'hükümsüz'].includes(s)) color = 'danger';
         }
         return `<span class="badge badge-${color} border">${displayStatus}</span>`;
     }
