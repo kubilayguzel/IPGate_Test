@@ -59,83 +59,34 @@ window.localCache = localCache;
 
 // --- YENİ: SUPABASE AUTH SERVICE ---
 export const authService = {
-    // Supabase bağlantı durumunu kontrol etmek için
-    isSupabaseAvailable: true, 
-
-    async signIn(email, password) {
-        try {
-            const { data, error } = await supabase.auth.signInWithPassword({
-                email: email,
-                password: password,
-            });
-            if (error) throw error;
-
-            // 🌟 YENİ: Gerçek 'users' tablosundan rol ve yetkileri çekiyoruz
-            let profileData = { role: 'user', is_super_admin: false, display_name: '' };
-            const { data: profile } = await supabase.from('users').select('*').eq('email', data.user.email).single();
-            
-            if (profile) {
-                profileData = profile;
-            }
-
-            const userData = { 
-                uid: data.user.id, 
-                email: data.user.email, 
-                displayName: profileData.display_name || data.user.user_metadata?.display_name || '', 
-                role: profileData.role, 
-                isSuperAdmin: profileData.is_super_admin 
-            };
-            
-            localStorage.setItem('currentUser', JSON.stringify(userData));
-            
-            return { success: true, user: userData, message: "Giriş başarılı!" };
-        } catch (error) {
-            console.error("Giriş hatası:", error);
-            return { success: false, error: "Hatalı e-posta veya şifre." };
-        }
+    // Aktif oturumu Supabase'den güvenli şekilde getir
+    async getCurrentSession() {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) console.error("Oturum kontrol hatası:", error);
+        return session;
     },
 
-    async signUp(email, password, displayName, initialRole = 'belirsiz') {
-        try {
-            // Supabase'de displayName gibi ekstra veriler 'user_metadata' içine yazılır
-            const { data, error } = await supabase.auth.signUp({
-                email: email,
-                password: password,
-                options: {
-                    data: {
-                        display_name: displayName,
-                        role: initialRole
-                    }
-                }
-            });
-            if (error) throw error;
-            return { success: true, message: "Kayıt başarılı! E-postanızı doğrulayın." };
-        } catch (error) {
-            console.error("Kayıt hatası:", error);
-            return { success: false, error: error.message };
-        }
-    },
-
+    // Güvenli Çıkış Yapma
     async signOut() {
-        await supabase.auth.signOut();
-        localStorage.removeItem('currentUser');
-        window.location.href = 'index.html';
-    },
-
-    async resetPassword(email) {
         try {
-            const { error } = await supabase.auth.resetPasswordForEmail(email);
+            // Önbellekleri temizle
+            if (window.localCache) {
+                try { await window.localCache.remove('ip_records_cache'); } catch(e) {}
+            }
+            sessionStorage.clear();
+            localStorage.clear();
+            
+            // Supabase'den çıkış yap
+            const { error } = await supabase.auth.signOut();
             if (error) throw error;
-            return { success: true };
+            
+            // Giriş sayfasına yönlendir
+            window.location.replace('index.html');
         } catch (error) {
-            return { success: false, error: error.message };
+            console.error("Çıkış yapılırken hata oluştu:", error);
+            window.location.replace('index.html');
         }
     },
-
-    getCurrentUser() {
-        const localData = localStorage.getItem('currentUser');
-        return localData ? JSON.parse(localData) : null;
-    }
 };
 
 // ==========================================
@@ -143,20 +94,22 @@ export const authService = {
 // ==========================================
 
 export async function waitForAuthUser({ requireAuth = true, redirectTo = 'index.html', graceMs = 0 } = {}) {
-    const user = authService.getCurrentUser();
+    // Eski sistemin getCurrentUser'ı yerine Supabase'in Session kontrolünü yapıyoruz
+    const session = await authService.getCurrentSession();
     
-    if (requireAuth && !user) {
+    if (requireAuth && !session) {
         console.warn("Kullanıcı oturumu bulunamadı, logine dönülüyor...");
-        window.location.href = redirectTo;
+        window.location.replace(redirectTo);
         return null;
     }
-    return user;
+    return session ? session.user : null;
 }
 
 export function redirectOnLogout(redirectTo = 'index.html', graceMs = 0) {
-    window.addEventListener('storage', (e) => {
-        if (e.key === 'currentUser' && !e.newValue) {
-            window.location.href = redirectTo;
+    // Supabase Auth Listener ile anlık çıkış (başka sekmeden çıkış yapılsa bile) takibi
+    supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_OUT' || !session) {
+            window.location.replace(redirectTo);
         }
     });
 }
@@ -406,15 +359,11 @@ export const transactionTypeService = {
         if (error) return { success: false, data: [] };
         
         const mappedData = data.map(t => ({
-            id: t.id,
+            id: String(t.id), // 🔥 ÇÖZÜM: Arayüz eşleşebilsin diye String'e çevrildi
             name: t.name,
             alias: t.alias,
-            
-            // 🔥 KRİTİK DÜZELTME: Arayüzün formu açabilmesi için ipType verisini ekledik
             ipType: t.ip_type, 
             ip_type: t.ip_type, 
-            
-            // Veritabanındaki dizi tipini (array) arayüze uygun formata taşıyoruz
             applicableToMainType: t.applicable_to_main_type || (t.ip_type ? [t.ip_type] : []),
             hierarchy: t.hierarchy,
             isTopLevelSelectable: t.is_top_level_selectable,
@@ -964,89 +913,161 @@ export const taskService = {
         return { success: true, data: data.map(u => ({ id: u.id, email: u.email, displayName: u.display_name || u.email })) };
     },
 
-    // 🔥 GÜÇLENDİRİLMİŞ HARİTALAMA (Hata Toleranslı)
+    // 🔥 ADIM 2 DETAYLI LOGLAMALI HARİTALAMA
     async _enrichTasksWithRelations(tasks) {
-        const recordIds = [...new Set(tasks.map(t => t.related_ip_record_id || t.ip_record_id).filter(id => id && id.trim() !== ''))];
+        if (!tasks || tasks.length === 0) return [];
+
+        const recordIds = [...new Set(tasks.map(t => t.ip_record_id).filter(Boolean))];
+        const ownerIds = [...new Set(tasks.map(t => t.task_owner_id).filter(Boolean))];
+
         let recordsMap = {};
+        let personsMap = {};
 
+        // 1. GÖREV SAHİBİNİ ÇEK (task_owner_id)
+        if (ownerIds.length > 0) {
+            const { data: persons } = await supabase.from('persons').select('id, name').in('id', ownerIds);
+            if (persons) persons.forEach(p => { personsMap[p.id] = p.name; });
+        }
+
+        // 2. PORTFÖY VERİLERİNİ ÇEK
         if (recordIds.length > 0) {
-            // ÖNCE DENEME: İlişkisel verileri çekmeye çalış
-            const { data: resIpData, error: resIpError } = await supabase.from('ip_records').select(`
-                id, application_number, brand_name, title, 
-                ip_record_applicants(persons(name))
-            `).in('id', recordIds);
+            console.log("=== ADIM 2 LOGLARI BAŞLIYOR ===");
+            console.log("1. Görevlerden toplanan Benzersiz ip_record_id'ler:", recordIds);
 
-            if (resIpError) {
-                console.warn("⚠️ IP Record JOIN Hatası (Sahip bilgisi çekilemedi):", resIpError.message);
-                // PATLARSA: Sadece düz kolonları çek (Program çökmesin)
-                const fallbackIp = await supabase.from('ip_records').select('id, application_number, brand_name, title').in('id', recordIds);
-                if(fallbackIp.data) {
-                    fallbackIp.data.forEach(ip => {
-                        recordsMap[ip.id] = { appNo: ip.application_number || "-", title: ip.brand_name || ip.title || "-", applicant: "-" };
-                    });
+            // A) Başvuru Numaraları
+            const { data: ipRecords } = await supabase.from('ip_records').select('id, application_number').in('id', recordIds);
+            
+            // B) Marka İsimleri
+            const { data: tmDetails } = await supabase.from('ip_record_trademark_details').select('ip_record_id, brand_name').in('ip_record_id', recordIds);
+            
+            // C) Başvuru Sahipleri (ip_record_applicants)
+            console.log("2. ip_record_applicants tablosuna sorgu atılıyor...");
+            const { data: applicants, error: appErr } = await supabase.from('ip_record_applicants')
+                .select('ip_record_id, person_id')
+                .in('ip_record_id', recordIds);
+
+            if (appErr) console.error("❌ ip_record_applicants Hatası:", appErr);
+            console.log("3. ip_record_applicants tablosundan dönen sonuç:", applicants);
+
+            // Başvuru sahiplerinin isimlerini persons tablosundan alalım
+            let appPersonsMap = {};
+            if (applicants && applicants.length > 0) {
+                const appPersonIds = [...new Set(applicants.map(a => a.person_id).filter(Boolean))];
+                console.log("4. applicants tablosunda bulunan benzersiz person_id'ler:", appPersonIds);
+
+                if (appPersonIds.length > 0) {
+                    const { data: appPersons, error: persErr } = await supabase.from('persons').select('id, name').in('id', appPersonIds);
+                    if (persErr) console.error("❌ persons (applicant) Hatası:", persErr);
+                    console.log("5. persons tablosundan dönen isimler:", appPersons);
+                    
+                    if (appPersons) appPersons.forEach(p => appPersonsMap[p.id] = p.name);
                 }
-            } else if (resIpData) {
-                resIpData.forEach(ip => {
-                    let applicantTxt = "-";
-                    if (ip.ip_record_applicants && ip.ip_record_applicants.length > 0) {
-                        applicantTxt = ip.ip_record_applicants.map(a => a.persons?.name).filter(Boolean).join(', ');
-                    }
-                    recordsMap[ip.id] = { appNo: ip.application_number || "-", title: ip.brand_name || ip.title || "-", applicant: applicantTxt };
+            } else {
+                console.log("⚠️ DİKKAT: ip_record_applicants tablosu bu ip_record_id'ler için BOŞ döndü!");
+            }
+
+            console.log("=== ADIM 2 LOGLARI BİTTİ ===");
+
+            // Javascript eşleştirmesi
+            if (ipRecords) {
+                ipRecords.forEach(ip => {
+                    const detail = (tmDetails || []).find(d => d.ip_record_id === ip.id);
+                    
+                    const apps = (applicants || []).filter(a => a.ip_record_id === ip.id);
+                    const applicantNames = apps.map(a => appPersonsMap[a.person_id]).filter(Boolean).join(', ');
+
+                    recordsMap[ip.id] = {
+                        appNo: ip.application_number,
+                        brandName: detail ? detail.brand_name : null,
+                        applicantFallback: applicantNames || null
+                    };
                 });
             }
-            
+
+            // D) Davalar (suits) - Portföyde bulunamayan id'leri davalarda ararız
             const foundIpIds = Object.keys(recordsMap);
             const missingIds = recordIds.filter(id => !foundIpIds.includes(id));
-            
             if (missingIds.length > 0) {
-                const { data: resSuitData } = await supabase.from('suits').select('id, file_no, court_name, plaintiff, client_name').in('id', missingIds);
-                if (resSuitData) {
-                    resSuitData.forEach(s => {
-                        recordsMap[s.id] = { appNo: s.file_no || "-", title: s.court_name || "-", applicant: s.client_name || s.plaintiff || "-" };
+                const { data: suits } = await supabase.from('suits').select('id, file_no, title, court_name, client_id').in('id', missingIds);
+                if (suits) {
+                    const suitClientIds = [...new Set(suits.map(s => s.client_id).filter(Boolean))];
+                    let suitClientMap = {};
+                    if (suitClientIds.length > 0) {
+                        const { data: sPersons } = await supabase.from('persons').select('id, name').in('id', suitClientIds);
+                        if (sPersons) sPersons.forEach(p => suitClientMap[p.id] = p.name);
+                    }
+
+                    suits.forEach(s => {
+                        recordsMap[s.id] = {
+                            appNo: s.file_no,
+                            brandName: s.title || s.court_name,
+                            applicantFallback: suitClientMap[s.client_id] || null
+                        };
                     });
                 }
             }
         }
 
+        // 3. VERİLERİ BİRLEŞTİR VE ARAYÜZE GÖNDER
         return tasks.map(t => {
-            const relation = recordsMap[t.related_ip_record_id || t.ip_record_id] || {};
+            // Task'in içindeki id alanlarını farklı isimlendirmelere karşı korumalı alalım
+            const ipId = t.ip_record_id || t.related_ip_record_id || (t.details && t.details.ip_record_id);
+            const recordData = recordsMap[ipId] || {};
             
-            // UI'ın beklentisi olan format (camelCase) ve Fallback'ler
-            const fallbackAppNo = t.iprecord_application_no || t.target_app_no || "-";
-            const fallbackTitle = t.iprecord_title || t.related_ip_record_title || "-";
-            const fallbackApplicant = t.related_party_name || t.iprecord_applicant_name || "-";
+            const ownerId = t.task_owner_id || t.task_owner || t.related_party_id || (t.details && t.details.task_owner_id);
+            const ownerName = personsMap[ownerId] || null;
+            
+            const d = t.details || {}; 
+
+            // 🌟 MÜVEKKİL (SAHİP) HİYERARŞİSİ:
+            let finalApplicant = "-";
+            
+            // 1. Öncelik: Göreve doğrudan atanmış bir "Sahip" var mı?
+            if (ownerName && String(ownerName).trim() !== '') {
+                finalApplicant = ownerName; 
+            } 
+            // 2. Öncelik: Görev bir portföy kaydına (ip_record) bağlıysa ve onun bir sahibi varsa
+            else if (recordData.applicantFallback && String(recordData.applicantFallback).trim() !== '') {
+                finalApplicant = recordData.applicantFallback; 
+            } 
+            // 3. Öncelik: Görev JSON (details) içine gömülmüş bir isim var mı?
+            else if (d.applicant_name && String(d.applicant_name).trim() !== '') {
+                finalApplicant = d.applicant_name;
+            }
+            // 4. Öncelik: Eskiden kalan bazı kolonlar (Yedek)
+            else if (t.iprecord_applicant_name && String(t.iprecord_applicant_name).trim() !== '') {
+                finalApplicant = t.iprecord_applicant_name;
+            }
+
+            // Başvuru No ve Marka Adı
+            const finalAppNo = recordData.appNo || d.application_number || t.iprecord_application_no || "-";
+            const finalBrandName = recordData.brandName || d.brand_name || t.iprecord_title || t.title || "-";
 
             return {
                 ...t, 
                 id: String(t.id),
                 title: t.title,
                 description: t.description,
-                taskType: String(t.task_type),
+                taskType: String(t.task_type_id || t.task_type || t.taskType),
                 status: t.status,
                 priority: t.priority,
-                dueDate: t.due_date,
-                officialDueDate: t.official_due_date,
-                operationalDueDate: t.operational_due_date,
-                deliveryDate: t.delivery_date,
-                assignedTo_uid: t.assigned_to_uid || t.assigned_to_user_id,
-                assignedTo_email: t.assigned_to_email,
-                relatedIpRecordId: t.related_ip_record_id || t.ip_record_id,
-                relatedIpRecordTitle: t.related_ip_record_title,
-                relatedPartyId: t.related_party_id,
-                relatedPartyName: t.related_party_name,
-                transactionId: t.transaction_id,
-                opponentId: t.opponent_id,
-                history: t.history || [],
-                documents: t.documents || [], 
-                createdAt: t.created_at,
-                updatedAt: t.updated_at,
+                dueDate: t.operational_due_date || t.official_due_date || t.due_date || t.dueDate,
+                officialDueDate: t.official_due_date || t.officialDueDate,
+                operationalDueDate: t.operational_due_date || t.operationalDueDate,
+                deliveryDate: t.delivery_date || t.deliveryDate,
+                assignedTo_uid: t.assigned_to || t.assigned_to_uid || t.assigned_to_user_id || t.assignedTo_uid, 
+                assignedTo_email: t.assigned_to_email || t.assignedTo_email,
+                relatedIpRecordId: ipId,
+                transactionId: t.transaction_id || t.transactionId,
+                history: d.history || t.history || [],
+                documents: d.documents || t.documents || [], 
+                createdAt: t.created_at || t.createdAt,
+                updatedAt: t.updated_at || t.updatedAt,
                 
-                // Tablolarda Gözükecek Final Veriler
-                iprecordApplicationNo: relation.appNo && relation.appNo !== "-" ? relation.appNo : fallbackAppNo,
-                iprecordTitle: relation.title && relation.title !== "-" ? relation.title : fallbackTitle,
-                
-                // 🔥 KESİN ÇÖZÜM: İlişkiden gelmiyorsa, kendi içindeki yedek veriyi (fallback) göster!
-                iprecordApplicantName: relation.applicant && relation.applicant !== "-" ? relation.applicant : fallbackApplicant
+                // UI (ARAYÜZ) BEKLENTİSİ OLAN DEĞİŞKENLER
+                iprecordApplicationNo: finalAppNo,
+                iprecordTitle: finalBrandName,
+                iprecordApplicantName: finalApplicant
             };
         });
     },
@@ -1125,11 +1146,15 @@ export const taskService = {
                 due_date: updateData.dueDate || updateData.due_date,
                 official_due_date: updateData.officialDueDate || updateData.official_due_date,
                 operational_due_date: updateData.operationalDueDate || updateData.operational_due_date,
+                // 🔥 EKSİKLER GİDERİLDİ (Email, History, Target Accrual eklendi)
                 assigned_to_uid: updateData.assignedTo_uid || updateData.assigned_to_uid,
+                assigned_to_email: updateData.assignedTo_email || updateData.assigned_to_email,
                 related_ip_record_id: updateData.relatedIpRecordId ? String(updateData.relatedIpRecordId) : undefined,
                 transaction_id: updateData.transactionId ? String(updateData.transactionId) : undefined,
                 related_party_id: updateData.relatedPartyId ? String(updateData.relatedPartyId) : undefined,
                 documents: updateData.documents, 
+                history: updateData.history,
+                target_accrual_id: updateData.target_accrual_id || updateData.targetAccrualId,
                 updated_at: new Date().toISOString()
             };
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
