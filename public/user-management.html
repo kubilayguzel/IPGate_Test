@@ -562,23 +562,17 @@
     </div>
 </div>
 <script type="module">
-    import { authService, personService, auth, db, app } from './firebase-config.js';
-    import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js';
-    import { collection, getDocs } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+    import { supabase, authService, personService } from './supabase-config.js';
     import { showNotification } from './utils.js';
     import { loadSharedLayout } from './js/layout-loader.js';
 
-    const functions = getFunctions(app, 'europe-west1');
-    const upsertUser = httpsCallable(functions, 'adminUpsertUser');
-    const deleteUserFn = httpsCallable(functions, 'adminDeleteUser');
     const strip = (s) => String(s ?? '').trim().replace(/^["'\s]+|["'\s]+$/g, '');
 
     document.addEventListener('DOMContentLoaded', async () => {
-        // Ortak layout'u yükle ve bu sayfanın aktif linkini belirt
+        // Ortak layout'u yükle
         await loadSharedLayout({ activeMenuLink: 'user-management.html' });
 
         class UserManagementModule {
-            // Çoklu kişi seçimi için yeni özellikler
             constructor() {
                 this.currentUser = null;
                 this.allUsers = [];
@@ -586,121 +580,30 @@
                 this.selectedPersons = [];
             }
 
-            searchPersons(query) {
-                const searchResults = document.getElementById('personSearchResults');
-                if (!searchResults) return;
-
-                if (query.length < 2) {
-                    searchResults.innerHTML = '';
-                    searchResults.style.display = 'none';
+            async init() {
+                // 1. Supabase Oturum Kontrolü
+                const session = await authService.getCurrentSession();
+                if (!session) {
+                    window.location.replace('index.html');
                     return;
                 }
 
-                const filteredPersons = this.allPersons.filter(person =>
-                    person.name.toLowerCase().includes(query.toLowerCase()) ||
-                    (person.email && person.email.toLowerCase().includes(query.toLowerCase()))
-                ).filter(person => 
-                    !this.selectedPersons.some(selected => selected.id === person.id)
-                );
+                // 2. Kullanıcının profilini çek ve Superadmin mi diye bak
+                const { data: profile, error } = await supabase
+                    .from('users')
+                    .select('*')
+                    .eq('id', session.user.id)
+                    .single();
 
-                if (filteredPersons.length === 0) {
-                    searchResults.innerHTML = '<div class="search-result-item text-muted">Sonuç bulunamadı</div>';
-                } else {
-                    searchResults.innerHTML = filteredPersons.map(person => `
-                        <div class="search-result-item" data-id="${person.id}">
-                            <strong>${person.name}</strong>
-                            ${person.email ? `<br><small class="text-muted">${person.email}</small>` : ''}
-                        </div>
-                    `).join('');
+                if (error || !profile || profile.role !== 'superadmin') {
+                    showNotification('Bu sayfaya erişim yetkiniz yoktur.', 'error');
+                    setTimeout(() => window.location.replace('portfolio.html'), 1500);
+                    return;
                 }
 
-                searchResults.style.display = 'block';
-            }
-
-            addSelectedPerson(person) {
-                if (!this.selectedPersons.some(p => p.id === person.id)) {
-                    this.selectedPersons.push({
-                        id: person.id,
-                        name: person.name,
-                        email: person.email || '',
-                        permissions: {
-                            type: 'view' // Varsayılan: görüntüleme
-                        }
-                    });
-                    this.renderSelectedPersons();
-                }
-            }
-
-            removeSelectedPerson(personId) {
-                this.selectedPersons = this.selectedPersons.filter(p => p.id !== personId);
-                this.renderSelectedPersons();
-            }
-
-            renderSelectedPersons() {
-                const selectedList = document.getElementById('selectedPersonsList');
-                const countBadge = document.getElementById('selectedPersonsCount');
-                
-                if (!selectedList || !countBadge) return;
-
-                countBadge.textContent = this.selectedPersons.length;
-
-                if (this.selectedPersons.length === 0) {
-                    selectedList.innerHTML = `
-                        <div class="empty-state">
-                            <i class="fas fa-users fa-2x text-muted mb-2"></i>
-                            <p class="text-muted">Henüz kişi eklenmedi.</p>
-                        </div>`;
-                } else {
-                    selectedList.innerHTML = this.selectedPersons.map(person => `
-                        <div class="selected-item">
-                            <div class="person-info">
-                                <strong>${person.name}</strong>
-                                ${person.email ? `<br><small class="text-muted">${person.email}</small>` : ''}
-                            </div>
-                            
-                            <div class="permission-radio-group">
-                                <label class="permission-label">
-                                    <input type="radio" name="permission_${person.id}" value="view" 
-                                        data-person-id="${person.id}" class="permission-radio"
-                                        ${person.permissions?.type === 'approval' ? '' : 'checked'}>
-                                    <span>Görüntüleme</span>
-                                </label>
-                                <label class="permission-label">
-                                    <input type="radio" name="permission_${person.id}" value="approval"
-                                        data-person-id="${person.id}" class="permission-radio"
-                                        ${person.permissions?.type === 'approval' ? 'checked' : ''}>
-                                    <span>Onay</span>
-                                </label>
-                            </div>
-                            
-                            <button type="button" class="remove-selected-item-btn" data-id="${person.id}">
-                                &times;
-                            </button>
-                        </div>
-                    `).join('');
-                }
-            }
-
-            clearSelectedPersons() {
-                this.selectedPersons = [];
-                this.renderSelectedPersons();
-            }
-            init() {
-                authService.auth.onAuthStateChanged(async (user) => {
-                    if (user || authService.getCurrentUser()) {
-                        this.currentUser = authService.getCurrentUser();
-                        // Super Admin kontrolü
-                        if (this.currentUser.role !== 'superadmin') {
-                            showNotification('Bu sayfaya erişim yetkiniz yoktur.', 'error');
-                            window.location.href = 'dashboard.html'; // Yetkisiz girişte yönlendir
-                            return;
-                        }
-                        await this.loadUsers();
-                        this.setupEventListeners();
-                    } else {
-                        window.location.href = 'index.html';
-                    }
-                });
+                this.currentUser = profile;
+                await this.loadUsers();
+                this.setupEventListeners();
             }
 
             setupEventListeners() {
@@ -710,21 +613,17 @@
                 document.getElementById('userForm').addEventListener('submit', (e) => this.handleUserFormSubmit(e));
                 document.getElementById('userSearchInput').addEventListener('input', (e) => this.filterUsers(e.target.value));
 
-            // Rol değişimi dinleyicisi
                 document.getElementById('formUserRole').addEventListener('change', (e) => {
                     this.toggleClientPersonGroup(e.target.value);
                 });
 
-                // Kişi arama dinleyicisi
                 document.getElementById('personSearchInput').addEventListener('input', (e) => {
                     this.searchPersons(e.target.value.trim());
                 });
 
-                // Arama sonuçları tıklama dinleyicisi
                 document.getElementById('personSearchResults').addEventListener('click', (e) => {
                     const item = e.target.closest('.search-result-item');
                     if (!item || !item.dataset.id) return;
-
                     const person = this.allPersons.find(p => p.id === item.dataset.id);
                     if (person) {
                         this.addSelectedPerson(person);
@@ -733,21 +632,18 @@
                     }
                 });
 
-                // Seçilen kişileri çıkarma dinleyicisi
                 document.getElementById('selectedPersonsList').addEventListener('click', (e) => {
                     if (e.target.classList.contains('remove-selected-item-btn')) {
                         this.removeSelectedPerson(e.target.dataset.id);
                     }
                 });
 
-                // Yetki radio button'ları dinleyicisi
                 document.getElementById('selectedPersonsList').addEventListener('change', (e) => {
                     if (e.target.classList.contains('permission-radio')) {
                         this.updatePersonPermissions(e.target.dataset.personId, e.target.value);
                     }
                 });
 
-                // Tablo içi düzenle / sil butonları (event delegation)
                 document.getElementById('usersTableBody').addEventListener('click', (e) => {
                     if (e.target.classList.contains('edit-btn')) {
                         this.showEditUserModal(e.target.dataset.id);
@@ -757,19 +653,20 @@
                 });
             }
 
-            updatePersonPermissions(personId, permissionType) {
-                const person = this.selectedPersons.find(p => p.id === personId);
-                if (person) {
-                    person.permissions.type = permissionType; // 'view' veya 'approval'
-                }
-            }
-
             async loadUsers() {
                 document.getElementById('loadingIndicator').style.display = 'block';
                 try {
-                    const usersCol = collection(db, 'users');
-                    const userSnapshot = await getDocs(usersCol);
-                    this.allUsers = userSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    // Supabase'den tüm kullanıcıları çek
+                    const { data, error } = await supabase.from('users').select('*').order('created_at', { ascending: false });
+                    if (error) throw error;
+                    
+                    this.allUsers = data.map(u => ({ 
+                        id: u.id, 
+                        email: u.email,
+                        displayName: u.display_name,
+                        role: u.role,
+                        createdAt: u.created_at
+                    }));
                     this.renderUsers();
                 } catch (error) {
                     showNotification('Kullanıcılar yüklenirken hata: ' + error.message, 'error');
@@ -784,26 +681,14 @@
             
             formatTimestamp(timestamp) {
                 if (!timestamp) return '-';
-                
                 try {
-                    if (timestamp?.toDate && typeof timestamp.toDate === 'function') {
-                        return timestamp.toDate().toLocaleDateString('tr-TR');
-                    }
-                    
                     const date = new Date(timestamp);
-                    if (!isNaN(date.getTime())) {
-                        return date.toLocaleDateString('tr-TR');
-                    }
-                    
-                    return '-';
-                } catch (e) {
-                    console.warn('Tarih parse hatası:', e);
-                    return '-';
-                }
+                    return isNaN(date.getTime()) ? '-' : date.toLocaleDateString('tr-TR');
+                } catch (e) { return '-'; }
             }
 
             renderUsers(filterText = '') {
-    const tableBody = document.getElementById('usersTableBody');
+                const tableBody = document.getElementById('usersTableBody');
                 const noUsersMessage = document.getElementById('noUsersMessage');
                 tableBody.innerHTML = '';
 
@@ -821,108 +706,136 @@
                 noUsersMessage.style.display = 'none';
 
                 filteredUsers.forEach(user => {
+                    const roleTexts = { 'belirsiz': 'Belirsiz', 'client': 'Client', 'user': 'Kullanıcı', 'admin': 'Yönetici', 'superadmin': 'Süper Admin' };
+                    const roleText = roleTexts[user.role] || user.role || 'Kullanıcı';
+
                     const row = document.createElement('tr');
-
-                // Rol metni
-                const roleTexts = {
-                  'belirsiz': 'Belirsiz',
-                  'client': 'Client',
-                  'user': 'Kullanıcı',
-                  'admin': 'Yönetici',
-                  'superadmin': 'Süper Admin'
-                };
-                const roleText = roleTexts[user.role] || user.role || 'Kullanıcı';
-                // Kişi ilişkilendirme durumu (çoklu kişi desteği)
-                const linkedPersonsCount = user.linkedPersonIds && Array.isArray(user.linkedPersonIds) ? user.linkedPersonIds.length : 0;
-                const linkIndicator = linkedPersonsCount > 0 ? 
-                    `<span class="linked-indicator" title="Bu kullanıcı ${linkedPersonsCount} kişiyle ilişkilendirilmiş">${linkedPersonsCount}</span>` : '';
-
-                row.innerHTML = `
-                  <td>${user.displayName || '-'} ${linkIndicator}</td>
-                  <td>${user.email || '-'}</td>
-                  <td>${roleText}</td>
-                  <td>${this.formatTimestamp(user.createdAt)}</td>
-                  <td>${this.formatTimestamp(user.lastLoginAt)}</td>
-                  <td>
-                    <button class="action-btn edit-btn" data-id="${user.id}">Düzenle</button>
-                    <button class="action-btn delete-btn" data-id="${user.id}" ${user.id === this.currentUser.uid ? 'disabled' : ''}>Sil</button>
-                  </td>
-                `;
-
+                    row.innerHTML = `
+                        <td>${user.displayName || '-'}</td>
+                        <td>${user.email || '-'}</td>
+                        <td>${roleText}</td>
+                        <td>${this.formatTimestamp(user.createdAt)}</td>
+                        <td>-</td>
+                        <td>
+                            <button class="action-btn edit-btn" data-id="${user.id}">Düzenle</button>
+                            <button class="action-btn delete-btn" data-id="${user.id}" ${user.id === this.currentUser.id ? 'disabled' : ''}>Sil</button>
+                        </td>
+                    `;
                     tableBody.appendChild(row);
                 });
-           }
+            }
 
             async loadPersonsData() {
                 try {
                     const result = await personService.getPersons();
-                    if (result.success && Array.isArray(result.data)) {
-                        this.allPersons = result.data;
-                    }
-                } catch (error) {
-                    console.error('Kişiler yüklenirken hata:', error);
+                    if (result.success && Array.isArray(result.data)) this.allPersons = result.data;
+                } catch (error) { console.error('Kişiler yüklenirken hata:', error); }
+            }
+
+            // KİŞİ ARAMA VE EKLEME İŞLEMLERİ
+            searchPersons(query) {
+                const searchResults = document.getElementById('personSearchResults');
+                if (query.length < 2) { searchResults.style.display = 'none'; return; }
+
+                const filtered = this.allPersons.filter(p =>
+                    (p.name.toLowerCase().includes(query.toLowerCase()) || (p.email && p.email.toLowerCase().includes(query.toLowerCase()))) &&
+                    !this.selectedPersons.some(selected => selected.id === p.id)
+                );
+
+                if (filtered.length === 0) {
+                    searchResults.innerHTML = '<div class="search-result-item text-muted">Sonuç bulunamadı</div>';
+                } else {
+                    searchResults.innerHTML = filtered.map(p => `<div class="search-result-item" data-id="${p.id}"><strong>${p.name}</strong></div>`).join('');
+                }
+                searchResults.style.display = 'block';
+            }
+
+            addSelectedPerson(person) {
+                if (!this.selectedPersons.some(p => p.id === person.id)) {
+                    this.selectedPersons.push({ id: person.id, name: person.name, permissions: { type: 'view' } });
+                    this.renderSelectedPersons();
                 }
             }
-            
+
+            removeSelectedPerson(personId) {
+                this.selectedPersons = this.selectedPersons.filter(p => p.id !== personId);
+                this.renderSelectedPersons();
+            }
+
+            updatePersonPermissions(personId, permissionType) {
+                const person = this.selectedPersons.find(p => p.id === personId);
+                if (person) person.permissions.type = permissionType;
+            }
+
+            clearSelectedPersons() {
+                this.selectedPersons = [];
+                this.renderSelectedPersons();
+            }
+
+            renderSelectedPersons() {
+                const selectedList = document.getElementById('selectedPersonsList');
+                document.getElementById('selectedPersonsCount').textContent = this.selectedPersons.length;
+
+                if (this.selectedPersons.length === 0) {
+                    selectedList.innerHTML = `<div class="empty-state"><p class="text-muted">Henüz kişi eklenmedi.</p></div>`;
+                } else {
+                    selectedList.innerHTML = this.selectedPersons.map(p => `
+                        <div class="selected-item">
+                            <div class="person-info"><strong>${p.name}</strong></div>
+                            <div class="permission-radio-group">
+                                <label class="permission-label">
+                                    <input type="radio" name="perm_${p.id}" value="view" data-person-id="${p.id}" class="permission-radio" ${p.permissions?.type === 'approval' ? '' : 'checked'}>
+                                    <span>Görüntüleme</span>
+                                </label>
+                                <label class="permission-label">
+                                    <input type="radio" name="perm_${p.id}" value="approval" data-person-id="${p.id}" class="permission-radio" ${p.permissions?.type === 'approval' ? 'checked' : ''}>
+                                    <span>Onay</span>
+                                </label>
+                            </div>
+                            <button type="button" class="remove-selected-item-btn" data-id="${p.id}">&times;</button>
+                        </div>
+                    `).join('');
+                }
+            }
+
             toggleClientPersonGroup(role) {
                 const clientGroup = document.getElementById('clientPersonGroup');
                 if (role === 'client') {
                     clientGroup.style.display = 'block';
                 } else {
                     clientGroup.style.display = 'none';
-                    // Çoklu seçim sisteminde seçilen kişileri temizle
                     this.clearSelectedPersons();
                 }
             }
 
             async showAddUserModal() {
-                await this.loadPersonsData(); // Yeni metod adı
+                await this.loadPersonsData();
                 this.selectedPersons = [];
-                
-                document.getElementById('userModalTitle').textContent = 'Yeni Kullanıcı Ekle';
+                document.getElementById('userModalTitle').textContent = 'Yeni Kullanıcı Ekle (Backend Gerekir)';
                 document.getElementById('userForm').reset();
                 document.getElementById('userId').value = '';
                 document.getElementById('passwordGroup').style.display = 'flex';
                 document.getElementById('formUserEmail').removeAttribute('readonly');
-                
-                // Client grup gizle
-                document.getElementById('clientPersonGroup').style.display = 'none';
-                this.renderSelectedPersons();
-                
+                this.toggleClientPersonGroup('');
                 document.getElementById('userModal').classList.add('show');
             }
 
-           async showEditUserModal(userId) {
+            async showEditUserModal(userId) {
                 const user = this.allUsers.find(u => u.id === userId);
-                if (!user) {
-                    showNotification('Kullanıcı bulunamadı.', 'error');
-                    return;
-                }
+                if (!user) return showNotification('Kullanıcı bulunamadı.', 'error');
 
-                await this.loadPersonsData(); // Yeni metod adı
-
-                // Mevcut ilişkili kişileri yükle
-                if (user.role === 'client' && user.linkedPersonIds && Array.isArray(user.linkedPersonIds)) {
-                    const linkedPersons = await personService.getLinkedPersons(userId);
-                    if (linkedPersons.success) {
-                        this.selectedPersons = linkedPersons.data.map(p => {
-                        // p.permissions iki biçimde gelebilir:
-                        // 1) { type: 'view' | 'approval' }  (yeni)
-                        // 2) { approval: boolean, view: boolean } (eski/kaydedilmiş)
-                        const perms = p.permissions || {};
-                        const type =
-                            perms.type
-                                ? perms.type
-                                : (perms.approval ? 'approval' : 'view');
-
-                        return {
-                            id: p.id,
-                            name: p.name,
-                            email: p.email || '',
-                            permissions: { type }
-                        };
-                    });
-
+                await this.loadPersonsData();
+                
+                // Supabase'den bu kullanıcıya bağlı müşterileri (client) çek
+                if (user.role === 'client') {
+                    const { data } = await supabase.from('user_persons').select('person_id, permissions').eq('user_id', userId);
+                    if (data && data.length > 0) {
+                        this.selectedPersons = data.map(link => {
+                            const pData = this.allPersons.find(p => p.id === link.person_id);
+                            return pData ? { id: pData.id, name: pData.name, permissions: { type: link.permissions?.approval ? 'approval' : 'view' } } : null;
+                        }).filter(Boolean);
+                    } else {
+                        this.selectedPersons = [];
                     }
                 } else {
                     this.selectedPersons = [];
@@ -937,10 +850,8 @@
                 document.getElementById('passwordGroup').style.display = 'none';
                 document.getElementById('formUserEmail').setAttribute('readonly', true);
                 
-                // Client rolü kontrolü
                 this.toggleClientPersonGroup(user.role);
                 this.renderSelectedPersons();
-                
                 document.getElementById('userModal').classList.add('show');
             }
 
@@ -951,165 +862,90 @@
             async handleUserFormSubmit(event) {
                 event.preventDefault();
 
-                console.log("🔥 Form submit başladı");
+                const userId = document.getElementById('userId')?.value || '';
+                const userName = document.getElementById('formUserName')?.value?.trim() || '';
+                const userRole = document.getElementById('formUserRole')?.value || '';
 
-                // Doğru ID'lerle elementleri al
-                const userId         = document.getElementById('userId')?.value || '';
-                const userNameEl     = document.getElementById('formUserName');
-                const userEmailEl    = document.getElementById('formUserEmail');
-                const userPasswordEl = document.getElementById('formUserPassword');
-                const userRoleEl     = document.getElementById('formUserRole');
-
-                console.log("🧐 Elements check:", {
-                    userId,
-                    userNameEl:      userNameEl ? "✅ Found" : "❌ Missing",
-                    userEmailEl:     userEmailEl ? "✅ Found" : "❌ Missing",
-                    userPasswordEl:  userPasswordEl ? "✅ Found" : "❌ Missing",
-                    userRoleEl:      userRoleEl ? "✅ Found" : "❌ Missing"
-                });
-
-                // Değerleri al
-                const userName     = userNameEl?.value?.trim() || '';
-                const userEmail    = userEmailEl?.value?.trim() || '';
-                const userPassword = userPasswordEl?.value || '';
-                const userRole     = userRoleEl?.value || '';
-
-                console.log("📝 Form values:", {
-                    userName:    `"${userName}"`,
-                    userEmail:   `"${userEmail}"`,
-                    userRole:    `"${userRole}"`,
-                    userPassword: userPassword ? "***" : "empty",
-                    isEdit: !!userId
-                });
-
-                // Validasyonlar
-                if (!userName) {
-                    console.error("❌ Ad-soyad boş!");
-                    showNotification('Lütfen ad-soyad girin.', 'error');
-                    userNameEl?.focus();
-                    return;
-                }
-                if (!userEmail) {
-                    console.error("❌ E-posta boş!");
-                    showNotification('Lütfen geçerli bir e-posta girin.', 'error');
-                    userEmailEl?.focus();
-                    return;
-                }
-                if (!userRole) {
-                    console.error("❌ Rol seçilmemiş!");
-                    showNotification('Lütfen bir rol seçin.', 'error');
-                    userRoleEl?.focus();
-                    return;
-                }
-                // Yeni kullanıcıda şifre opsiyonel; verilirse 6+ olmalı
-                if (!userId && userPassword && userPassword.length > 0 && userPassword.length < 6) {
-                    console.error("❌ Şifre geçersiz!");
-                    showNotification('Yeni kullanıcı için şifre en az 6 karakter olmalı (ya da boş bırakın).', 'error');
-                    userPasswordEl?.focus();
+                if (!userName || !userRole) {
+                    showNotification('Lütfen ad-soyad ve rol alanlarını doldurun.', 'error');
                     return;
                 }
 
-                console.log("✅ Tüm validasyonlar geçti, işlem başlıyor...");
                 try {
-                    // Payload
-                    const payload = {
-                        uid: userId || '',
-                        email: strip(userEmail).toLowerCase(),
-                        displayName: strip(userName),
-                        role: strip(userRole)
-                    };
+                    if (userId) {
+                        // 1. MEVCUT KULLANICIYI GÜNCELLE
+                        const { error: updateErr } = await supabase.from('users').update({
+                            display_name: userName,
+                            role: userRole,
+                            updated_at: new Date().toISOString()
+                        }).eq('id', userId);
 
-                    // (Opsiyonel) Yeni e-posta alanı kullandıysan:
-                    const newEmailEl = document.getElementById('newEmail');
-                    if (newEmailEl && newEmailEl.value) {
-                        payload.newEmail = strip(newEmailEl.value).toLowerCase();
-                    }
+                        if (updateErr) throw updateErr;
 
-                    // (Opsiyonel) Devre dışı bırakma checkbox'ı kullandıysan:
-                    const disabledEl = document.getElementById('userDisabledCheckbox');
-                    if (disabledEl) payload.disabled = !!disabledEl.checked;
-
-                    // Şifre verildiyse gönder; verilmediyse dokunmayız
-                    if (userPassword && userPassword.length >= 6) {
-                        payload.password = userPassword;
-                    }
-                    if (!payload.displayName && userNameEl?.value) {
-                        payload.displayName = strip(userNameEl.value);
-                    }
-
-                    // Kullanıcı oluştur/güncelle
-                    const { data } = await upsertUser(payload);
-
-                    // Kullanıcı işlemi başarılıysa, kişi ilişkilendirmesi yap
-                    if (data.uid) {
-                        if (payload.role === 'client' && this.selectedPersons.length > 0) {
-                            // tip ('view' | 'approval') → boolean şeması
-                            const toBooleanPerms = (type) => {
-                                // 'view' = sadece görüntüleme; 'approval' = hem görüntüleme hem onay
-                                if (type === 'approval') return { approval: true, view: true };
-                                return { approval: false, view: true };
-                            };
-
-                            // 'type' -> exclusive boolean mapping
-                            const mapPerms = (type) => {
-                            if (type === 'approval') return { approval: true, view: false };
-                            return { approval: false, view: true };
-                            };
-
-                            const personsWithPermissions = this.selectedPersons.map(p => ({
-                            personId: p.id,
-                            permissions: mapPerms(p?.permissions?.type || 'view')
+                        // Rol "client" ise kişi bağlantılarını (user_persons tablosu) güncelle
+                        await supabase.from('user_persons').delete().eq('user_id', userId); // Eski bağları sil
+                        
+                        if (userRole === 'client' && this.selectedPersons.length > 0) {
+                            const inserts = this.selectedPersons.map(p => ({
+                                user_id: userId,
+                                person_id: p.id,
+                                permissions: { approval: p.permissions.type === 'approval', view: true }
                             }));
-
-                            await personService.linkUserToPersons(data.uid, personsWithPermissions);
-                        } else {
-                            // Client değilse mevcut ilişkilendirmeleri temizle
-                            await personService.unlinkUserFromAllPersons(data.uid);
+                            await supabase.from('user_persons').insert(inserts);
                         }
+
+                        showNotification('Kullanıcı başarıyla güncellendi.', 'success');
+                    } else {
+                        // 2. YENİ KULLANICI EKLEME 
+                        showNotification('Güvenlik gereği yeni kullanıcılar Login sayfasından Kayıt Olmalıdır veya Supabase Edge Function yazılmalıdır.', 'warning', 5000);
+                        return;
                     }
 
-                    showNotification(
-                        (data.existed ? 'Kullanıcı güncellendi' : 'Yeni kullanıcı oluşturuldu') + ` (UID: ${data.uid})`,
-                        'success'
-                    );
-
-                    console.log("🎉 İşlem tamamlandı, modal kapatılıyor ve liste yenileniyor...");
                     this.closeUserModal();
                     await this.loadUsers();
 
                 } catch (error) {
-                    console.error('❌ Kullanıcı işlemi hatası:', error);
-                    const errorMessage = error?.message || error?.code || 'Bilinmeyen hata';
-                    showNotification(errorMessage, 'error');
+                    console.error('İşlem hatası:', error);
+                    showNotification('İşlem başarısız: ' + error.message, 'error');
                 }
             }
 
             async deleteUser(userId) {
-                if (userId === this.currentUser.uid) {
-                    showNotification('Kendi hesabınızı silemezsiniz.', 'error');
-                    return;
+                // Kendi kendini silme engeli
+                if (userId === this.currentUser.id) {
+                    return showNotification('Kendi hesabınızı silemezsiniz.', 'error');
                 }
-
+                
                 const u = this.allUsers.find(x => x.id === userId);
                 const name = u?.displayName || u?.email || userId;
 
-                if (!confirm(`"${name}" kullanıcısını silmek istediğinize emin misiniz? Bu işlem geri alınamaz.`)) {
+                if (!confirm(`"${name}" adlı kullanıcıyı sistemden tamamen silmek istediğinize emin misiniz? Bu işlem geri alınamaz!`)) {
                     return;
                 }
 
+                showNotification('Siliniyor, lütfen bekleyin...', 'info', 2000);
+
                 try {
-                    // Auth + Firestore silme: adminDeleteUser callable
-                    const { data } = await deleteUserFn({ uid: userId });
-                    showNotification('Kullanıcı silindi.', 'success');
-                    await this.loadUsers();
+                    // 🚀 ÇÖZÜM: Yeni yazdığımız Supabase Edge Function'ı çağırıyoruz
+                    const { data, error } = await supabase.functions.invoke('delete-user', {
+                        body: { userId: userId }
+                    });
+
+                    if (error) throw error;
+                    
+                    if (data && data.success) {
+                        showNotification('Kullanıcı sistemden tamamen silindi.', 'success');
+                        await this.loadUsers(); // Tabloyu yenile
+                    } else {
+                        throw new Error(data?.error || 'Bilinmeyen bir hata oluştu.');
+                    }
+
                 } catch (error) {
                     console.error('Silme hatası:', error);
-                    const msg = error?.message || error?.code || 'Bilinmeyen hata';
-                    showNotification('Kullanıcı silinemedi: ' + msg, 'error');
+                    showNotification('Kullanıcı silinemedi: ' + error.message, 'error');
                 }
             }
         }
-
         const userManagementModule = new UserManagementModule();
         userManagementModule.init();
     });
