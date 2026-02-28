@@ -19,7 +19,6 @@ export class PortfolioDataManager {
     }
 
     async _mapRawToProcessed(rawData) {
-        // 🔥 HIZLANDIRMA 2: Gecikme yaratan "Chunking" kaldırıldı. Tüm işlemler anında (senkron) yapılıyor.
         return rawData.map(record => ({
             ...record,
             applicationDateTs: this._parseDate(record.applicationDate),
@@ -35,7 +34,7 @@ export class PortfolioDataManager {
         await Promise.all([
             this.loadTransactionTypes(),
             this.loadCountries(),
-            this.loadPersons() // Kişilerin eksik gelmesini engeller
+            this.loadPersons()
         ]);
         return this.allRecords;
     }
@@ -82,7 +81,6 @@ export class PortfolioDataManager {
     }
 
     async loadRecords({ type = null } = {}) {
-        // 🔥 HIZLANDIRMA 3: Eğer kayıtlar RAM'de varsa veritabanına/önbelleğe gitmeden ANINDA geri dön
         if (this.allRecords && this.allRecords.length > 0) {
             return this.allRecords;
         }
@@ -153,6 +151,7 @@ export class PortfolioDataManager {
     }
 
     clearCache() {
+        this.allRecords = []; // 🔥 EKLENDİ: Tüm cache'i sıfırlamak için
         this.objectionRows = [];
         this.litigationRows = [];
     }
@@ -233,11 +232,14 @@ export class PortfolioDataManager {
 
     _createObjectionRowDataFast(record, tx, typeInfo, isParent, hasChildren, parentId = null) {
         let docs = [];
-        if (Array.isArray(tx.documents)) {
-            docs = tx.documents.map(d => ({
-                fileName: d.name || d.fileName || 'Belge',
-                fileUrl: d.fileUrl || d.url || d.downloadURL || d.path || d.link,
-                type: d.type || 'standard'
+        
+        // 🔥 YENİ ŞEMA UYUMU: transaction_documents veya legacy documents alanını tara
+        const sourceDocs = tx.transaction_documents || tx.documents || [];
+        if (Array.isArray(sourceDocs)) {
+            docs = sourceDocs.map(d => ({
+                fileName: d.document_name || d.name || d.fileName || 'Belge',
+                fileUrl: d.document_url || d.fileUrl || d.url || d.downloadURL || d.path || d.link,
+                type: d.document_type || d.type || 'standard'
             }));
         }
 
@@ -306,7 +308,8 @@ export class PortfolioDataManager {
     _fmtDate(val) {
         if(!val) return '-';
         try {
-            let d = typeof val === 'object' && val._seconds ? new Date(val._seconds * 1000) : new Date(val);
+            // 🔥 YENİ: Firebase kalıntısını sildik. Doğrudan standart tarih çevirimi
+            let d = new Date(val);
             if(isNaN(d.getTime())) return '-';
             return d.toLocaleDateString('tr-TR');
         } catch { return '-'; }
@@ -315,7 +318,6 @@ export class PortfolioDataManager {
     _parseDate(val) {
         if (!val || val === '-') return 0;
         if (val instanceof Date) return val.getTime();
-        if (typeof val === 'object' && val._seconds) return val._seconds * 1000;
         if (typeof val === 'string' && val.includes('.')) {
             const parts = val.split('.');
             if (parts.length === 3) return new Date(parts[2], parts[1] - 1, parts[0]).getTime();
@@ -337,7 +339,6 @@ export class PortfolioDataManager {
             sourceData = this.objectionRows.filter(r => r.portfoyStatus !== 'inactive' && r.recordStatus !== 'pasif');
         } else {
             sourceData = this.allRecords.filter(r => {
-                // 🔥 KESİN GÜZELLEME: Karşı Taraf (Third Party) OLANLARI ASLA LİSTELEME
                 if (r.recordOwnerType === 'third_party') return false;
 
                 const isThirdPartyOrBulletin = ['third_party', 'published_in_bulletin'].includes(r.portfoyStatus || r.status);
@@ -398,5 +399,18 @@ export class PortfolioDataManager {
             }
             return direction === 'asc' ? collator.compare(String(valA), String(valB)) : -collator.compare(String(valA), String(valB));
         });
+    }
+
+    // İzlemeye Ekleme için veri hazırlayıcı (SQL Şemasına Uyumlu)
+    prepareMonitoringData(record) {
+        return {
+            ip_record_id: record.id,
+            mark_name: record.title || record.brandText || 'İsimsiz Marka',
+            // 🔥 search_mark_name satırı tamamen kaldırıldı
+            application_number: record.applicationNumber || '-',
+            owner_name: record.applicantName || '-',
+            nice_classes: record.niceClasses || [],
+            image_path: record.brandImageUrl || null
+        };
     }
 }
