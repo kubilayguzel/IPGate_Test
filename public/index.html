@@ -195,27 +195,6 @@
             }
         }
 
-        .firebase-status {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 10px 15px;
-            border-radius: 20px;
-            font-size: 0.8em;
-            font-weight: 600;
-            z-index: 1000;
-        }
-
-        .firebase-status.connected {
-            background: #d4edda;
-            color: #155724;
-        }
-
-        .firebase-status.error {
-            background: #f8d7da;
-            color: #721c24;
-        }
-
         .helper-links {
             display: flex;
             justify-content: flex-end;
@@ -450,7 +429,6 @@
     </style>
 </head>
 <body>
-<div class="firebase-status" id="firebaseStatus">💡 Firebase bağlanıyor...</div>
 <div class="main-container">
     <div class="auth-container">
         <div class="logo-section">
@@ -609,20 +587,6 @@ class AuthController {
 
             this.currentTab = tabName;
             clearAllFieldErrors();
-        }
-
-    checkFirebaseConnectionStatus() {
-            const statusEl = document.getElementById('firebaseStatus');
-            if (!statusEl) return;
-
-            if (authService.isFirebaseAvailable) {
-                statusEl.textContent = '✅ Firebase bağlandı';
-                statusEl.className = 'firebase-status connected';
-                setTimeout(() => statusEl.style.display = 'none', 2000);
-            } else {
-                statusEl.textContent = '❌ Firebase bağlanamadı';
-                statusEl.className = 'firebase-status error';
-            }
         }
 
         async handleSignIn() {
