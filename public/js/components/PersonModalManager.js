@@ -302,7 +302,8 @@ export class PersonModalManager {
 
     async open(personId = null, callback = null) {
         this.isEdit = !!personId;
-        this.currentPersonId = personId;
+        // YENİ: Eğer ID yoksa anında yeni bir UUID üret!
+        this.currentPersonId = personId || crypto.randomUUID(); 
         this.tempCallback = callback; 
         this.resetForm();
 
@@ -369,7 +370,8 @@ export class PersonModalManager {
             const processedDocs = [];
             for (const doc of this.documents) {
                 if (doc.isNew && doc.fileObj) {
-                    doc.url = await this.dataManager.uploadDocument(doc.fileObj);
+                    // YENİ: this.currentPersonId parametresini ekledik (temp klasörüne gitmemesi için)
+                    doc.url = await this.dataManager.uploadDocument(doc.fileObj, this.currentPersonId);
                 }
                 processedDocs.push({
                     type: doc.type, url: doc.url, validityDate: doc.validityDate,
@@ -381,6 +383,7 @@ export class PersonModalManager {
             const provinceSel = document.getElementById('provinceSelect');
             
             const personData = {
+                id: this.currentPersonId, // YENİ: Baştan ürettiğimiz ID'yi DB'ye gönderiyoruz
                 name: nameVal,
                 type: document.getElementById('personType').value,
                 tckn: document.getElementById('personTckn').value,
