@@ -11,7 +11,6 @@ export class PersonUIManager {
         this.sortColumn = 'name';
         this.sortDirection = 'asc';
 
-        // Pagination nesnesini oluştur
         this.pagination = new Pagination({
             containerId: 'paginationContainer',
             itemsPerPage: 10,
@@ -23,45 +22,36 @@ export class PersonUIManager {
         const res = await this.dataManager.fetchPersons();
         if (res.success) {
             this.allPersons = res.data;
-            this.filteredData = [...this.allPersons]; // Önce filtreli veriyi doldur
+            this.filteredData = [...this.allPersons];
             
-            // Pagination ayarlarını yap ve İLK ÇİZİMİ ZORLA
             if (this.pagination) {
                 this.pagination.totalItems = this.allPersons.length;
-                this.pagination.currentPage = 1; // Sayfayı 1'e sabitle
+                this.pagination.currentPage = 1;
             }
             
-            this.applyFiltersAndSort(); // Tabloyu ve pagination'ı çiz
+            this.applyFiltersAndSort();
         }
     }
 
     async deletePerson(id) {
         try {
-            // Yükleniyor efekti (Listeyi flu yap)
             const tableBody = document.getElementById('personsTableBody');
             if(tableBody) tableBody.style.opacity = '0.5';
 
-            // personService'i çağır
-            let service = window.personService; 
-            if (!service) {
-                // YENİ: Firebase yerine Supabase config dosyasına bağlandı
-                const module = await import('../../supabase-config.js');
-                service = module.personService;
-            }
-
-            const result = await service.deletePerson(id);
+            // Firebase personService yerine yazdığımız Supabase fonksiyonunu çağırıyoruz
+            const result = await this.dataManager.deletePerson(id);
 
             if (result.success) {
                 await this.loadPersons();
                 if(window.showNotification) window.showNotification('Kişi başarıyla silindi.', 'success');
-                if(tableBody) tableBody.style.opacity = '1';
             } else {
                 alert("Silme işlemi başarısız: " + result.error);
-                if(tableBody) tableBody.style.opacity = '1';
             }
         } catch (error) {
             console.error("Silme hatası:", error);
             alert("Bir hata oluştu: " + error.message);
+        } finally {
+            // Hata olsa da olmasa da opaklığı düzelt
             const tableBody = document.getElementById('personsTableBody');
             if(tableBody) tableBody.style.opacity = '1';
         }
@@ -80,7 +70,6 @@ export class PersonUIManager {
                 (p.tpeNo || '').includes(term)
             );
         }
-        // Arama yapıldığında 1. sayfaya dön
         this.pagination.currentPage = 1;
         this.applyFiltersAndSort();
     }
@@ -121,7 +110,6 @@ export class PersonUIManager {
         if (!tableBody) return;
 
         tableBody.innerHTML = '';
-        
         const paginatedData = this.pagination.getCurrentPageData(this.filteredData);
 
         if (paginatedData.length === 0) {
