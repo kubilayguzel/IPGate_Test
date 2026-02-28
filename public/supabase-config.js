@@ -174,37 +174,108 @@ export const personService = {
             return { success: false, error: error.message };
         }
         
-        // SQL formatını Arayüzün beklediği CamelCase formata çevir
+        // YENİ ŞEMA: person_type yerine type, tax_no yerine taxNo (UI camelCase bekliyor)
         const mappedData = data.map(p => ({
-            id: p.id, name: p.name, type: p.person_type, tckn: p.tckn, taxNo: p.tax_no, tpeNo: p.tpe_no,
-            email: p.email, phone: p.phone, address: p.address, countryCode: p.country_code, province: p.province,
-            is_evaluation_required: p.is_evaluation_required, documents: p.documents || [],
-            ...p.details // Geri kalan her şey (JSONB)
+            id: p.id, 
+            name: p.name, 
+            type: p.type, 
+            tckn: p.tckn, 
+            taxOffice: p.tax_office,
+            taxNo: p.tax_no, 
+            tpeNo: p.tpe_no,
+            email: p.email, 
+            phone: p.phone, 
+            address: p.address, 
+            countryCode: p.country_code, 
+            province: p.province,
+            is_evaluation_required: p.is_evaluation_required
+            // NOT: 'documents' ve 'details' yeni şemada kaldırıldığı için çıkarıldı.
         }));
         return { success: true, data: mappedData };
     },
 
     async getPersonById(id) {
-        const { data, error } = await supabase.from('persons').select('*').eq('id', id).single();
+        // 🔥 YENİ DB YAPISI: İlişkili person_documents tablosundaki vekaletnameleri de (JOIN ile) çekiyoruz
+        const { data, error } = await supabase
+            .from('persons')
+            .select(`
+                *,
+                person_documents (*)
+            `)
+            .eq('id', id)
+            .single();
+            
         if (error) return { success: false, error: error.message };
+        
+        // Arayüzün (UI) beklediği formata çeviriyoruz
+        const mappedDocuments = (data.person_documents || []).map(doc => ({
+            id: doc.id,
+            fileName: doc.file_name,
+            documentType: doc.document_type,
+            url: doc.url,
+            countryCode: doc.country_code,
+            validityDate: doc.validity_date
+        }));
+
         const mappedData = {
-            id: data.id, name: data.name, type: data.person_type, tckn: data.tckn, taxNo: data.tax_no, tpeNo: data.tpe_no,
-            email: data.email, phone: data.phone, address: data.address, countryCode: data.country_code, province: data.province,
-            is_evaluation_required: data.is_evaluation_required, documents: data.documents || [], ...data.details
+            id: data.id, 
+            name: data.name, 
+            type: data.type, 
+            tckn: data.tckn, 
+            birthDate: data.birth_date,
+            taxOffice: data.tax_office,
+            taxNo: data.tax_no, 
+            tpeNo: data.tpe_no,
+            email: data.email, 
+            phone: data.phone, 
+            address: data.address, 
+            countryCode: data.country_code, 
+            province: data.province,
+            is_evaluation_required: data.is_evaluation_required,
+            documents: mappedDocuments // 🔥 Belgeleri arayüze iletiyoruz
         };
         return { success: true, data: mappedData };
     },
 
     async addPerson(personData) {
         const payload = {
-            name: personData.name, person_type: personData.type, tckn: personData.tckn || null, tax_no: personData.taxNo || null,
-            tpe_no: personData.tpeNo || null, email: personData.email || null, phone: personData.phone || null,
-            address: personData.address || null, country_code: personData.countryCode || null, province: personData.province || null,
-            is_evaluation_required: personData.is_evaluation_required || false, documents: personData.documents || [], details: personData
+            id: crypto.randomUUID(), 
+            name: personData.name, 
+            type: personData.type, 
+            tckn: personData.tckn || null, 
+            birth_date: personData.birthDate || null,
+            tax_office: personData.taxOffice || null,
+            tax_no: personData.taxNo || null,
+            tpe_no: personData.tpeNo || null, 
+            email: personData.email || null, 
+            phone: personData.phone || null,
+            address: personData.address || null, 
+            country_code: personData.countryCode || null, 
+            province: personData.province || null,
+            is_evaluation_required: personData.is_evaluation_required || false
         };
+
+        // 1. Önce Kişiyi Kaydet
         const { data, error } = await supabase.from('persons').insert(payload).select('id').single();
         if (error) return { success: false, error: error.message };
-        return { success: true, data: { id: data.id } };
+        
+        const newPersonId = data.id;
+
+        // 🔥 YENİ DB YAPISI: Belgeleri `person_documents` tablosuna kaydet
+        if (personData.documents && personData.documents.length > 0) {
+            const docsPayload = personData.documents.map(doc => ({
+                person_id: newPersonId,
+                file_name: doc.fileName || doc.name || 'Belge',
+                document_type: doc.documentType || doc.type || 'vekaletname',
+                url: doc.url,
+                country_code: doc.countryCode || null,
+                validity_date: doc.validityDate || null
+            }));
+            
+            await supabase.from('person_documents').insert(docsPayload);
+        }
+
+        return { success: true, data: { id: newPersonId } };
     },
 
     async updatePerson(id, personData) {
@@ -213,36 +284,47 @@ export const personService = {
             type: personData.type, 
             tckn: personData.tckn || null, 
             birth_date: personData.birthDate || null,
+            tax_office: personData.taxOffice || null,
             tax_no: personData.taxNo || null,
             tpe_no: personData.tpeNo || null, 
             email: personData.email || null, 
             phone: personData.phone || null,
             address: personData.address || null, 
             country_code: personData.countryCode || null, 
-            country_name: personData.countryName || null,
             province: personData.province || null, 
             is_evaluation_required: personData.is_evaluation_required || false,
-            documents: personData.documents || [],
             updated_at: new Date().toISOString()
         };
         
-        // Boş string ('') gelen verileri veritabanı format hatası vermesin diye null yapıyoruz
         Object.keys(payload).forEach(key => { 
-            if (payload[key] === undefined || payload[key] === '') {
-                payload[key] = null; 
-            }
+            if (payload[key] === undefined || payload[key] === '') payload[key] = null; 
         });
 
-        console.log("🟢 SUPABASE'E GÖNDERİLEN UPDATE PAKETİ:", payload);
-
-        // Update işlemini yap ve sonucunu (select ile) geri döndür ki hatayı görelim
-        const { data, error } = await supabase.from('persons').update(payload).eq('id', id).select();
-        
+        // 1. Kişiyi Güncelle
+        const { error } = await supabase.from('persons').update(payload).eq('id', id);
         if (error) {
             console.error("🔴 SUPABASE UPDATE HATASI:", error);
-            // Hatayı fırlatarak arayüzün sahte başarılı mesajı vermesini engelliyoruz
             alert("Kayıt Başarısız: " + error.message);
             return { success: false, error: error.message };
+        }
+
+        // 🔥 YENİ DB YAPISI: Belgeleri `person_documents` tablosuna güncelle
+        if (personData.documents) {
+            // Önce bu kişiye ait eski belgeleri siliyoruz, sonra formdan gelen güncel listeyi yazıyoruz (Senkronizasyon)
+            await supabase.from('person_documents').delete().eq('person_id', id);
+            
+            if (personData.documents.length > 0) {
+                const docsPayload = personData.documents.map(doc => ({
+                    person_id: id,
+                    file_name: doc.fileName || doc.name || 'Belge',
+                    document_type: doc.documentType || doc.type || 'vekaletname',
+                    url: doc.url,
+                    country_code: doc.countryCode || null,
+                    validity_date: doc.validityDate || null
+                }));
+                
+                await supabase.from('person_documents').insert(docsPayload);
+            }
         }
         
         return { success: true };
@@ -273,7 +355,6 @@ export const personService = {
             if (loaded && loaded.length > 0) {
                 for (const r of loaded) {
                     if (r.id) {
-                        // Veritabanı ID'si ve Person_ID'sini ayırıp kalanları güncelliyoruz
                         const { id, person_id, created_at, ...updateData } = r;
                         Object.keys(updateData).forEach(key => { 
                             if (updateData[key] === undefined || updateData[key] === '') updateData[key] = null; 
@@ -287,7 +368,7 @@ export const personService = {
             // 3. Yeni Eklenecekler
             if (draft && draft.length > 0) {
                 const inserts = draft.map(d => ({
-                    id: crypto.randomUUID(), // 🔥 YENİ: ID'yi manuel olarak üretiyoruz
+                    id: crypto.randomUUID(),
                     person_id: personId, 
                     name: d.name || null, 
                     email: d.email || null, 
