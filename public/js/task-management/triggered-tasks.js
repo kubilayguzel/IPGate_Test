@@ -37,16 +37,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.triggeredTaskStatuses = ['awaiting_client_approval'];
         }
 
-        init() {
+        async init() {
             this.initializePagination();
             this.setupStaticEventListeners();
 
             this.taskDetailManager = new TaskDetailManager('modalBody');
             this.accrualFormManager = new AccrualFormManager('accrualFormContainer', 'triggeredAccrual');
 
-            const user = authService.getCurrentUser();
-            if (user) {
-                this.currentUser = user;
+            // 🔥 YENİ AUTH
+            const session = await authService.getCurrentSession();
+            if (session) {
+                const { data: profile } = await supabase.from('users').select('*').eq('id', session.user.id).single();
+                this.currentUser = { ...session.user, ...(profile || {}), uid: session.user.id };
                 this.loadAllData();
             } else {
                 window.location.href = '/index.html';
@@ -71,8 +73,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (loader) loader.style.display = 'block';
 
             try {
-                // Auth kullanıcısının yetkilerini kontrol edelim
-                const isSuper = this.currentUser?.isSuperAdmin || false;
+                // 🔥 YENİ SUPERADMIN KONTROLÜ
+                const isSuper = this.currentUser?.role === 'superadmin';
                 const targetStatus = 'awaiting_client_approval';
 
                 const [tasksResult, transTypesResult] = await Promise.all([
@@ -85,7 +87,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 this.processData(); 
 
-                if (loader) loader.style.display = 'none';
             } catch (error) {
                 console.error("Yükleme Hatası:", error);
             } finally {
