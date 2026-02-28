@@ -763,7 +763,7 @@ export const ipRecordsService = {
             }
         }
 
-        if (window.localCache) await window.localCache.remove(CACHE_KEY);
+        if (window.localCache) await window.localCache.remove('ip_records_cache');
         return { success: true };
     },
 
@@ -822,8 +822,15 @@ export const ipRecordsService = {
     async deleteParentWithChildren(parentId) {
         const { error: childrenError } = await supabase.from('ip_records').delete().eq('parent_id', parentId);
         if (childrenError) return { success: false, error: childrenError.message };
+        
         const { error } = await supabase.from('ip_records').delete().eq('id', parentId);
         if (error) return { success: false, error: error.message };
+        
+        // 🔥 ÇÖZÜM: Kayıt silindiğinde önbelleği temizle ki liste güncellensin!
+        if (window.localCache) {
+            await window.localCache.remove('ip_records_cache');
+        }
+        
         return { success: true };
     },
     
@@ -846,17 +853,35 @@ export const ipRecordsService = {
 // 5. İZLEME (MONITORING) SERVİSİ
 export const monitoringService = {
     async addMonitoringItem(recordData) {
-        // Ön yüzden gelen veriyi Supabase 'details' JSON alanına gömüyoruz
+        // KURAL 1: Orijinal markanın sınıflarını al ve sayıya çevir
+        let originalClasses = Array.isArray(recordData.nice_classes) 
+            ? recordData.nice_classes.map(c => parseInt(c)).filter(n => !isNaN(n)) 
+            : [];
+        
+        let searchClasses = [...originalClasses];
+
+        // KURAL 2: Eğer 1 ile 34 arasında herhangi bir sınıf varsa, listeye 35. sınıfı da ekle
+        const hasGoodsClass = searchClasses.some(c => c >= 1 && c <= 34);
+        if (hasGoodsClass && !searchClasses.includes(35)) {
+            searchClasses.push(35);
+        }
+
         const payload = {
-            id: recordData.id,
-            ip_record_id: recordData.relatedRecordId || recordData.id,
-            search_mark_name: recordData.markName || 'İsimsiz İzleme',
-            details: recordData,
-            updated_at: new Date().toISOString()
+            id: crypto.randomUUID(), 
+            ip_record_id: recordData.ip_record_id,
+            
+            // 🔥 ÇÖZÜM: search_mark_name alanı payload'dan (veritabanı paketinden) çıkarıldı.
+            // Aranacak ibareler (brand_text_search) kısmına varsayılan olarak markanın kendi adını ekliyoruz.
+            brand_text_search: recordData.mark_name ? [String(recordData.mark_name)] : [], 
+            nice_class_search: searchClasses 
         };
 
-        const { error } = await supabase.from('monitoring_trademarks').upsert(payload);
-        if (error) return { success: false, error: error.message };
+        const { error } = await supabase.from('monitoring_trademarks').insert(payload);
+        
+        if (error) {
+            console.error("İzlemeye Ekleme SQL Hatası Detayı:", JSON.stringify(error, null, 2));
+            return { success: false, error: error.message || error.details };
+        }
         return { success: true };
     }
 };
