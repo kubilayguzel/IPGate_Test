@@ -39,16 +39,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             this.tasksToAssign = [];
         }
 
-        init() {
+        async init() {
             this.taskDetailManager = new TaskDetailManager('modalBody');
             this.accrualFormManager = new AccrualFormManager('createMyTaskAccrualFormContainer', 'myTaskAcc');
             this.completeTaskFormManager = new AccrualFormManager('completeAccrualFormContainer', 'comp');
             
             this.initializePagination();
 
-            const user = authService.getCurrentUser();
-            if (user) {
-                this.currentUser = user;
+            // 🔥 SADECE BURASI DEĞİŞTİ: Yeni Supabase Auth Yapısı
+            const session = await authService.getCurrentSession();
+            if (session) {
+                const { data: profile } = await supabase.from('users').select('*').eq('id', session.user.id).single();
+                this.currentUser = { ...session.user, ...(profile || {}), uid: session.user.id };
                 this.loadAllData().then(() => {
                     this.setupEventListeners();
                     this.populateStatusFilterDropdown();
