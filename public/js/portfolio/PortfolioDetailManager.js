@@ -207,7 +207,6 @@ export class PortfolioDetailManager {
 
             let pDocsHtml = pIcons || '';
             
-            // 🔥 KOŞULSUZ ARAMA: Her işlem için veritabanında görev belgesi var mı diye arat!
             pDocsHtml += `<span class="tx-docs-loading text-muted small ml-2"><i class="fas fa-spinner fa-spin"></i> PDF aranıyor...</span>`;
             enrichQueue.push({ tx: parent, containerId: pId, hasAnyDirect: pDirectDocs.length > 0 });
 
@@ -221,7 +220,6 @@ export class PortfolioDetailManager {
                         
                         let cDocsHtml = cIcons || '';
                         
-                        // 🔥 ALT İŞLEMLER İÇİN DE KOŞULSUZ ARAMA
                         cDocsHtml += `<span class="tx-docs-loading text-muted small ml-2"><i class="fas fa-spinner fa-spin"></i> PDF aranıyor...</span>`;
                         enrichQueue.push({ tx: child, containerId: cId, hasAnyDirect: cDirectDocs.length > 0 });
 
@@ -280,7 +278,6 @@ export class PortfolioDetailManager {
     createDocIcon(doc, isFirst) {
         const color = (doc.source === 'task') ? 'text-info' : 'text-danger'; 
         
-        // 🔥 GÜNCELLEME: Dosya tipine (Image/PDF/Word) göre uygun ikonu seç!
         let iconClass = 'fa-file-pdf';
         if (doc.type) {
             const t = doc.type.toLowerCase();
@@ -308,31 +305,36 @@ export class PortfolioDetailManager {
         if (!this.elements.applicantName) return;
         let names = [], addresses = [];
         
+        // 🔥 ÇÖZÜM: Yeni SQL yapımızda veriler JOIN ile geldiği için "N+1" ekstra sorguları tamamen kaldırıldı. Işık hızında çalışacak!
         if (Array.isArray(r.applicants) && r.applicants.length > 0) {
-            const resolved = await Promise.all(r.applicants.map(async (app) => {
-                const pId = typeof app === 'string' ? app : app.id;
-                if (!pId) return { name: app.name || '-' };
-                try {
-                    const res = await personService.getPersonById(pId);
-                    return (res.success && res.data) ? { name: res.data.name, address: res.data.address } : { name: app.name || '-' };
-                } catch { return { name: app.name || '-' }; }
-            }));
-            names = resolved.map(a => a.name); 
-            addresses = resolved.map(a => a.address).filter(Boolean);
+            r.applicants.forEach(app => {
+                names.push(app.name || '-');
+                if (app.address) addresses.push(app.address);
+            });
         } else {
             names = [r.applicantName || '-']; 
             addresses = [r.applicantAddress || '-'];
         }
-        this.elements.applicantName.innerHTML = names.join('<br>');
-        if (this.elements.applicantAddress) this.elements.applicantAddress.innerHTML = addresses.join('<br>') || '-';
+        
+        this.elements.applicantName.innerHTML = names.join('<br>') || '-';
+        if (this.elements.applicantAddress) {
+            this.elements.applicantAddress.innerHTML = addresses.length > 0 ? addresses.join('<br>') : '-';
+        }
     }
 
     renderDocuments() {
+        // 🔥 ÇÖZÜM: SQL tablosundan (veya yedek JSON'dan) gelen belgeler SQL isimlendirmeleriyle (document_url, document_name vb.) okundu
         const docs = this.currentRecord.documents || [];
         if (this.elements.docsTbody) {
             this.elements.docsTbody.innerHTML = docs.length ? docs.map(d => `
-                <tr><td>${d.name || d.fileName}</td><td>${d.documentDesignation || '-'}</td><td>${this.formatDate(d.uploadedAt || d.date)}</td>
-                <td class="text-right"><i class="fas fa-eye text-primary cursor-pointer" onclick="window.open('${d.url || d.fileUrl}','_blank')"></i></td></tr>`).join('') : '<tr><td colspan="4" class="text-center">Belge yok.</td></tr>';
+                <tr>
+                    <td>${d.name || d.fileName || d.document_name || 'İsimsiz Belge'}</td>
+                    <td>${d.documentDesignation || d.document_type || '-'}</td>
+                    <td>${this.formatDate(d.uploadedAt || d.date || d.created_at)}</td>
+                    <td class="text-right">
+                        <i class="fas fa-eye text-primary cursor-pointer" onclick="window.open('${d.url || d.fileUrl || d.document_url}','_blank')"></i>
+                    </td>
+                </tr>`).join('') : '<tr><td colspan="4" class="text-center">Belge yok.</td></tr>';
         }
     }
 
