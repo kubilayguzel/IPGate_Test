@@ -493,258 +493,177 @@
     </div>
 </div>
 <script type="module">
+    import { supabase } from './supabase-config.js';
+    import { showNotification, clearAllFieldErrors } from './utils.js';
 
-import { authService, supabase } from './supabase-config.js'; // firebase-config yerine bunu çağırıyoruz
-import { showNotification, showFieldError, clearAllFieldErrors } from './utils.js';
-
-class AuthController {
+    class AuthController {
         constructor() {
-            this.container = document.querySelector('.auth-container');
-            this.tabs = document.querySelectorAll('.auth-tab');
-            this.forms = document.querySelectorAll('.auth-form');
-            
+            this.currentTab = 'signin';
             this.init();
-            this.checkRecovery(); // 🔥 YENİ: Şifre sıfırlama linkinden gelindiyse yakala
+            this.checkSession();
         }
 
-    init() {
-        this.setupEventListeners();
-        this.setupAuthStateListener();
-        console.log('📌 Supabase Auth Controller initialized');
-    }
+        // Kullanıcı zaten giriş yapmışsa direkt portföye at
+        async checkSession() {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session) {
+                window.location.replace('portfolio.html');
+            }
+        }
 
-        setupEventListeners() {
-            // Tab switching
+        init() {
+            // 1. SEKMELER ARASI GEÇİŞ (Kayıt Ol / Giriş Yap)
             document.querySelectorAll('.tab').forEach(tab => {
                 tab.addEventListener('click', (e) => {
                     this.switchTab(e.target.dataset.tab);
                 });
             });
 
-            // Sign in
-            document.getElementById('signinForm').addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.handleSignIn();
-            });
+            // 2. FORM GÖNDERME İŞLEMLERİ (Enter tuşu ile de çalışır)
+            document.getElementById('signinForm')?.addEventListener('submit', (e) => this.handleLogin(e));
+            document.getElementById('signupForm')?.addEventListener('submit', (e) => this.handleSignup(e));
 
-            // Sign up
-            document.getElementById('signupForm').addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.handleSignUp();
-            });
-
-            // Forgot password
-            document.getElementById('forgotPasswordBtn').addEventListener('click', () => {
-                this.handlePasswordReset();
-            });
+            // 3. ŞİFREMİ UNUTTUM
+            document.getElementById('forgotPasswordBtn')?.addEventListener('click', (e) => this.handleResetPassword(e));
         }
 
-    setupAuthStateListener() {
-        supabase.auth.onAuthStateChange(async (event, session) => {
-            if (event === 'SIGNED_OUT' || !session) {
-                console.log('ℹ️ Kullanıcı çıkış yaptı veya oturum yok.');
-                return;
-            }
-
-            if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
-                const user = session.user;
-                
-                // Email doğrulama kontrolü
-                const inSignupFlow = sessionStorage.getItem('signup_flow') === '1';
-                if (!inSignupFlow && user.email_confirmed_at === null) {
-                    showNotification('Lütfen e-posta adresinizi doğrulayın.', 'warning');
-                    await authService.signOut();
-                    return;
-                }
-
-                // Supabase'den rolü çek (Şimdilik metadata'dan, ileride tablodan)
-                const userRole = user.user_metadata?.role || 'user';
-                
-                // Başarılı giriş: Dashboard/Portfolio sayfasına yönlendir
-                sessionStorage.removeItem('signup_flow');
-                if (event === 'SIGNED_IN') {
-                    showNotification('Giriş başarılı! Yönlendiriliyorsunuz...', 'success');
-                    setTimeout(() => {
-                        window.location.href = 'my-tasks.html';
-                    }, 1000);
-                }
-            }
-        });
-    }
-    
-    switchTab(tabName) {
+        switchTab(tabName) {
             if (tabName === this.currentTab) return;
 
-            // Tab butonlarını güncelle
+            // Butonların aktifliğini değiştir
             document.querySelectorAll('.tab').forEach(tab => {
                 tab.classList.toggle('active', tab.dataset.tab === tabName);
             });
 
-            // Form bölümlerini güncelle
+            // Form alanlarının görünürlüğünü değiştir
             document.querySelectorAll('.form-section').forEach(section => {
                 section.classList.toggle('active', section.id === `${tabName}-section`);
             });
 
             this.currentTab = tabName;
-            clearAllFieldErrors();
+            if (typeof clearAllFieldErrors === 'function') clearAllFieldErrors();
         }
 
-        async handleSignIn() {
-            const email = document.getElementById('signin-email').value.trim();
-            const password = document.getElementById('signin-password').value;
+        async handleLogin(e) {
+            e.preventDefault();
+            const email = document.getElementById('signin-email')?.value.trim();
+            const password = document.getElementById('signin-password')?.value;
 
-            if (!this.validateSignIn(email, password)) return;
+            if (!email || !password) {
+                showNotification('Lütfen e-posta ve şifrenizi girin.', 'error');
+                return;
+            }
 
             this.setLoading('signin', true);
 
             try {
-                const result = await authService.signIn(email, password);
-                if (result.success) {
-                    console.log('🟢 Sign in successful, auth state will handle navigation');
-                } else {
-                    showNotification(result.error || 'Giriş başarısız.', 'error', 10000);
-                }
-                // onAuthStateChanged gerekli aksiyonları alacak
-            } catch (err) {
-                console.error('Final sign in error catch:', err);
-                showNotification('Giriş sırasında beklenmeyen bir hata oluştu.', 'error', 10000);
+                // Supabase Doğrudan Giriş İşlemi
+                const { data, error } = await supabase.auth.signInWithPassword({ 
+                    email: email, 
+                    password: password 
+                });
+
+                if (error) throw error;
+
+                showNotification('Giriş başarılı! Yönlendiriliyorsunuz...', 'success');
+                setTimeout(() => window.location.replace('portfolio.html'), 1000);
+
+            } catch (error) {
+                console.error('Giriş Hatası:', error);
+                showNotification('Giriş başarısız. E-posta veya şifrenizi kontrol edin.', 'error');
             } finally {
                 this.setLoading('signin', false);
             }
         }
 
-        async handleSignUp() {
-            const name = document.getElementById('signup-name').value;
-            const email = document.getElementById('signup-email').value;
-            const password = document.getElementById('signup-password').value;
+        async handleSignup(e) {
+            e.preventDefault();
+            const name = document.getElementById('signup-name')?.value.trim();
+            const email = document.getElementById('signup-email')?.value.trim();
+            const password = document.getElementById('signup-password')?.value;
 
-            if (!this.validateSignUp(name, email, password)) return;
+            if (!name || !email || !password) {
+                showNotification('Lütfen tüm alanları doldurun.', 'error');
+                return;
+            }
+
+            if (password.length < 6) {
+                showNotification('Şifre en az 6 karakter olmalıdır.', 'error');
+                return;
+            }
 
             this.setLoading('signup', true);
-            console.log("📝 Kayıt işlemi başladı:", { name, email });
 
             try {
-                // 🔥 DÜZELTME: 'auth' yerine 'authService' kullanıyoruz
-                const result = await authService.signUp(email, password, name);
+                // Supabase Kayıt İşlemi
+                const { data, error } = await supabase.auth.signUp({
+                    email: email,
+                    password: password,
+                    options: {
+                        data: {
+                            display_name: name,
+                            role: 'user'
+                        }
+                    }
+                });
+
+                if (error) throw error;
+
+                showNotification('Kayıt başarılı! Şimdi giriş yapabilirsiniz.', 'success');
                 
-                if (result.success) {
-                    // Kayıt başarılı olduğunda kullanıcıyı karşıla
-                    showNotification('Kayıt başarılı! Lütfen e-postanızı (Spam kutusu dahil) kontrol ederek onaylayın.', 'success', 15000);
-                    
-                    // Sekmeyi giriş yapma sekmesine çevir
-                    this.switchTab('signin');
-                } else {
-                    showNotification(result.error || 'Kayıt başarısız.', 'error', 8000);
-                }
-            } catch (err) {
-                console.error('Final sign up error catch:', err);
-                showNotification('Kayıt sırasında bir hata oluştu: ' + err.message, 'error', 8000);
+                // Formu temizle ve Giriş sekmesine geri dön
+                document.getElementById('signupForm').reset();
+                this.switchTab('signin');
+
+            } catch (error) {
+                console.error('Kayıt Hatası:', error);
+                showNotification('Kayıt başarısız: ' + error.message, 'error');
             } finally {
                 this.setLoading('signup', false);
             }
         }
-        
-        async handlePasswordReset() {
-            const email = prompt('Şifre sıfırlama için e-posta adresinizi girin:');
-            if (!email || !this.isValidEmail(email)) {
-                showNotification('Geçerli bir e-posta adresi girin.', 'error', 10000);
+
+        async handleResetPassword(e) {
+            e.preventDefault();
+            const email = document.getElementById('signin-email')?.value.trim();
+            
+            if (!email) {
+                showNotification('Lütfen şifre sıfırlama bağlantısı için e-posta adresinizi girin.', 'error');
                 return;
             }
 
-            const result = await authService.resetPassword(email);
-            if (result.success) {
-                showNotification('Şifre sıfırlama e-postası gönderildi. Gelen kutunuzu kontrol edin.', 'success');
-            } else {
-                showNotification('İşlem gerçekleştirilemedi: ' + result.error, 'error', 10000);
-            }
-        }
+            this.setLoading('signin', true); 
 
-        async checkRecovery() {
-            const hash = window.location.hash;
-            if (hash && hash.includes('type=recovery')) {
-                // Supabase'in arkada oturumu kurması için ufak bir bekleme süresi
-                setTimeout(async () => {
-                    const newPassword = prompt("Şifreniz sıfırlanıyor.\nLütfen yeni şifrenizi belirleyin (En az 6 karakter):");
-                    if (newPassword && newPassword.length >= 6) {
-                        const { error } = await supabase.auth.updateUser({ password: newPassword });
-                        if (error) {
-                            showNotification('Şifre güncellenemedi: ' + error.message, 'error', 10000);
-                        } else {
-                            showNotification('Şifreniz başarıyla güncellendi! Yeni şifrenizle giriş yapabilirsiniz.', 'success', 10000);
-                            await authService.signOut(); // Sistemi sıfırla ki baştan temiz giriş yapsın
-                        }
-                    } else {
-                        showNotification('Şifreniz 6 karakterden kısa olamaz veya iptal edildi. Lütfen linke tekrar tıklayın.', 'error', 10000);
-                    }
-                    // Adres çubuğundaki karmakarışık tokeni silip temizle
-                    window.history.replaceState(null, null, window.location.pathname);
-                }, 1000);
-            }
-        }
-        
-        validateSignIn(email, password) {
-            clearAllFieldErrors();
-            let isValid = true;
-            if (!email) {
-                showFieldError('signin-email', 'E-posta adresi gerekli');
-                isValid = false;
-            }
-            if (!password) {
-                showFieldError('signin-password', 'Şifre gerekli');
-                isValid = false;
-            }
-            return isValid;
-        }
+            try {
+                const { error } = await supabase.auth.resetPasswordForEmail(email, {
+                    redirectTo: window.location.origin + '/reset-password.html',
+                });
 
-        validateSignUp(name, email, password) {
-            clearAllFieldErrors();
-            let isValid = true;
-            if (!name || name.length < 2) {
-                showFieldError('signup-name', 'Ad soyad en az 2 karakter');
-                isValid = false;
-            }
-            if (!email) {
-                showFieldError('signup-email', 'E-posta adresi gerekli');
-                isValid = false;
-            } else if (!this.isValidEmail(email)) {
-                showFieldError('signup-email', 'Geçerli bir e-posta girin');
-                isValid = false;
-            }
-            if (!password) {
-                showFieldError('signup-password', 'Şifre gerekli');
-                isValid = false;
-            } else if (password.length < 6) {
-                showFieldError('signup-password', 'Şifre en az 6 karakter');
-                isValid = false;
-            }
-            return isValid;
-        }
+                if (error) throw error;
+                showNotification('Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.', 'success');
 
-        isValidEmail(email) {
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            return emailRegex.test(email);
+            } catch (error) {
+                console.error('Sıfırlama Hatası:', error);
+                showNotification('Bir hata oluştu: ' + error.message, 'error');
+            } finally {
+                this.setLoading('signin', false);
+            }
         }
 
         setLoading(form, isLoading) {
             const btn = document.getElementById(`${form}Btn`);
             const text = document.getElementById(`${form}Text`);
             const loading = document.getElementById(`${form}Loading`);
+            
             if (btn) btn.disabled = isLoading;
             if (text) text.style.display = isLoading ? 'none' : 'inline';
             if (loading) loading.style.display = isLoading ? 'inline-block' : 'none';
         }
     }
-// Tek ve düzenli initialization
-document.addEventListener('DOMContentLoaded', () => {
-    // AuthController'ı başlat
-    new AuthController();
-    
-    // Verification toast kontrolü (sayfa yenilendikten sonra)
-    if (sessionStorage.getItem('toast_verif_sent') === '1') {
-        sessionStorage.removeItem('toast_verif_sent');
-        showNotification('Doğrulama e-postası gönderildi. Lütfen e-postanızı doğrulayıp giriş yapın.', 'success', 15000);
-    }
-});
+
+    document.addEventListener('DOMContentLoaded', () => {
+        new AuthController();
+    });
 </script>
 <div class="notification-container" id="notification-container"></div>
 </body>
