@@ -1,7 +1,14 @@
-import { personService, commonService, supabase } from '../../supabase-config.js';
+// public/js/persons/PersonDataManager.js
+import { personService, commonService, storageService, supabase } from '../../supabase-config.js'; 
 
 export class PersonDataManager {
-    async fetchPersons() { return await personService.getPersons(); }
+    async fetchPersons() { 
+        return await personService.getPersons(); 
+    }
+    
+    async deletePerson(id) {
+        return await personService.deletePerson(id);
+    }
     
     async getCountries() {
         const res = await commonService.getCountries();
@@ -10,71 +17,42 @@ export class PersonDataManager {
 
     async getProvinces(countryCode) {
         if (!/^(TR|TUR)$/i.test(countryCode)) return [];
-        try {
-            const { data, error } = await supabase.from('common').select('data').in('id', ['provinces_TR', 'cities_TR', 'turkey_provinces']);
-            if (data && data.length > 0) {
-                for(const row of data) {
-                    if(row.data.list) return row.data.list;
-                    if(row.data.provinces) return row.data.provinces;
-                }
-            }
-            return [];
-        } catch (e) {
-            console.error("İller çekilirken hata:", e);
-            return [];
-        }
+        
+        const { data, error } = await supabase.from('common').select('data').in('id', ['provinces_TR', 'cities_TR', 'turkey_provinces']);
+        
+        if (error || !data || data.length === 0) return [];
+        return data[0].data.list || data[0].data.provinces || [];
     }
 
+    // 🔥 İŞTE EKSİK OLAN VE HATAYA SEBEP OLAN FONKSİYON
     async getRelatedPersons(personId) {
         return await personService.getRelatedPersons(personId);
     }
 
-    // 🔥 GÜNCEL: Dosyalar 'documents' kovasına, 'persons/{personId}/' klasörüne yüklenir
-    // (Yeni eklenen bir kişi ise henüz ID'si olmadığı için geçici 'temp' klasörüne atılabilir)
-    async uploadDocument(file, personId = 'temp') {
-        try {
-            const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-            // Yeni Yol Yapısı: persons/12345-uuid.../16789_vekalet.pdf
-            const path = `persons/${personId}/${Date.now()}_${cleanFileName}`;
+    async uploadDocument(file, personId) {
+        if (!personId) personId = 'temp_' + Date.now(); 
+        
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+        const filePath = `persons/${personId}/${fileName}`;
 
-            // 'person_documents' YERİNE MERKEZİ 'documents' KOVASI KULLANILIYOR
-            const { data, error } = await supabase.storage
-                .from('documents')
-                .upload(path, file, { cacheControl: '3600', upsert: false });
-
-            if (error) throw error;
-
-            const { data: urlData } = supabase.storage
-                .from('documents')
-                .getPublicUrl(path);
-
-            return urlData.publicUrl;
-        } catch (error) {
-            console.error("Doküman yüklenirken hata:", error);
-            throw error;
-        }
+        const uploadRes = await storageService.uploadFile('documents', filePath, file);
+        
+        if (!uploadRes.success) throw new Error(uploadRes.error);
+        return uploadRes.url;
     }
-
-    // 🔥 GÜNCEL: Storage'dan Dosya Silme İşlemi ('documents' kovası)
-    async deleteDocument(url) {
-        if (!url) return;
+    
+    async deleteDocument(fileUrl) {
+        if (!fileUrl) return;
         try {
-            // Public URL'den dosyanın Bucket içindeki tam yolunu (path) çıkarıyoruz
-            const bucketStr = '/object/public/documents/';
-            const idx = url.indexOf(bucketStr);
-            if (idx !== -1) {
-                const filePath = decodeURIComponent(url.substring(idx + bucketStr.length));
-                
-                const { error } = await supabase.storage.from('documents').remove([filePath]);
-                
-                if (error) {
-                    console.error("Storage dosya silme hatası:", error);
-                } else {
-                    console.log("Dosya Storage'dan başarıyla silindi:", filePath);
-                }
+            const urlObj = new URL(fileUrl);
+            const pathParts = urlObj.pathname.split('/documents/');
+            if (pathParts.length > 1) {
+                const filePath = pathParts[1];
+                await supabase.storage.from('documents').remove([filePath]);
             }
-        } catch (e) {
-            console.error("Dosya silme işleminde hata:", e);
+        } catch (error) {
+            console.error("Dosya silinemedi:", error);
         }
     }
 }
