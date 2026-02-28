@@ -26,6 +26,7 @@ export class PersonModalManager {
     ensureModalMarkup() {
         if (document.getElementById('personModal')) return;
 
+        // Modal HTML'i (Aynı bıraktım, arayüzünüz bozulmasın)
         const modalHtml = `
         <div id="personModal" class="modal fade" tabindex="-1" role="dialog" aria-hidden="true" data-backdrop="static">
             <div class="modal-dialog modal-xl modal-dialog-centered" role="document">
@@ -302,7 +303,6 @@ export class PersonModalManager {
 
     async open(personId = null, callback = null) {
         this.isEdit = !!personId;
-        // YENİ: Eğer ID yoksa anında yeni bir UUID üret!
         this.currentPersonId = personId || crypto.randomUUID(); 
         this.tempCallback = callback; 
         this.resetForm();
@@ -370,12 +370,14 @@ export class PersonModalManager {
             const processedDocs = [];
             for (const doc of this.documents) {
                 if (doc.isNew && doc.fileObj) {
-                    // YENİ: this.currentPersonId parametresini ekledik (temp klasörüne gitmemesi için)
                     doc.url = await this.dataManager.uploadDocument(doc.fileObj, this.currentPersonId);
                 }
                 processedDocs.push({
-                    type: doc.type, url: doc.url, validityDate: doc.validityDate,
-                    countryCode: doc.countryCode, fileName: doc.fileName
+                    documentType: doc.type, // YENİ ŞEMA UYUMU: type yerine documentType olarak yolluyoruz
+                    url: doc.url, 
+                    validityDate: doc.validityDate,
+                    countryCode: doc.countryCode, 
+                    fileName: doc.fileName
                 });
             }
 
@@ -383,7 +385,7 @@ export class PersonModalManager {
             const provinceSel = document.getElementById('provinceSelect');
             
             const personData = {
-                id: this.currentPersonId, // YENİ: Baştan ürettiğimiz ID'yi DB'ye gönderiyoruz
+                id: this.currentPersonId,
                 name: nameVal,
                 type: document.getElementById('personType').value,
                 tckn: document.getElementById('personTckn').value,
@@ -417,7 +419,10 @@ export class PersonModalManager {
 
             if (this.docsToDelete && this.docsToDelete.length > 0) {
                 for (const delUrl of this.docsToDelete) {
-                    await this.dataManager.deleteDocument(delUrl);
+                    // Storage'dan silme metodu dataManager'da varsa çağrılır
+                    if (this.dataManager.deleteDocument) {
+                        await this.dataManager.deleteDocument(delUrl);
+                    }
                 }
             }
 
@@ -465,7 +470,6 @@ export class PersonModalManager {
         this.resetRelatedForm();
     }
 
-    // 🔥 GÜNCELLEME BURADA: Liste doğrudan DOM elementleriyle çiziliyor
     renderRelatedList() {
         const container = document.getElementById('relatedListContainer');
         container.innerHTML = '';
@@ -495,15 +499,13 @@ export class PersonModalManager {
                 </div>
             `;
 
-            // Satıra tıklanınca doğru context üzerinden çağır
             itemDiv.addEventListener('click', () => {
                 this.editRelated(idx, isLoaded);
             });
 
-            // Sadece çöp kutusuna basıldığında
             const removeBtn = itemDiv.querySelector('.remove-related-btn');
             removeBtn.addEventListener('click', (e) => {
-                e.stopPropagation(); // Satırın tıklanmasını engelle
+                e.stopPropagation(); 
                 this.removeRelated(idx, isLoaded);
             });
 
@@ -671,7 +673,6 @@ export class PersonModalManager {
         document.getElementById('docFileNameDisplay').innerText = 'PDF Sürükle veya Tıkla';    
     }
 
-    // 🔥 GÜNCELLEME BURADA: Liste doğrudan DOM elementleriyle çiziliyor
     renderDocuments() {
         const cont = document.getElementById('docListContainer');
         cont.innerHTML = '';
@@ -756,10 +757,11 @@ export class PersonModalManager {
         if (provinceSel) provinceSel.innerHTML = options;
     }
 
+    // YENİ ŞEMA UYUMU: getPersons() yerine getPersonById() kullanılarak evraklar dahil tüm veriler çekiliyor
     async loadPersonData(id) {
-        const persons = await personService.getPersons(); 
-        const p = persons.data.find(x => x.id === id);
-        if (!p) return;
+        const res = await personService.getPersonById(id); 
+        if (!res.success) return;
+        const p = res.data;
 
         document.getElementById('personType').value = p.type || 'gercek';
         document.getElementById('personType').dispatchEvent(new Event('change'));
@@ -802,7 +804,17 @@ export class PersonModalManager {
             }
         }
 
-        this.documents = p.documents ? [...p.documents] : [];
+        // YENİ ŞEMA UYUMU: p.documents artık person_documents tablosundan doğru isimlerle geliyor
+        // documentType bilgisini arayüzdeki type ile eşliyoruz
+        if (p.documents) {
+            this.documents = p.documents.map(doc => ({
+                ...doc,
+                type: doc.documentType // Arayüz render metodunuz `doc.type` kullandığı için eşitliyoruz
+            }));
+        } else {
+            this.documents = [];
+        }
+        
         this.renderDocuments();
 
         const related = await this.dataManager.getRelatedPersons(id);
