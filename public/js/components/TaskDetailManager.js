@@ -125,6 +125,15 @@ export class TaskDetailManager {
                             </div>
                         </div>
 
+                        ${task.oppositionOwner ? `
+                        <div class="mb-4">
+                            <label style="${styles.label}">İTİRAZ SAHİBİ (KARŞI TARAF)</label>
+                            <div style="${styles.valueBox} border-left: 4px solid #d63384; background-color: #fff0f6;">
+                                 <i class="fas fa-user-shield mr-3 fa-lg" style="color: #d63384 !important;"></i>
+                                 <span style="font-size: 1.1rem; font-weight: 600; color: #d63384;">${task.oppositionOwner}</span>
+                            </div>
+                        </div>` : ''}
+
                         <div>
                             <label style="${styles.label}">İLGİLİ VARLIK (DOSYA)</label>
                             <div style="${styles.valueBox}">
