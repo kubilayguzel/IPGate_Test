@@ -931,8 +931,6 @@ export const taskService = {
 
         // 2. PORTFÖY VERİLERİNİ ÇEK
         if (recordIds.length > 0) {
-            console.log("=== ADIM 2 LOGLARI BAŞLIYOR ===");
-            console.log("1. Görevlerden toplanan Benzersiz ip_record_id'ler:", recordIds);
 
             // A) Başvuru Numaraları
             const { data: ipRecords } = await supabase.from('ip_records').select('id, application_number').in('id', recordIds);
@@ -941,32 +939,26 @@ export const taskService = {
             const { data: tmDetails } = await supabase.from('ip_record_trademark_details').select('ip_record_id, brand_name').in('ip_record_id', recordIds);
             
             // C) Başvuru Sahipleri (ip_record_applicants)
-            console.log("2. ip_record_applicants tablosuna sorgu atılıyor...");
             const { data: applicants, error: appErr } = await supabase.from('ip_record_applicants')
                 .select('ip_record_id, person_id')
                 .in('ip_record_id', recordIds);
 
             if (appErr) console.error("❌ ip_record_applicants Hatası:", appErr);
-            console.log("3. ip_record_applicants tablosundan dönen sonuç:", applicants);
 
             // Başvuru sahiplerinin isimlerini persons tablosundan alalım
             let appPersonsMap = {};
             if (applicants && applicants.length > 0) {
                 const appPersonIds = [...new Set(applicants.map(a => a.person_id).filter(Boolean))];
-                console.log("4. applicants tablosunda bulunan benzersiz person_id'ler:", appPersonIds);
 
                 if (appPersonIds.length > 0) {
                     const { data: appPersons, error: persErr } = await supabase.from('persons').select('id, name').in('id', appPersonIds);
                     if (persErr) console.error("❌ persons (applicant) Hatası:", persErr);
-                    console.log("5. persons tablosundan dönen isimler:", appPersons);
                     
                     if (appPersons) appPersons.forEach(p => appPersonsMap[p.id] = p.name);
                 }
             } else {
                 console.log("⚠️ DİKKAT: ip_record_applicants tablosu bu ip_record_id'ler için BOŞ döndü!");
             }
-
-            console.log("=== ADIM 2 LOGLARI BİTTİ ===");
 
             // Javascript eşleştirmesi
             if (ipRecords) {
@@ -1064,14 +1056,12 @@ export const taskService = {
     },
 
     async getTaskById(taskId) {
-        // 1. Ana Görevi Çek
         const { data: taskData, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
         if (error) return { success: false, error: error.message };
         
         const enrichedData = await this._enrichTasksWithRelations([taskData]);
         const task = enrichedData[0];
 
-        // 2. Dökümanları ve Geçmişi Çek
         const [docsRes, histRes] = await Promise.all([
             supabase.from('task_documents').select('*').eq('task_id', String(taskId)),
             supabase.from('task_history').select('*').eq('task_id', String(taskId)).order('created_at', { ascending: true })
@@ -1087,64 +1077,42 @@ export const taskService = {
             id: h.id, action: h.action, userEmail: h.user_id, timestamp: h.created_at
         }));
 
-        // 3. 🔥 YENİ MANTIK VE DETAYLI LOGLAR: İtiraz Sahibi (Parent Transaction)
+        // 🔥 İtiraz Sahibi (Opposition Owner) Bulma Mantığı (Temizlenmiş)
         let oppositionOwner = null;
-        console.log(`=== İTİRAZ SAHİBİ (OPPOSITION) DEBUG - TASK: ${taskId} ===`);
-        
         try {
-            // A) Görev ID'si ile eşleşen ilk transaction'ı bul
-            const { data: subTrans, error: subErr } = await supabase
+            const { data: subTrans } = await supabase
                 .from('transactions')
                 .select('parent_id')
                 .eq('task_id', String(taskId))
                 .limit(1)
                 .maybeSingle();
 
-            console.log("ADIM 1 - Alt İşlem (Sub-Transaction) Sorgusu:", subTrans, "| Hata:", subErr || "Yok");
-
             if (subTrans && subTrans.parent_id) {
-                // B) Ana transaction'a git ve SADECE opposition_owner'ı çek
-                const { data: parentTrans, error: parentErr } = await supabase
+                const { data: parentTrans } = await supabase
                     .from('transactions')
-                    .select('opposition_owner') // <-- Sadece bu! Başka hiçbir hayalet sütun yok.
+                    .select('opposition_owner')
                     .eq('id', subTrans.parent_id)
                     .maybeSingle();
 
-                console.log(`ADIM 2 - Ana İşlem (Parent ID: ${subTrans.parent_id}) Sorgusu:`, parentTrans, "| Hata:", parentErr || "Yok");
-
-                if (parentTrans) {
-                    // C) Sadece opposition_owner verisini al
+                if (parentTrans && parentTrans.opposition_owner) {
                     const ownerData = parentTrans.opposition_owner;
-                    console.log("ADIM 3 - Bulunan Sahip Verisi (Ham):", ownerData);
-
-                    // D) Eğer gelen veri bir UUID ise Kişiler (persons) tablosundan adını bul
-                    if (ownerData && String(ownerData).includes('-') && String(ownerData).length > 20) {
-                        console.log("ADIM 4 - Bu veri bir ID (UUID). Persons tablosunda isim aranıyor...");
-                        
-                        const { data: personData, error: personErr } = await supabase
+                    if (String(ownerData).includes('-') && String(ownerData).length > 20) {
+                        const { data: personData } = await supabase
                             .from('persons')
                             .select('name')
                             .eq('id', ownerData)
                             .maybeSingle();
-                        
-                        console.log("ADIM 5 - Persons Tablosu Sonucu:", personData, "| Hata:", personErr || "Yok");
                         oppositionOwner = personData ? personData.name : ownerData;
                     } else {
-                        console.log("ADIM 4 - Bu veri düz metin (İsim) veya boş. Doğrudan alınıyor.");
                         oppositionOwner = ownerData;
                     }
                 }
-            } else {
-                console.log("UYARI: Bu göreve bağlı bir alt işlem bulunamadı veya işlemin parent_id'si yok.");
             }
         } catch (transErr) {
-            console.error("İtiraz sahibi aranırken beklenmeyen hata:", transErr);
+            console.error("İtiraz sahibi eşleştirilirken hata oluştu:", transErr);
         }
 
         task.oppositionOwner = oppositionOwner || null;
-        console.log("FİNAL - Task Nesnesine Atanan oppositionOwner:", task.oppositionOwner);
-        console.log("=== DEBUG BİTTİ ===");
-
         return { success: true, data: task };
     },
 
