@@ -43,23 +43,26 @@ export class TaskUpdateDataManager {
         }
     }
 
-    // 🔥 Firebase Storage yerine Supabase Storage
+    // 🔥 Firebase Storage yerine Supabase Storage (Düzeltilmiş Yapı)
     async uploadFile(file, path) {
-        const { error } = await supabase.storage.from('task_documents').upload(path, file);
+        // Hedef kova her zaman 'documents'
+        const { error } = await supabase.storage.from('documents').upload(path, file);
         if (error) throw error;
-        const { data } = supabase.storage.from('task_documents').getPublicUrl(path);
+        const { data } = supabase.storage.from('documents').getPublicUrl(path);
         return data.publicUrl;
     }
 
     async deleteFileFromStorage(path) {
         if (!path) return;
         let cleanPath = decodeURIComponent(path);
-        if (cleanPath.startsWith('task_documents/')) {
-            cleanPath = cleanPath.replace('task_documents/', '');
+        
+        // Eğer path 'documents/' ile başlıyorsa bunu temizle (from('documents') zaten oraya bakıyor)
+        if (cleanPath.startsWith('documents/')) {
+            cleanPath = cleanPath.replace('documents/', '');
         }
         
         try {
-            await supabase.storage.from('task_documents').remove([cleanPath]);
+            await supabase.storage.from('documents').remove([cleanPath]);
             console.log('Dosya Storage\'dan silindi:', cleanPath);
         } catch (error) {
             console.warn('Dosya silme hatası:', error);
@@ -69,10 +72,12 @@ export class TaskUpdateDataManager {
     searchIpRecords(allRecords, query) {
         if (!query || query.length < 3) return [];
         const lower = query.toLowerCase();
-        return allRecords.filter(r => 
-            (r.title || '').toLowerCase().includes(lower) || 
-            (r.applicationNumber || r.application_number || '').toLowerCase().includes(lower)
-        );
+        return allRecords.filter(r => {
+            // Şemaya uygun alanları ara
+            const title = (r.title || r.brandName || r.brand_name || '').toLowerCase();
+            const appNo = (r.applicationNumber || r.application_number || '').toLowerCase();
+            return title.includes(lower) || appNo.includes(lower);
+        });
     }
 
     searchPersons(allPersons, query) {
@@ -90,6 +95,7 @@ export class TaskUpdateDataManager {
 
     async findTransactionIdByTaskId(recordId, taskId) {
         try {
+            // Şemaya göre alanlar: ip_record_id, task_id
             const { data } = await supabase.from('transactions').select('id').eq('task_id', String(taskId)).maybeSingle();
             return data ? data.id : null;
         } catch (error) {
