@@ -401,12 +401,16 @@ class TaskUpdateController {
         this.accrualManager = new AccrualFormManager('accrualFormContainer', 'taskUpdate', this.masterData.persons);
         this.accrualManager.render();
         
-        document.getElementById('addAccrualBtn').onclick = (e) => { e.preventDefault(); this.openAccrualModal(); };
+        document.getElementById('addAccrualBtn').onclick = (e) => {
+            e.preventDefault();
+            this.openAccrualModal(); 
+        };
 
         document.getElementById('accrualsContainer').addEventListener('click', (e) => {
             if (e.target.classList.contains('edit-accrual-btn')) {
                 e.preventDefault();
-                this.openAccrualModal(e.target.dataset.id);
+                const accId = e.target.dataset.id;
+                this.openAccrualModal(accId);
             }
         });
 
@@ -415,153 +419,93 @@ class TaskUpdateController {
             if (result.success) {
                 const data = result.data;
                 
+                // 🔥 THE FIX: Akıllı "relatedTaskId" okuması
                 let targetTaskId = this.taskId;
                 let targetTaskTitle = this.taskData.title;
-                
-                console.log("=== TAHAKKUK KAYDETME DEBUG BAŞLADI ===");
-                console.log("1. Mevcut (Açık Olan) Task ID:", this.taskId);
-                console.log("2. this.taskData objesi:", this.taskData);
-                
-                // 🔥 THE FIX: Eğer details bir string olarak geliyorsa Object'e çevirmeyi garantiye alalım
-                let details = this.taskData.details || {};
-                if (typeof details === 'string') {
-                    try { 
-                        details = JSON.parse(details); 
-                    } catch(e) { 
-                        console.error("Details JSON Parse hatası:", e); 
-                    }
-                }
-                console.log("3. Çözümlenmiş Details Objesi:", details);
-                
-                // relatedTaskId'yi bul
-                const explicitParentId = details.relatedTaskId || this.taskData.relatedTaskId || details.parent_task_id;
-                console.log("4. Bulunan explicitParentId değeri:", explicitParentId);
-                
-                // Görev tipini kontrol et (53 mü?)
-                const currentTaskType = String(this.taskData.taskType || this.taskData.task_type_id);
-                const isAccrualTask = currentTaskType === '53' || (this.taskData.title && this.taskData.title.toLowerCase().includes('tahakkuk'));
-                console.log(`5. Bu görev Tahakkuk işi mi? ${isAccrualTask} (Mevcut Tip: ${currentTaskType})`);
 
-                if (isAccrualTask) {
-                    if (explicitParentId) {
-                        targetTaskId = String(explicitParentId);
-                        console.log("6. ✅ Hedef Task ID başarıyla değiştirildi ->", targetTaskId);
-                        
-                        try {
-                            const { data: pTask } = await supabase.from('tasks').select('id, title').eq('id', targetTaskId).single();
-                            console.log("7. Veritabanından bulunan asıl iş bilgisi:", pTask);
-                            if (pTask) {
-                                targetTaskTitle = pTask.title;
-                            }
-                        } catch(e) {
-                            console.warn("Asıl işin başlığı alınamadı:", e);
-                        }
+                let detailsObj = {};
+                if (this.taskData.details) {
+                    if (typeof this.taskData.details === 'string') {
+                        try { detailsObj = JSON.parse(this.taskData.details); } catch(e) {}
                     } else {
-                        console.warn("6. ❌ explicitParentId BULUNAMADI! Tahakkuk bu (Type 53) görevin kendisine kaydedilecek.");
+                        detailsObj = this.taskData.details;
                     }
                 }
-                
-                data.taskId = targetTaskId;
-                data.taskTitle = targetTaskTitle; 
-                console.log("8. Veritabanına Gidecek Nihai Tahakkuk Verisi:", data);
-                console.log("==========================================");
 
+                const taskTypeStr = String(this.taskData.taskType || this.taskData.task_type_id);
+
+                // Eğer görev 53 (Tahakkuk) ise asıl işin ID'sini (relatedTaskId) bul
+                if (taskTypeStr === '53' || (this.taskData.title || '').toLowerCase().includes('tahakkuk')) {
+                    const parentId = detailsObj.relatedTaskId || this.taskData.relatedTaskId || detailsObj.parent_task_id;
+                    if (parentId) {
+                        targetTaskId = String(parentId);
+                        try {
+                            // Asıl işin ismini DB'den çek ki listede doğru görünsün
+                            const { data: pTask } = await supabase.from('tasks').select('title').eq('id', targetTaskId).single();
+                            if (pTask) targetTaskTitle = pTask.title;
+                        } catch(e) {}
+                    }
+                }
+
+                // Dinamik olarak bulduğumuz asıl işin ID'sini form verisine ekle
+                data.taskId = targetTaskId;
+                data.taskTitle = targetTaskTitle;
+                
                 const modalEl = document.getElementById('accrualModal');
-                if (modalEl.dataset.editingId) data.id = modalEl.dataset.editingId;
+                const editingId = modalEl.dataset.editingId;
+                if (editingId) data.id = editingId;
 
                 try {
-                    await this.dataManager.saveAccrual(data, !!modalEl.dataset.editingId);
-                    if (window.$) $('#accrualModal').modal('hide');
+                    await this.dataManager.saveAccrual(data, !!editingId);
+                    $('#accrualModal').modal('hide');
+                    showNotification(`Tahakkuk başarıyla oluşturuldu! (Bağlı İş: #${targetTaskId})`, 'success');
                     
-                    showNotification('Tahakkuk asıl işe başarıyla kaydedildi!', 'success');
-                    
-                    if (isAccrualTask) {
+                    // Görev 53 ise işimiz bitti, görevi otomatik TAMAMLANDI yap
+                    if (taskTypeStr === '53') {
                         const statusSelect = document.getElementById('taskStatus');
                         if(statusSelect && statusSelect.value !== 'completed') {
                             statusSelect.value = 'completed';
-                            showNotification('Hatırlatıcı görev otomatik olarak Tamamlandı statüsüne alındı.', 'info');
-                            this.saveTaskChanges(); 
+                            showNotification('Tahakkuk görevi otomatik olarak Tamamlandı yapıldı.', 'info');
+                            this.saveTaskChanges(); // Ana sayfayı da kaydet ve çık
                         }
                     } else {
-                        this.renderAccruals(); 
+                        this.renderAccruals();
                     }
-                } catch (error) { alert('Kaydetme hatası: ' + error.message); }
-            } else alert(result.error);
+
+                } catch (error) {
+                    alert('Kaydetme hatası: ' + error.message);
+                }
+            } else {
+                alert(result.error);
+            }
         };
     }
 
     async renderAccruals() {
         let targetTaskId = this.taskId;
         
-        let details = this.taskData.details || {};
-        if (typeof details === 'string') {
-            try { details = JSON.parse(details); } catch(e) {}
+        let detailsObj = {};
+        if (this.taskData.details) {
+            if (typeof this.taskData.details === 'string') {
+                try { detailsObj = JSON.parse(this.taskData.details); } catch(e) {}
+            } else {
+                detailsObj = this.taskData.details;
+            }
         }
         
-        const explicitParentId = details.relatedTaskId || this.taskData.relatedTaskId || details.parent_task_id;
-        const currentTaskType = String(this.taskData.taskType || this.taskData.task_type_id);
-        const isAccrualTask = currentTaskType === '53' || (this.taskData.title && this.taskData.title.toLowerCase().includes('tahakkuk'));
-
-        if (isAccrualTask && explicitParentId) {
-            targetTaskId = String(explicitParentId);
-        }
-
-        const accruals = await this.dataManager.getAccrualsByTaskId(targetTaskId);
-        if (targetTaskId !== this.taskId) {
-            const localAccruals = await this.dataManager.getAccrualsByTaskId(this.taskId);
-            accruals.push(...localAccruals);
-        }
-
-        const container = document.getElementById('accrualsContainer');
+        const taskTypeStr = String(this.taskData.taskType || this.taskData.task_type_id);
         
-        if (!accruals || accruals.length === 0) {
-            container.innerHTML = `<div class="text-center p-3 text-muted border rounded bg-light"><i class="fas fa-receipt mr-2"></i>Kayıt bulunamadı.</div>`;
-            return;
-        }
-
-        container.innerHTML = `
-            <div class="row w-100 m-0">
-                ${accruals.map(a => {
-                    const amountStr = this.formatCurrency(a.totalAmount || a.total_amount);
-                    let statusColor = '#f39c12'; 
-                    let statusText = 'Ödenmedi';
-                    if(a.status === 'paid') { statusColor = '#27ae60'; statusText = 'Ödendi'; }
-                    else if(a.status === 'cancelled') { statusColor = '#95a5a6'; statusText = 'İptal'; }
-
-                    return `
-                    <div class="col-12 mb-3 px-0">
-                        <div class="card shadow-sm border-light w-100 h-100">
-                            <div class="card-body">
-                                <div class="d-flex justify-content-between align-items-center mb-3">
-                                    <h5 class="mb-0 font-weight-bold text-dark">${amountStr}</h5>
-                                    <span class="badge badge-pill text-white" style="background-color: ${statusColor}; font-size: 0.8rem;">${statusText}</span>
-                                </div>
-                                <div class="text-right">
-                                    <button class="btn btn-sm btn-outline-primary edit-accrual-btn" data-id="${a.id}">
-                                        <i class="fas fa-pen mr-1"></i>Düzenle
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>`;
-                }).join('')}
-            </div>`;
-    }
-
-    async renderAccruals() {
-        let targetTaskId = this.taskId;
-        const details = this.taskData.details || {};
-        
-        // Ekrana çizerken de relatedTaskId'den asıl tahakkukları bul
-        const explicitParentId = details.relatedTaskId || this.taskData.relatedTaskId || details.parent_task_id;
-
-        if (String(this.taskData.taskType) === '53' || this.taskData.title.toLowerCase().includes('tahakkuk')) {
-            if (explicitParentId) {
-                targetTaskId = String(explicitParentId);
+        // Ekrana çizerken de ana işin tahakkuklarını göster ki kullanıcı kaydettiği şeyi görebilsin
+        if (taskTypeStr === '53' || (this.taskData.title || '').toLowerCase().includes('tahakkuk')) {
+            const parentId = detailsObj.relatedTaskId || this.taskData.relatedTaskId || detailsObj.parent_task_id;
+            if (parentId) {
+                targetTaskId = String(parentId);
             }
         }
 
         const accruals = await this.dataManager.getAccrualsByTaskId(targetTaskId);
+        
+        // Asıl işin tahakkuklarıyla Type 53'te kalan tahakkukları birleştir
         if (targetTaskId !== this.taskId) {
             const localAccruals = await this.dataManager.getAccrualsByTaskId(this.taskId);
             accruals.push(...localAccruals);
@@ -570,7 +514,10 @@ class TaskUpdateController {
         const container = document.getElementById('accrualsContainer');
         
         if (!accruals || accruals.length === 0) {
-            container.innerHTML = `<div class="text-center p-3 text-muted border rounded bg-light"><i class="fas fa-receipt mr-2"></i>Kayıt bulunamadı.</div>`;
+            container.innerHTML = `
+                <div class="text-center p-3 text-muted border rounded bg-light">
+                    <i class="fas fa-receipt mr-2"></i>Kayıt bulunamadı.
+                </div>`;
             return;
         }
 
