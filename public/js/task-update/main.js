@@ -40,7 +40,6 @@ class TaskUpdateController {
         this.taskId = new URLSearchParams(window.location.search).get('id');
         if (!this.taskId) return window.location.href = 'task-management.html';
 
-        // 🔥 Yeni Supabase Oturum Kontrolü
         const session = await authService.getCurrentSession();
         if (!session) return window.location.href = 'index.html';
         
@@ -106,7 +105,6 @@ class TaskUpdateController {
 
         this.selectedIpRecordId = this.taskData.relatedIpRecordId || this.taskData.related_ip_record_id || null;
         
-        // 🔥 İlgili Taraf Çözümlemesi (JSONB, String veya Objelerden Ayıklama)
         let ownerId = this.taskData.relatedPartyId || this.taskData.related_party_id || this.taskData.opponentId || this.taskData.opponent_id;
         
         if (!ownerId) {
@@ -125,7 +123,6 @@ class TaskUpdateController {
         if (this.selectedIpRecordId) {
             let rec = this.masterData.ipRecords.find(r => String(r.id) === String(this.selectedIpRecordId));
             if (!rec) {
-                // Veritabanında silinmişse bile UI boş kalmasın
                 rec = { 
                     id: this.selectedIpRecordId, 
                     title: this.taskData.iprecordTitle || this.taskData.relatedIpRecordTitle || 'Kayıtlı Olmayan Varlık', 
@@ -138,7 +135,6 @@ class TaskUpdateController {
         if (this.selectedPersonId) {
             let p = this.masterData.persons.find(x => String(x.id) === String(this.selectedPersonId));
             if (!p) {
-                // Veritabanında silinmişse veya çekilememişse yedek isimleri kullan
                 p = { 
                     id: this.selectedPersonId, 
                     name: this.taskData.relatedPartyName || this.taskData.related_party_name || this.taskData.opponentName || this.taskData.opponent_name || this.taskData.iprecordApplicantName || 'Kayıtlı Olmayan Taraf'
@@ -287,7 +283,6 @@ class TaskUpdateController {
         for (const file of files) {
             const id = this.generateUUID();
             
-            // 🔥 ÇÖZÜM: Dosya adındaki boşluk ve Türkçe/özel karakterleri temizle
             const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
             const path = `tasks/${this.taskId}/${id}_${cleanFileName}`;
             
@@ -295,7 +290,7 @@ class TaskUpdateController {
                 const url = await this.dataManager.uploadFile(file, path);
                 this.currentDocuments.push({
                     id, 
-                    name: file.name, // Orijinal adı UI'da göstermek için tutuyoruz
+                    name: file.name, 
                     url, 
                     storagePath: path, 
                     size: file.size, 
@@ -354,7 +349,6 @@ class TaskUpdateController {
 
         const id = this.generateUUID();
         
-        // 🔥 ÇÖZÜM: Dosya adındaki boşluk ve Türkçe/özel karakterleri temizle
         const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
         const path = `tasks/${this.taskId}/epats_${id}_${cleanFileName}`;
         
@@ -362,7 +356,7 @@ class TaskUpdateController {
             const url = await this.dataManager.uploadFile(file, path);
             const epatsDoc = {
                 id, 
-                name: file.name, // Arayüzde düzgün görünmesi için orijinal isim kalır
+                name: file.name,
                 url, 
                 downloadURL: url, 
                 storagePath: path, 
@@ -420,18 +414,193 @@ class TaskUpdateController {
             const result = this.accrualManager.getData();
             if (result.success) {
                 const data = result.data;
-                data.taskId = this.taskId;
+                
+                let targetTaskId = this.taskId;
+                let targetTaskTitle = this.taskData.title;
+                
+                console.log("=== TAHAKKUK KAYDETME DEBUG BAŞLADI ===");
+                console.log("1. Mevcut (Açık Olan) Task ID:", this.taskId);
+                console.log("2. this.taskData objesi:", this.taskData);
+                
+                // 🔥 THE FIX: Eğer details bir string olarak geliyorsa Object'e çevirmeyi garantiye alalım
+                let details = this.taskData.details || {};
+                if (typeof details === 'string') {
+                    try { 
+                        details = JSON.parse(details); 
+                    } catch(e) { 
+                        console.error("Details JSON Parse hatası:", e); 
+                    }
+                }
+                console.log("3. Çözümlenmiş Details Objesi:", details);
+                
+                // relatedTaskId'yi bul
+                const explicitParentId = details.relatedTaskId || this.taskData.relatedTaskId || details.parent_task_id;
+                console.log("4. Bulunan explicitParentId değeri:", explicitParentId);
+                
+                // Görev tipini kontrol et (53 mü?)
+                const currentTaskType = String(this.taskData.taskType || this.taskData.task_type_id);
+                const isAccrualTask = currentTaskType === '53' || (this.taskData.title && this.taskData.title.toLowerCase().includes('tahakkuk'));
+                console.log(`5. Bu görev Tahakkuk işi mi? ${isAccrualTask} (Mevcut Tip: ${currentTaskType})`);
+
+                if (isAccrualTask) {
+                    if (explicitParentId) {
+                        targetTaskId = String(explicitParentId);
+                        console.log("6. ✅ Hedef Task ID başarıyla değiştirildi ->", targetTaskId);
+                        
+                        try {
+                            const { data: pTask } = await supabase.from('tasks').select('id, title').eq('id', targetTaskId).single();
+                            console.log("7. Veritabanından bulunan asıl iş bilgisi:", pTask);
+                            if (pTask) {
+                                targetTaskTitle = pTask.title;
+                            }
+                        } catch(e) {
+                            console.warn("Asıl işin başlığı alınamadı:", e);
+                        }
+                    } else {
+                        console.warn("6. ❌ explicitParentId BULUNAMADI! Tahakkuk bu (Type 53) görevin kendisine kaydedilecek.");
+                    }
+                }
+                
+                data.taskId = targetTaskId;
+                data.taskTitle = targetTaskTitle; 
+                console.log("8. Veritabanına Gidecek Nihai Tahakkuk Verisi:", data);
+                console.log("==========================================");
+
                 const modalEl = document.getElementById('accrualModal');
                 if (modalEl.dataset.editingId) data.id = modalEl.dataset.editingId;
 
                 try {
                     await this.dataManager.saveAccrual(data, !!modalEl.dataset.editingId);
-                    $('#accrualModal').modal('hide');
-                    this.renderAccruals();
-                    showNotification('Tahakkuk kaydedildi.', 'success');
+                    if (window.$) $('#accrualModal').modal('hide');
+                    
+                    showNotification('Tahakkuk asıl işe başarıyla kaydedildi!', 'success');
+                    
+                    if (isAccrualTask) {
+                        const statusSelect = document.getElementById('taskStatus');
+                        if(statusSelect && statusSelect.value !== 'completed') {
+                            statusSelect.value = 'completed';
+                            showNotification('Hatırlatıcı görev otomatik olarak Tamamlandı statüsüne alındı.', 'info');
+                            this.saveTaskChanges(); 
+                        }
+                    } else {
+                        this.renderAccruals(); 
+                    }
                 } catch (error) { alert('Kaydetme hatası: ' + error.message); }
             } else alert(result.error);
         };
+    }
+
+    async renderAccruals() {
+        let targetTaskId = this.taskId;
+        
+        let details = this.taskData.details || {};
+        if (typeof details === 'string') {
+            try { details = JSON.parse(details); } catch(e) {}
+        }
+        
+        const explicitParentId = details.relatedTaskId || this.taskData.relatedTaskId || details.parent_task_id;
+        const currentTaskType = String(this.taskData.taskType || this.taskData.task_type_id);
+        const isAccrualTask = currentTaskType === '53' || (this.taskData.title && this.taskData.title.toLowerCase().includes('tahakkuk'));
+
+        if (isAccrualTask && explicitParentId) {
+            targetTaskId = String(explicitParentId);
+        }
+
+        const accruals = await this.dataManager.getAccrualsByTaskId(targetTaskId);
+        if (targetTaskId !== this.taskId) {
+            const localAccruals = await this.dataManager.getAccrualsByTaskId(this.taskId);
+            accruals.push(...localAccruals);
+        }
+
+        const container = document.getElementById('accrualsContainer');
+        
+        if (!accruals || accruals.length === 0) {
+            container.innerHTML = `<div class="text-center p-3 text-muted border rounded bg-light"><i class="fas fa-receipt mr-2"></i>Kayıt bulunamadı.</div>`;
+            return;
+        }
+
+        container.innerHTML = `
+            <div class="row w-100 m-0">
+                ${accruals.map(a => {
+                    const amountStr = this.formatCurrency(a.totalAmount || a.total_amount);
+                    let statusColor = '#f39c12'; 
+                    let statusText = 'Ödenmedi';
+                    if(a.status === 'paid') { statusColor = '#27ae60'; statusText = 'Ödendi'; }
+                    else if(a.status === 'cancelled') { statusColor = '#95a5a6'; statusText = 'İptal'; }
+
+                    return `
+                    <div class="col-12 mb-3 px-0">
+                        <div class="card shadow-sm border-light w-100 h-100">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h5 class="mb-0 font-weight-bold text-dark">${amountStr}</h5>
+                                    <span class="badge badge-pill text-white" style="background-color: ${statusColor}; font-size: 0.8rem;">${statusText}</span>
+                                </div>
+                                <div class="text-right">
+                                    <button class="btn btn-sm btn-outline-primary edit-accrual-btn" data-id="${a.id}">
+                                        <i class="fas fa-pen mr-1"></i>Düzenle
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+    }
+
+    async renderAccruals() {
+        let targetTaskId = this.taskId;
+        const details = this.taskData.details || {};
+        
+        // Ekrana çizerken de relatedTaskId'den asıl tahakkukları bul
+        const explicitParentId = details.relatedTaskId || this.taskData.relatedTaskId || details.parent_task_id;
+
+        if (String(this.taskData.taskType) === '53' || this.taskData.title.toLowerCase().includes('tahakkuk')) {
+            if (explicitParentId) {
+                targetTaskId = String(explicitParentId);
+            }
+        }
+
+        const accruals = await this.dataManager.getAccrualsByTaskId(targetTaskId);
+        if (targetTaskId !== this.taskId) {
+            const localAccruals = await this.dataManager.getAccrualsByTaskId(this.taskId);
+            accruals.push(...localAccruals);
+        }
+
+        const container = document.getElementById('accrualsContainer');
+        
+        if (!accruals || accruals.length === 0) {
+            container.innerHTML = `<div class="text-center p-3 text-muted border rounded bg-light"><i class="fas fa-receipt mr-2"></i>Kayıt bulunamadı.</div>`;
+            return;
+        }
+
+        container.innerHTML = `
+            <div class="row w-100 m-0">
+                ${accruals.map(a => {
+                    const amountStr = this.formatCurrency(a.totalAmount || a.total_amount);
+                    let statusColor = '#f39c12'; 
+                    let statusText = 'Ödenmedi';
+                    if(a.status === 'paid') { statusColor = '#27ae60'; statusText = 'Ödendi'; }
+                    else if(a.status === 'cancelled') { statusColor = '#95a5a6'; statusText = 'İptal'; }
+
+                    return `
+                    <div class="col-12 mb-3 px-0">
+                        <div class="card shadow-sm border-light w-100 h-100">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h5 class="mb-0 font-weight-bold text-dark">${amountStr}</h5>
+                                    <span class="badge badge-pill text-white" style="background-color: ${statusColor}; font-size: 0.8rem;">${statusText}</span>
+                                </div>
+                                <div class="text-right">
+                                    <button class="btn btn-sm btn-outline-primary edit-accrual-btn" data-id="${a.id}">
+                                        <i class="fas fa-pen mr-1"></i>Düzenle
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('')}
+            </div>`;
     }
 
     openAccrualModal(accId = null) {
@@ -451,28 +620,29 @@ class TaskUpdateController {
         if (window.$) $('#accrualModal').modal('show');
     }
 
-    // 🔥 YENİ: JSONB objelerini veya dizilerini okuyup düzgün metne çeviren formatlayıcı
     formatCurrency(amountData) {
         if (!amountData) return '0 TRY';
-        
-        // Eğer dizi (array) olarak gelirse (Örn: birden çok döviz)
         if (Array.isArray(amountData)) {
             if (amountData.length === 0) return '0 TRY';
             return amountData.map(x => `${x.amount || 0} ${x.currency || 'TRY'}`).join(' + ');
         }
-        
-        // Eğer obje olarak gelirse
         if (typeof amountData === 'object') {
             return `${amountData.amount || 0} ${amountData.currency || 'TRY'}`;
         }
-        
-        // Sadece düz sayı ise
         return `${amountData} TRY`;
     }
 
-    // 🔥 GÜNCELLENDİ: formatCurrency kullanılarak ekrana basılıyor
     async renderAccruals() {
-        const accruals = await this.dataManager.getAccrualsByTaskId(this.taskId);
+        // 🔥 ÇÖZÜM: Hem asıl işin hem de alt işin tahakkuklarını ekranda kaybolmasın diye birleştirip gösteriyoruz
+        const details = this.taskData.details || {};
+        const targetTaskId = details.parent_task_id || details.parentTaskId || details.triggering_task_id || this.taskId;
+
+        const accruals = await this.dataManager.getAccrualsByTaskId(targetTaskId);
+        if (targetTaskId !== this.taskId) {
+            const localAccruals = await this.dataManager.getAccrualsByTaskId(this.taskId);
+            accruals.push(...localAccruals);
+        }
+
         const container = document.getElementById('accrualsContainer');
         
         if (!accruals || accruals.length === 0) {
@@ -483,10 +653,7 @@ class TaskUpdateController {
         container.innerHTML = `
             <div class="row w-100 m-0">
                 ${accruals.map(a => {
-                    // Objeyi güvenle formatla
                     const amountStr = this.formatCurrency(a.totalAmount || a.total_amount);
-                    
-                    // Duruma göre renk belirle
                     let statusColor = '#f39c12'; 
                     let statusText = 'Ödenmedi';
                     if(a.status === 'paid') { statusColor = '#27ae60'; statusText = 'Ödendi'; }
@@ -522,7 +689,6 @@ class TaskUpdateController {
             this.currentDocuments[epatsDocIndex].documentDate = evrakDate;
         }
 
-        // Kullanıcı bilgisini profilden de alacak şekilde güvenli hale getirelim
         let userEmail = 'Bilinmiyor';
         try {
             const session = await authService.getCurrentSession();
@@ -543,14 +709,13 @@ class TaskUpdateController {
         const officialDateVal = document.getElementById('taskDueDate').value;
         const operationalDateVal = document.getElementById('deliveryDate').value;
 
-        // 🔥 Supabase _enrichTasksWithRelations ve updateTask için doğru isimlendirmelerle veriyi yolluyoruz
         const updateData = {
             status: document.getElementById('taskStatus').value,
             title: document.getElementById('taskTitle').value,
             description: document.getElementById('taskDescription').value,
             priority: document.getElementById('taskPriority').value,
-            relatedIpRecordId: this.selectedIpRecordId, // updateTask fonksiyonu bunu yakalar
-            relatedPartyId: this.selectedPersonId,      // updateTask fonksiyonu bunu yakalar
+            relatedIpRecordId: this.selectedIpRecordId, 
+            relatedPartyId: this.selectedPersonId,      
             documents: this.currentDocuments,
             history: history,
             officialDueDate: officialDateVal ? new Date(officialDateVal).toISOString() : null,
@@ -561,16 +726,6 @@ class TaskUpdateController {
         const res = await this.dataManager.updateTask(this.taskId, updateData);
         
         if (res.success) {
-        if (this.selectedIpRecordId) {
-            try {
-                let transId = this.taskData.transactionId || await this.dataManager.findTransactionIdByTaskId(this.selectedIpRecordId, this.taskId);
-                // updated_at kolonu yoksa, sadece eşleşmeyi doğrulamak yeterli veya bu kısmı tamamen geçebiliriz.
-                if (transId) {
-                    console.log("Transaction senkronizasyonu atlandı (Şema uyumu için).");
-                }
-            } catch (err) { console.error("Senkronizasyon hatası:", err); }
-        }
-                    
             showNotification('Değişiklikler başarıyla kaydedildi.', 'success');
             localStorage.setItem('crossTabUpdatedTaskId', this.taskId);
             setTimeout(() => { window.location.href = 'task-management.html'; }, 1000); 
