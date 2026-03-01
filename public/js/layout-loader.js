@@ -259,7 +259,7 @@ async function setupMenuBadges(supabase, userId) {
       const { count: myTasksCount } = await supabase
         .from('tasks')
         .select('*', { count: 'exact', head: true })
-        .eq('assigned_to_user_id', userId)
+        .eq('assigned_to', userId)
         .in('status', ['open', 'in-progress', 'pending']);
 
       updateBadgeUI('my-tasks', myTasksCount || 0);
