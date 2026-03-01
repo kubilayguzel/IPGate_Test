@@ -35,15 +35,56 @@ export class TaskUpdateDataManager {
         return result.success ? result.data : [];
     }
     
+    // 🔥 SORUN 2 ÇÖZÜMÜ: Dosya Yükleme (Storage) ve accrual_documents Tablosuna Bağlama
     async saveAccrual(data, isUpdate = false) {
-        if (isUpdate) {
-            return await accrualService.updateAccrual(data.id, data);
-        } else {
-            return await accrualService.addAccrual(data);
+        let uploadedFiles = [];
+        
+        // 1. Eğer formdan dosya geldiyse önce Storage'a yükle
+        if (data.files && data.files.length > 0) {
+            for (let file of data.files) {
+                if (file instanceof File) {
+                    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                    // documents kovası altında accruals klasörü
+                    const path = `accruals/${Date.now()}_${cleanFileName}`;
+                    
+                    const url = await this.uploadFile(file, path);
+                    uploadedFiles.push({
+                        name: file.name,
+                        url: url,
+                        type: 'invoice_document' 
+                    });
+                }
+            }
         }
+
+        // DB'ye giden nesneye formatlanmış dosyaları (url) ekle
+        const dataToSave = { ...data, files: uploadedFiles };
+
+        // 2. Tahakkuku Kaydet veya Güncelle
+        let result;
+        if (isUpdate) {
+            result = await accrualService.updateAccrual(dataToSave.id, dataToSave);
+        } else {
+            result = await accrualService.addAccrual(dataToSave);
+        }
+
+        // 3. Supabase'deki 'accrual_documents' tablosuna kayıt at
+        const accrualId = isUpdate ? dataToSave.id : (result.data ? result.data.id : null);
+        if (accrualId && uploadedFiles.length > 0) {
+            const docsToInsert = uploadedFiles.map(f => ({
+                accrual_id: String(accrualId),
+                document_name: f.name,
+                document_url: f.url,
+                document_type: f.type
+            }));
+            const { error: docError } = await supabase.from('accrual_documents').insert(docsToInsert);
+            if (docError) console.error("Accrual belgesi kaydedilemedi:", docError);
+        }
+
+        return result;
     }
 
-    // 🔥 Firebase Storage yerine Supabase Storage (Düzeltilmiş Yapı)
+    // 🔥 Firebase Storage yerine Supabase Storage
     async uploadFile(file, path) {
         // Hedef kova her zaman 'documents'
         const { error } = await supabase.storage.from('documents').upload(path, file);
@@ -55,17 +96,14 @@ export class TaskUpdateDataManager {
     async deleteFileFromStorage(path) {
         if (!path) return;
         let cleanPath = decodeURIComponent(path);
-        
-        // Eğer path 'documents/' ile başlıyorsa bunu temizle (from('documents') zaten oraya bakıyor)
         if (cleanPath.startsWith('documents/')) {
             cleanPath = cleanPath.replace('documents/', '');
         }
-        
         try {
             await supabase.storage.from('documents').remove([cleanPath]);
-            console.log('Dosya Storage\'dan silindi:', cleanPath);
+            console.log("Dosya Storage'dan silindi:", cleanPath);
         } catch (error) {
-            console.warn('Dosya silme hatası:', error);
+            console.warn("Dosya silme hatası:", error);
         }
     }
 
@@ -73,7 +111,6 @@ export class TaskUpdateDataManager {
         if (!query || query.length < 3) return [];
         const lower = query.toLowerCase();
         return allRecords.filter(r => {
-            // Şemaya uygun alanları ara
             const title = (r.title || r.brandName || r.brand_name || '').toLowerCase();
             const appNo = (r.applicationNumber || r.application_number || '').toLowerCase();
             return title.includes(lower) || appNo.includes(lower);
@@ -95,7 +132,6 @@ export class TaskUpdateDataManager {
 
     async findTransactionIdByTaskId(recordId, taskId) {
         try {
-            // Şemaya göre alanlar: ip_record_id, task_id
             const { data } = await supabase.from('transactions').select('id').eq('task_id', String(taskId)).maybeSingle();
             return data ? data.id : null;
         } catch (error) {
