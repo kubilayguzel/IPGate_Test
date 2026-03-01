@@ -69,10 +69,12 @@ export class AccrualUIManager {
         const rowsHtml = data.map((acc, index) => {
             try {
                 const isSelected = selectedIds.has(acc.id);
+                
+                // 🔥 TEK TİP STATÜ: Artık foreignStatus yok, her şey acc.status üzerinden yürüyor.
                 let sTxt = 'Bilinmiyor', sCls = 'badge-secondary';
-                if (acc.status === 'paid') { sTxt = 'Ödendi'; sCls = 'status-paid'; }
-                else if (acc.status === 'unpaid') { sTxt = 'Ödenmedi'; sCls = 'status-unpaid'; }
-                else if (acc.status === 'partially_paid') { sTxt = 'K.Ödendi'; sCls = 'status-partially-paid'; }
+                if (acc.status === 'paid') { sTxt = 'Ödendi'; sCls = 'status-paid bg-success text-white'; }
+                else if (acc.status === 'unpaid') { sTxt = 'Ödenmedi'; sCls = 'status-unpaid bg-danger text-white'; }
+                else if (acc.status === 'partially_paid') { sTxt = 'K.Ödendi'; sCls = 'status-partially-paid bg-warning text-dark'; }
 
                 const dateStr = acc.createdAt ? new Date(acc.createdAt).toLocaleDateString('tr-TR') : '-';
                 
@@ -149,24 +151,29 @@ export class AccrualUIManager {
                     </div>
                 `;
 
+                // Ortak Dizi (Array) Kalan Tutar Hesaplaması
+                let remainingHtml = '-';
+                const rem = acc.remainingAmount !== undefined ? acc.remainingAmount : acc.totalAmount;
+                const isFullyPaid = (Array.isArray(rem)) 
+                    ? rem.length === 0 || rem.every(r => parseFloat(r.amount) <= 0.01)
+                    : parseFloat(rem) <= 0.01;
+
+                if (!isFullyPaid) {
+                    remainingHtml = `<span class="text-danger font-weight-bold">${this._formatMoney(rem)}</span>`;
+                } else {
+                    remainingHtml = `<span class="text-success font-weight-bold">Tamamlandı</span>`;
+                }
+
                 if (activeTab === 'main') {
                     const serviceStr = acc.serviceFee ? this._formatMoney(acc.serviceFee.amount, acc.serviceFee.currency) : '-';
                     
-                    let remainingHtml = '-';
-                    const rem = acc.remainingAmount !== undefined ? acc.remainingAmount : acc.totalAmount;
-                    const isFullyPaid = (Array.isArray(rem)) 
-                        ? rem.length === 0 || rem.every(r => parseFloat(r.amount) <= 0.01)
-                        : parseFloat(rem) <= 0.01;
-
-                    if (!isFullyPaid) remainingHtml = `<span>${this._formatMoney(rem, acc.totalAmountCurrency)}</span>`;
-
                     return `
                     <tr>
                         <td><input type="checkbox" class="row-checkbox" data-id="${acc.id}" ${isSelected ? 'checked' : ''}></td>
                         <td>${acc.id}</td>
                         <td>${dateStr}</td>
                         <td>${typeHtml}</td> <td><span class="badge badge-info">${fieldDisplay}</span></td>
-                        <td><span class="status-badge ${sCls}">${sTxt}</span></td>
+                        <td><span class="badge ${sCls}">${sTxt}</span></td>
                         <td>${relatedFileDisplay}</td>
                         <td><span class="font-weight-bold text-secondary">${subjectHtml}</span></td>
                         <td><a href="#" class="task-detail-link" data-task-id="${acc.taskId}">${taskDisplay}</a></td>
@@ -175,33 +182,13 @@ export class AccrualUIManager {
                         <td><span class="text-muted font-weight-bold">${efn}</span></td>
                         <td>${officialStr}</td>
                         <td>${serviceStr}</td>
-                        <td>${this._formatMoney(acc.totalAmount, acc.totalAmountCurrency)}</td>
+                        <td>${this._formatMoney(acc.totalAmount)}</td>
                         <td>${remainingHtml}</td>
                         <td class="text-center">${actionMenuHtml}</td>
                     </tr>`;
                 } else {
+                    // Yurtdışı (Foreign) Sekmesi İçin Çizim
                     let paymentParty = acc.serviceInvoiceParty?.name || '-';
-                    const fStatus = acc.foreignStatus || 'unpaid';
-                    let fsTxt = 'Ödenmedi', fsCls = 'danger';
-                    if (fStatus === 'paid') { fsTxt = 'Ödendi'; fsCls = 'success'; }
-                    else if (fStatus === 'partially_paid') { fsTxt = 'Kısmen'; fsCls = 'warning'; }
-                    
-                    let remainingHtml = '-';
-                    let foreignRem = acc.foreignRemainingAmount;
-                    if (foreignRem === undefined) {
-                        if (fStatus !== 'paid') foreignRem = [{ amount: acc.officialFee?.amount || 0, currency: acc.officialFee?.currency || 'EUR' }];
-                        else foreignRem = []; 
-                    }
-                    const isFullyPaid = (Array.isArray(foreignRem)) 
-                        ? foreignRem.length === 0 || foreignRem.every(r => parseFloat(r.amount) <= 0.01)
-                        : parseFloat(foreignRem) <= 0.01;
-
-                    if (!isFullyPaid) {
-                        remainingHtml = `<span class="text-danger">${this._formatMoney(foreignRem, acc.officialFee?.currency || 'EUR')}</span>`;
-                    } else {
-                        remainingHtml = `<span class="text-success">Tamamlandı</span>`;
-                    }
-
                     let documentHtml = '-';
                     if (acc.files && acc.files.length > 0) {
                         const lastFile = acc.files[acc.files.length - 1];
@@ -213,7 +200,7 @@ export class AccrualUIManager {
                     <tr>
                         <td><input type="checkbox" class="row-checkbox" data-id="${acc.id}" ${isSelected ? 'checked' : ''}></td>
                         <td>${acc.id}</td>
-                        <td><span class="badge badge-${fsCls}">${fsTxt}</span></td>
+                        <td><span class="badge ${sCls}">${sTxt}</span></td>
                         <td><a href="#" class="task-detail-link" data-task-id="${acc.taskId}">${taskDisplay}</a></td>
                         <td>${paymentParty}</td>
                         <td>${officialStr}</td>
@@ -337,7 +324,7 @@ export class AccrualUIManager {
                         <div class="card h-100 border-0 bg-light">
                             <div class="card-body p-3">
                                 <label class="small text-muted mb-1">Toplam Tutar</label>
-                                <div class="h5 mb-0 text-primary">${this._formatMoney(accrual.totalAmount, accrual.totalAmountCurrency)}</div>
+                                <div class="h5 mb-0 text-primary">${this._formatMoney(accrual.totalAmount)}</div>
                             </div>
                         </div>
                     </div>
@@ -345,7 +332,7 @@ export class AccrualUIManager {
                         <div class="card h-100 border-0 bg-light">
                             <div class="card-body p-3 text-right">
                                 <label class="small text-muted mb-1">Kalan Tutar</label>
-                                <div class="h5 mb-0 text-danger">${this._formatMoney(accrual.remainingAmount, accrual.totalAmountCurrency)}</div>
+                                <div class="h5 mb-0 text-danger">${this._formatMoney(accrual.remainingAmount)}</div>
                             </div>
                         </div>
                     </div>
@@ -397,8 +384,8 @@ export class AccrualUIManager {
                 document.getElementById('foreignTotalBadge').textContent = `${this._formatMoney(offAmt, offCurr)}`;
                 document.querySelectorAll('.foreign-currency-label').forEach(el => el.textContent = offCurr);
 
-                document.getElementById('manualForeignOfficial').value = acc.foreignPaidOfficialAmount || 0;
-                document.getElementById('manualForeignService').value = acc.foreignPaidServiceAmount || 0;
+                document.getElementById('manualForeignOfficial').value = acc.paidOfficialAmount || 0;
+                document.getElementById('manualForeignService').value = acc.paidServiceAmount || 0;
 
                 const payFullCb = document.getElementById('payFullForeign');
                 const splitInputs = document.getElementById('foreignSplitInputs');
@@ -462,7 +449,6 @@ export class AccrualUIManager {
         document.getElementById(modalId).classList.remove('show');
     }
 
-    // 🔥 DÜZELTME: Hem Dizileri (Array) hem Objeleri hem de Düz Sayıları destekler
     _formatMoney(val, curr) {
         if (!val) return '0 ' + (curr || 'TRY');
         
@@ -474,7 +460,6 @@ export class AccrualUIManager {
             }).join(' + ');
         }
         
-        // Supabase bazen Array yerine Object döndürebilir: {"amount": 100, "currency": "USD"}
         if (typeof val === 'object') {
             const num = parseFloat(val.amount) || 0;
             return `${new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(num)} ${val.currency || curr || 'TRY'}`;
