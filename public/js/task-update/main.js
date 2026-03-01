@@ -561,14 +561,16 @@ class TaskUpdateController {
         const res = await this.dataManager.updateTask(this.taskId, updateData);
         
         if (res.success) {
-            if (this.selectedIpRecordId) {
-                try {
-                    let transId = this.taskData.transactionId || await this.dataManager.findTransactionIdByTaskId(this.selectedIpRecordId, this.taskId);
-                    // Dökümanlar zaten task_documents tablosuna kaydedildiği için transactions tablosuna gönderilmez.
-                    if (transId) await this.dataManager.updateTransaction(this.selectedIpRecordId, transId, { updated_at: new Date().toISOString() });
-                } catch (err) { console.error("Senkronizasyon hatası:", err); }
-            }
-            
+        if (this.selectedIpRecordId) {
+            try {
+                let transId = this.taskData.transactionId || await this.dataManager.findTransactionIdByTaskId(this.selectedIpRecordId, this.taskId);
+                // updated_at kolonu yoksa, sadece eşleşmeyi doğrulamak yeterli veya bu kısmı tamamen geçebiliriz.
+                if (transId) {
+                    console.log("Transaction senkronizasyonu atlandı (Şema uyumu için).");
+                }
+            } catch (err) { console.error("Senkronizasyon hatası:", err); }
+        }
+                    
             showNotification('Değişiklikler başarıyla kaydedildi.', 'success');
             localStorage.setItem('crossTabUpdatedTaskId', this.taskId);
             setTimeout(() => { window.location.href = 'task-management.html'; }, 1000); 
