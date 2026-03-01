@@ -73,7 +73,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (loader) loader.style.display = 'block';
 
             try {
-                // 🔥 YENİ SUPERADMIN KONTROLÜ
                 const isSuper = this.currentUser?.role === 'superadmin';
                 const targetStatus = 'awaiting_client_approval';
 
@@ -352,30 +351,103 @@ document.addEventListener('DOMContentLoaded', async () => {
         async handleSaveAccrual() {
             if (!this.currentTaskForAccrual) return;
 
+            const btn = document.getElementById('saveNewMyTaskAccrualBtn');
+            if (btn) btn.disabled = true;
+
             const result = this.accrualFormManager.getData();
             if (!result.success) {
                 showNotification(result.error, 'error');
+                if (btn) btn.disabled = false;
                 return;
             }
             
+            const formData = result.data;
+            const { files, ...formDataNoFiles } = formData;
+
+            // 🔥 Supabase Storage Dosya Yükleme
+            let uploadedFiles = [];
+            if (files && files.length > 0) {
+                try {
+                    const file = files[0];
+                    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                    const filePath = `foreign_invoices/${Date.now()}_${cleanFileName}`;
+                    
+                    const { error: uploadError } = await supabase.storage.from('accruals').upload(filePath, file);
+                    if (uploadError) throw uploadError;
+
+                    const { data: urlData } = supabase.storage.from('accruals').getPublicUrl(filePath);
+
+                    uploadedFiles.push({ 
+                        name: file.name, 
+                        url: urlData.publicUrl, 
+                        type: 'foreign_invoice', 
+                        documentDesignation: 'Yurtdışı Fatura/Debit', 
+                        uploadedAt: new Date().toISOString() 
+                    });
+                } catch(err) { 
+                    showNotification("Dosya yüklenemedi.", "error"); 
+                    if (btn) btn.disabled = false;
+                    return; 
+                }
+            }
+
+            // 🔥 ÇÖZÜM 1: Asıl İşin ID'sini (relatedTaskId) bulma
+            let targetTaskId = this.currentTaskForAccrual.id;
+            let targetTaskTitle = this.currentTaskForAccrual.title;
+
+            let detailsObj = {};
+            if (this.currentTaskForAccrual.details) {
+                if (typeof this.currentTaskForAccrual.details === 'string') {
+                    try { detailsObj = JSON.parse(this.currentTaskForAccrual.details); } catch(e) {}
+                } else {
+                    detailsObj = this.currentTaskForAccrual.details;
+                }
+            }
+
+            if (String(this.currentTaskForAccrual.taskType) === '53' || (this.currentTaskForAccrual.title || '').toLowerCase().includes('tahakkuk')) {
+                const parentId = detailsObj.relatedTaskId || this.currentTaskForAccrual.relatedTaskId || detailsObj.parent_task_id;
+                if (parentId) {
+                    targetTaskId = String(parentId);
+                    try {
+                        const { data: pTask } = await supabase.from('tasks').select('title').eq('id', targetTaskId).single();
+                        if (pTask) targetTaskTitle = pTask.title;
+                    } catch(e) {}
+                }
+            }
+
             const newAccrual = {
-                taskId: this.currentTaskForAccrual.id,
-                taskTitle: this.currentTaskForAccrual.title,
-                ...result.data, 
+                taskId: targetTaskId,
+                taskTitle: targetTaskTitle,
+                ...formDataNoFiles,
+
+                // 🔥 ÇÖZÜM 2: İç içe objeyi flat yapıya çeviriyoruz (0 Tutar Sorunu Çözümü)
+                officialFeeAmount: formDataNoFiles.officialFee?.amount || 0,
+                officialFeeCurrency: formDataNoFiles.officialFee?.currency || 'TRY',
+                serviceFeeAmount: formDataNoFiles.serviceFee?.amount || 0,
+                serviceFeeCurrency: formDataNoFiles.serviceFee?.currency || 'TRY',
+
+                tpeInvoiceNo: formDataNoFiles.tpeInvoiceNo?.trim() || null,
+                evrekaInvoiceNo: formDataNoFiles.evrekaInvoiceNo?.trim() || null,
+                
                 status: 'unpaid',
-                createdAt: new Date().toISOString()
+                createdAt: new Date().toISOString(),
+                files: uploadedFiles
             };
 
             try {
                 const res = await accrualService.addAccrual(newAccrual);
                 if (res.success) {
-                    showNotification('Tahakkuk oluşturuldu.', 'success');
+                    showNotification('Tahakkuk başarıyla oluşturuldu!', 'success');
                     this.closeModal('createMyTaskAccrualModal');
                     await this.loadAllData();
                 } else {
                     showNotification('Hata: ' + res.error, 'error');
                 }
-            } catch(e) { showNotification('Hata oluştu.', 'error'); }
+            } catch(e) { 
+                showNotification('Hata oluştu: ' + e.message, 'error'); 
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         }
 
         showStatusChangeModal(taskId) {
