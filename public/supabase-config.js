@@ -1008,63 +1008,40 @@ export const taskService = {
             }
         }
 
-        // 3. VERİLERİ BİRLEŞTİR VE ARAYÜZE GÖNDER
+        // 3. UI Formatına Hazırla
         return tasks.map(t => {
-            // Task'in içindeki id alanlarını farklı isimlendirmelere karşı korumalı alalım
             const ipId = t.ip_record_id || t.related_ip_record_id || (t.details && t.details.ip_record_id);
-            const recordData = recordsMap[ipId] || {};
-            
             const ownerId = t.task_owner_id || t.task_owner || t.related_party_id || (t.details && t.details.task_owner_id);
+            
+            const recordData = recordsMap[ipId] || {};
             const ownerName = personsMap[ownerId] || null;
-            
-            const d = t.details || {}; 
+            const d = t.details || {};
 
-            // 🌟 MÜVEKKİL (SAHİP) HİYERARŞİSİ:
-            let finalApplicant = "-";
-            
-            // 1. Öncelik: Göreve doğrudan atanmış bir "Sahip" var mı?
-            if (ownerName && String(ownerName).trim() !== '') {
-                finalApplicant = ownerName; 
-            } 
-            // 2. Öncelik: Görev bir portföy kaydına (ip_record) bağlıysa ve onun bir sahibi varsa
-            else if (recordData.applicantFallback && String(recordData.applicantFallback).trim() !== '') {
-                finalApplicant = recordData.applicantFallback; 
-            } 
-            // 3. Öncelik: Görev JSON (details) içine gömülmüş bir isim var mı?
-            else if (d.applicant_name && String(d.applicant_name).trim() !== '') {
-                finalApplicant = d.applicant_name;
-            }
-            // 4. Öncelik: Eskiden kalan bazı kolonlar (Yedek)
-            else if (t.iprecord_applicant_name && String(t.iprecord_applicant_name).trim() !== '') {
-                finalApplicant = t.iprecord_applicant_name;
-            }
-
-            // Başvuru No ve Marka Adı
-            const finalAppNo = recordData.appNo || d.application_number || t.iprecord_application_no || "-";
-            const finalBrandName = recordData.brandName || d.brand_name || t.iprecord_title || t.title || "-";
+            const finalAppNo = recordData.appNo || d.application_number || "-";
+            const finalBrandName = recordData.brandName || d.brand_name || t.title || "-";
+            const finalApplicant = ownerName || recordData.applicantFallback || d.applicant_name || "-";
 
             return {
                 ...t, 
                 id: String(t.id),
                 title: t.title,
                 description: t.description,
-                taskType: String(t.task_type_id || t.task_type || t.taskType),
+                taskType: String(t.task_type_id || t.task_type),
                 status: t.status,
                 priority: t.priority,
-                dueDate: t.operational_due_date || t.official_due_date || t.due_date || t.dueDate,
-                officialDueDate: t.official_due_date || t.officialDueDate,
-                operationalDueDate: t.operational_due_date || t.operationalDueDate,
-                deliveryDate: t.delivery_date || t.deliveryDate,
-                assignedTo_uid: t.assigned_to || t.assigned_to_uid || t.assigned_to_user_id || t.assignedTo_uid, 
-                assignedTo_email: t.assigned_to_email || t.assignedTo_email,
+                dueDate: t.operational_due_date || t.official_due_date,
+                officialDueDate: t.official_due_date,
+                operationalDueDate: t.operational_due_date,
+                deliveryDate: t.delivery_date,
+                assignedTo_uid: t.assigned_to, 
                 relatedIpRecordId: ipId,
-                transactionId: t.transaction_id || t.transactionId,
-                history: d.history || t.history || [],
-                documents: d.documents || t.documents || [], 
-                createdAt: t.created_at || t.createdAt,
-                updatedAt: t.updated_at || t.updatedAt,
+                relatedPartyId: ownerId, // 🔥 ÇÖZÜM 1: UI formunda seçili taraf artık gözükecek
+                transactionId: t.transaction_id,
+                history: d.history || [],
+                documents: d.documents || [], 
+                createdAt: t.created_at,
+                updatedAt: t.updated_at,
                 
-                // UI (ARAYÜZ) BEKLENTİSİ OLAN DEĞİŞKENLER
                 iprecordApplicationNo: finalAppNo,
                 iprecordTitle: finalBrandName,
                 iprecordApplicantName: finalApplicant
@@ -1087,48 +1064,63 @@ export const taskService = {
     },
 
     async getTaskById(taskId) {
-        const { data, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
+        const { data: taskData, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
         if (error) return { success: false, error: error.message };
-        const enrichedData = await this._enrichTasksWithRelations([data]);
-        return { success: true, data: enrichedData[0] };
+        const enrichedData = await this._enrichTasksWithRelations([taskData]);
+        const task = enrichedData[0];
+
+        const [docsRes, histRes] = await Promise.all([
+            supabase.from('task_documents').select('*').eq('task_id', String(taskId)),
+            supabase.from('task_history').select('*').eq('task_id', String(taskId)).order('created_at', { ascending: true })
+        ]);
+
+        task.documents = (docsRes.data || []).map(d => ({
+            id: d.id, name: d.document_name, url: d.document_url, downloadURL: d.document_url,
+            type: d.document_type, uploadedAt: d.uploaded_at,
+            storagePath: d.document_url?.includes('/public/') ? d.document_url.split('/public/')[1] : ''
+        }));
+
+        task.history = (histRes.data || []).map(h => ({
+            id: h.id, // 🔥 ÇÖZÜM 2: History ID'lerini de UI'a gönderiyoruz
+            action: h.action,
+            userEmail: h.user_id, 
+            timestamp: h.created_at
+        }));
+
+        return { success: true, data: task };
     },
 
     async addTask(taskData) {
         try {
-            const nextId = await this._getNextTaskId(taskData.task_type || taskData.taskType);
+            const nextId = await this._getNextTaskId(taskData.taskType || taskData.task_type_id);
             const payload = {
                 id: nextId, 
                 title: taskData.title,
                 description: taskData.description || null,
-                task_type: String(taskData.task_type || taskData.taskType),
+                task_type_id: String(taskData.taskType || taskData.task_type_id),
                 status: taskData.status || 'open',
                 priority: taskData.priority || 'normal',
-                due_date: taskData.due_date || taskData.dueDate || null,
-                official_due_date: taskData.official_due_date || taskData.officialDueDate || null,
-                operational_due_date: taskData.operational_due_date || taskData.operationalDueDate || null,
-                assigned_to_uid: taskData.assigned_to_uid || taskData.assignedTo_uid || null,
-                related_ip_record_id: taskData.related_ip_record_id || taskData.relatedIpRecordId ? String(taskData.related_ip_record_id || taskData.relatedIpRecordId) : null,
-                related_party_id: taskData.related_party_id || taskData.relatedPartyId || null,
-                related_party_name: taskData.related_party_name || taskData.relatedPartyName || null,
-                transaction_id: taskData.transaction_id || taskData.transactionId ? String(taskData.transaction_id || taskData.transactionId) : null,
-                documents: taskData.documents || [],
-                epats_doc_name: taskData.epats_doc_name || taskData.epatsDocument?.name || null,
-                epats_doc_url: taskData.epats_doc_url || taskData.epatsDocument?.url || null,
-                target_app_no: taskData.target_app_no || taskData.targetAppNo || null,
-                
-                // 🔥 KAYIP ALANLAR BURAYA EKLENDİ
-                task_owner: taskData.task_owner || taskData.taskOwner || null, 
-                history: taskData.history || [], 
-                bulletin_no: taskData.bulletin_no || taskData.bulletinNo || null,
-                bulletin_date: taskData.bulletin_date || taskData.bulletinDate || null,
-                iprecord_application_no: taskData.iprecord_application_no || taskData.iprecordApplicationNo || null,
-                iprecord_title: taskData.iprecord_title || taskData.iprecordTitle || null,
-                iprecord_applicant_name: taskData.iprecord_applicant_name || taskData.iprecordApplicantName || null
+                official_due_date: taskData.officialDueDate || taskData.official_due_date || null,
+                operational_due_date: taskData.operationalDueDate || taskData.operational_due_date || null,
+                assigned_to: taskData.assignedTo_uid || taskData.assigned_to || null,
+                ip_record_id: taskData.relatedIpRecordId || taskData.ip_record_id ? String(taskData.relatedIpRecordId || taskData.ip_record_id) : null,
+                task_owner_id: taskData.relatedPartyId || taskData.task_owner_id || null,
+                transaction_id: taskData.transactionId || taskData.transaction_id ? String(taskData.transactionId || taskData.transaction_id) : null,
+                details: { target_accrual_id: taskData.target_accrual_id || taskData.targetAccrualId || null }
             };
             
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
             const { data, error } = await supabase.from('tasks').insert(payload).select('id').single();
             if (error) throw error;
+
+            // İlk oluşturma geçmişi
+            if (taskData.history && taskData.history.length > 0) {
+                const histToInsert = taskData.history.map(h => ({
+                    task_id: data.id, action: h.action, user_id: h.userEmail, created_at: h.timestamp || new Date().toISOString(), details: {}
+                }));
+                await supabase.from('task_history').insert(histToInsert);
+            }
+
             return { success: true, data: { id: data.id } };
         } catch (error) { return { success: false, error: error.message }; }
     },
@@ -1140,28 +1132,55 @@ export const taskService = {
             const payload = {
                 title: updateData.title,
                 description: updateData.description,
-                task_type: updateData.taskType ? String(updateData.taskType) : undefined,
+                task_type_id: updateData.taskType ? String(updateData.taskType) : undefined,
                 status: updateData.status,
                 priority: updateData.priority,
-                due_date: updateData.dueDate || updateData.due_date,
                 official_due_date: updateData.officialDueDate || updateData.official_due_date,
                 operational_due_date: updateData.operationalDueDate || updateData.operational_due_date,
-                // 🔥 EKSİKLER GİDERİLDİ (Email, History, Target Accrual eklendi)
-                assigned_to_uid: updateData.assignedTo_uid || updateData.assigned_to_uid,
-                assigned_to_email: updateData.assignedTo_email || updateData.assigned_to_email,
-                related_ip_record_id: updateData.relatedIpRecordId ? String(updateData.relatedIpRecordId) : undefined,
+                assigned_to: updateData.assignedTo_uid || updateData.assigned_to,
+                ip_record_id: updateData.relatedIpRecordId ? String(updateData.relatedIpRecordId) : undefined,
                 transaction_id: updateData.transactionId ? String(updateData.transactionId) : undefined,
-                related_party_id: updateData.relatedPartyId ? String(updateData.relatedPartyId) : undefined,
-                documents: updateData.documents, 
-                history: updateData.history,
-                target_accrual_id: updateData.target_accrual_id || updateData.targetAccrualId,
+                task_owner_id: updateData.relatedPartyId ? String(updateData.relatedPartyId) : undefined,
                 updated_at: new Date().toISOString()
             };
+
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
             const { error } = await supabase.from('tasks').update(payload).eq('id', String(taskId));
             if (error) throw error;
+
+            // DÖKÜMANLARI TABLOYA SENKRONİZE ET
+            if (updateData.documents !== undefined) {
+                await supabase.from('task_documents').delete().eq('task_id', String(taskId));
+                if (updateData.documents.length > 0) {
+                    const docsToInsert = updateData.documents.map(d => ({
+                        task_id: String(taskId),
+                        document_name: d.name,
+                        document_url: d.url || d.downloadURL,
+                        document_type: d.type || 'task_document'
+                    }));
+                    await supabase.from('task_documents').insert(docsToInsert);
+                }
+            }
+
+            // 🔥 ÇÖZÜM 2 (Devamı): GEÇMİŞTE SADECE YENİLERİ EKLE (409 Hatasını Engeller)
+            if (updateData.history && updateData.history.length > 0) {
+                const newHistories = updateData.history.filter(h => !h.id); // ID'si olmayanlar YENİ eklenenlerdir
+                if (newHistories.length > 0) {
+                    const histToInsert = newHistories.map(h => ({
+                        task_id: String(taskId),
+                        action: h.action,
+                        user_id: h.userEmail, 
+                        created_at: h.timestamp || new Date().toISOString(),
+                        details: {}
+                    }));
+                    await supabase.from('task_history').insert(histToInsert);
+                }
+            }
+
             return { success: true };
-        } catch (error) { return { success: false, error: error.message }; }
+        } catch (error) { 
+            return { success: false, error: error.message }; 
+        }
     },
 
     async _getNextTaskId(taskType) {
