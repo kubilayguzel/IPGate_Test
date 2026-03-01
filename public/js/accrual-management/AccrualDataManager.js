@@ -39,13 +39,28 @@ export class AccrualDataManager {
         try {
             const accPromise = supabase.from('accruals').select('*').limit(10000).order('created_at', { ascending: false });
 
-            const [accRes, usersRes, typesRes] = await Promise.all([
+            // 🔥 ÇÖZÜM 1: personService eklendi. Artık kişilerin isimleri çekiliyor!
+            const [accRes, usersRes, typesRes, personsRes] = await Promise.all([
                 accPromise,
                 taskService.getAllUsers(),
-                transactionTypeService.getTransactionTypes()
+                transactionTypeService.getTransactionTypes(),
+                personService.getPersons() 
             ]);
 
-            // 🔥 YENİ ŞEMA UYUMU: Veritabanındaki kolonları arayüzün beklediği formata çeviriyoruz.
+            this.allPersons = personsRes?.success ? (personsRes.data || []) : [];
+            this.allUsers = usersRes?.success ? (usersRes.data || []) : [];
+            this.allTransactionTypes = typesRes?.success ? (typesRes.data || []).map(t => ({
+                ...t, ipType: t.ip_type || t.details?.ipType || t.ipType,
+                isTopLevelSelectable: t.is_top_level_selectable ?? t.details?.isTopLevelSelectable ?? t.isTopLevelSelectable
+            })) : [];
+
+            // ID'den İsim bulan yardımcı fonksiyon
+            const getPersonName = (id) => {
+                if (!id) return null;
+                const p = this.allPersons.find(x => x.id === id);
+                return p ? p.name : null;
+            };
+
             this.allAccruals = accRes.data ? accRes.data.map(row => {
                 const d = row.details || {};
                 return {
@@ -62,11 +77,9 @@ export class AccrualDataManager {
                     evrekaInvoiceNo: row.evreka_invoice_no || d.evrekaInvoiceNo,
                     files: row.files || d.files || [],
                     
-                    // Native Finansal Kolonlar Eşleştirmesi (Object Formatına Çevrim)
                     officialFee: { amount: row.official_fee_amount || 0, currency: row.official_fee_currency || 'TRY' },
                     serviceFee: { amount: row.service_fee_amount || 0, currency: row.service_fee_currency || 'TRY' },
                     
-                    // 🔥 Yeni Dizi (Array) Formatı Eşleştirmesi
                     totalAmount: Array.isArray(row.total_amount) ? row.total_amount : (d.totalAmount || []),
                     remainingAmount: Array.isArray(row.remaining_amount) ? row.remaining_amount : (d.remainingAmount || []),
                     
@@ -74,18 +87,11 @@ export class AccrualDataManager {
                     applyVatToOfficialFee: row.apply_vat_to_official_fee ?? d.applyVatToOfficialFee ?? false,
                     paymentDate: row.payment_date || d.paymentDate || null,
                     
-                    tpInvoiceParty: row.tp_invoice_party_id ? { id: row.tp_invoice_party_id, name: row.tp_invoice_party_name } : d.tpInvoiceParty,
-                    serviceInvoiceParty: row.service_invoice_party_id ? { id: row.service_invoice_party_id, name: row.service_invoice_party_name } : d.serviceInvoiceParty,
+                    // 🔥 ÇÖZÜM 1 (Devamı): "undefined" yerine gerçek isimler haritalanıyor
+                    tpInvoiceParty: row.tp_invoice_party_id ? { id: row.tp_invoice_party_id, name: getPersonName(row.tp_invoice_party_id) } : d.tpInvoiceParty,
+                    serviceInvoiceParty: row.service_invoice_party_id ? { id: row.service_invoice_party_id, name: getPersonName(row.service_invoice_party_id) } : d.serviceInvoiceParty,
                 };
             }) : [];
-
-            this.allUsers = usersRes?.success ? (usersRes.data || []) : [];
-            this.allTransactionTypes = typesRes?.success ? (typesRes.data || []).map(t => ({
-                ...t, ipType: t.ip_type || t.details?.ipType || t.ipType,
-                isTopLevelSelectable: t.is_top_level_selectable ?? t.details?.isTopLevelSelectable ?? t.isTopLevelSelectable
-            })) : [];
-
-            if (!this.allPersons || this.allPersons.length === 0) this.allPersons = []; 
 
             await this._fetchTasksInBatches();
             await this._fetchIpRecordsInBatches();
@@ -291,14 +297,13 @@ export class AccrualDataManager {
         } catch (e) { return null; }
     }
 
-    // 🔥 DÜZELTME: Güncellemeler artık NATIVE (Ana) kolonlara yazılıyor
+    // 🔥 ÇÖZÜM: 'details' kolonuna yapılan tüm okuma/yazma işlemleri kaldırıldı!
     async _updateAccrualDb(id, updates) {
         const payload = { updated_at: new Date().toISOString() };
 
-        if (updates.status) payload.status = updates.status;
-        if (updates.paymentDate) payload.payment_date = updates.paymentDate;
+        if (updates.status !== undefined) payload.status = updates.status;
+        if (updates.paymentDate !== undefined) payload.payment_date = updates.paymentDate;
         
-        // Yeni Dizi (Array) Güncellemeleri
         if (updates.totalAmount !== undefined) payload.total_amount = updates.totalAmount;
         if (updates.remainingAmount !== undefined) payload.remaining_amount = updates.remainingAmount;
         
@@ -311,10 +316,19 @@ export class AccrualDataManager {
             payload.service_fee_currency = updates.serviceFee.currency;
         }
 
+        if (updates.tpInvoicePartyId !== undefined) payload.tp_invoice_party_id = updates.tpInvoicePartyId;
+        if (updates.serviceInvoicePartyId !== undefined) payload.service_invoice_party_id = updates.serviceInvoicePartyId;
+        if (updates.tpeInvoiceNo !== undefined) payload.tpe_invoice_no = updates.tpeInvoiceNo;
+        if (updates.evrekaInvoiceNo !== undefined) payload.evreka_invoice_no = updates.evrekaInvoiceNo;
+        if (updates.vatRate !== undefined) payload.vat_rate = updates.vatRate;
+        if (updates.applyVatToOfficialFee !== undefined) payload.apply_vat_to_official_fee = updates.applyVatToOfficialFee;
+        if (updates.type !== undefined || updates.accrualType !== undefined) payload.accrual_type = updates.type || updates.accrualType;
+
         const { error } = await supabase.from('accruals').update(payload).eq('id', id);
         if (error) throw error;
     }
 
+    // 🔥 ÇÖZÜM: Yeni kayıt eklerken de 'details' kolonu oluşturması iptal edildi
     async createFreestyleAccrual(formData, fileToUpload) {
         let newFiles = [];
         if (fileToUpload) {
@@ -346,15 +360,11 @@ export class AccrualDataManager {
             official_fee_currency: formData.officialFee.currency || 'TRY',
             service_fee_amount: formData.serviceFee.amount || 0,
             service_fee_currency: formData.serviceFee.currency || 'TRY',
-            
-            // 🔥 YENİ DİZİ YAPISI EKLENİYOR
             total_amount: newAmountArray,
             remaining_amount: newAmountArray,
-            
             vat_rate: formData.vatRate || 0,
             apply_vat_to_official_fee: formData.applyVatToOfficialFee || false,
-            is_foreign_transaction: formData.isForeignTransaction || false,
-            details: { ...formData, id: newId, files: newFiles } // Yedek olarak details'de tutuyoruz
+            is_foreign_transaction: formData.isForeignTransaction || false
         };
 
         const { error } = await supabase.from('accruals').insert(payload);
@@ -366,9 +376,51 @@ export class AccrualDataManager {
         const currentAccrual = this.allAccruals.find(a => a.id === accrualId);
         if (!currentAccrual) throw new Error("Tahakkuk bulunamadı.");
 
-        // Serbest formlar dışında bu metod şimdilik details mantığını kullanıyor olabilir. 
-        // Yeni şemaya göre tamamen `AccrualService.updateAccrual`'a yönlendirilecek.
-        // O yüzden update işlemini main.js üzerinden accrualService ile yapılması en doğrusu.
+        let newFiles = [];
+        if (fileToUpload) {
+            const cleanFileName = fileToUpload.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            const path = `accruals/foreign_invoices/${Date.now()}_${cleanFileName}`;
+            const url = await this.uploadFileToStorage(fileToUpload, path);
+            newFiles.push({ name: fileToUpload.name, url, type: 'foreign_invoice', documentDesignation: 'Yurtdışı Fatura/Debit', uploadedAt: new Date().toISOString() });
+        }
+        const finalFiles = [...(currentAccrual.files || []), ...newFiles];
+
+        const vatMultiplier = 1 + ((formData.vatRate || 0) / 100);
+        const targetOff = formData.applyVatToOfficialFee ? formData.officialFee.amount * vatMultiplier : formData.officialFee.amount;
+        const targetSrv = formData.serviceFee.amount * vatMultiplier;
+
+        const paidOff = currentAccrual.paidOfficialAmount || 0;
+        const paidSrv = currentAccrual.paidServiceAmount || 0;
+
+        const remOff = Math.max(0, targetOff - paidOff);
+        const remSrv = Math.max(0, targetSrv - paidSrv);
+
+        const remMap = {};
+        if (remOff > 0.01) remMap[formData.officialFee.currency] = (remMap[formData.officialFee.currency] || 0) + remOff;
+        if (remSrv > 0.01) remMap[formData.serviceFee.currency] = (remMap[formData.serviceFee.currency] || 0) + remSrv;
+
+        const newRemainingAmount = Object.entries(remMap).map(([curr, amt]) => ({ amount: amt, currency: curr }));
+
+        const totMap = {};
+        if (targetOff > 0.01) totMap[formData.officialFee.currency] = (totMap[formData.officialFee.currency] || 0) + targetOff;
+        if (targetSrv > 0.01) totMap[formData.serviceFee.currency] = (totMap[formData.serviceFee.currency] || 0) + targetSrv;
+        
+        const newTotalAmount = Object.entries(totMap).map(([curr, amt]) => ({ amount: amt, currency: curr }));
+
+        let newStatus = 'unpaid';
+        if (newRemainingAmount.length === 0) newStatus = 'paid';
+        else if (paidOff > 0 || paidSrv > 0) newStatus = 'partially_paid';
+
+        const updates = { 
+            ...formData, 
+            totalAmount: newTotalAmount,
+            remainingAmount: newRemainingAmount, 
+            status: newStatus, 
+            files: finalFiles 
+        };
+        
+        await this._updateAccrualDb(accrualId, updates);
+        await this.fetchAllData(); 
     }
 
     async savePayment(selectedIds, paymentData) {
