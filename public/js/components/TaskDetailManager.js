@@ -48,6 +48,11 @@ export class TaskDetailManager {
     }
 
     async render(task, options = {}) {
+        console.log("=== MODAL RENDER DEBUG ===");
+        console.log("Gelen Görev (Task):", task);
+        console.log("Gelen Seçenekler (Options):", options);
+        console.log("Gelen Tahakkuklar (options.accruals):", options.accruals);
+        console.log("==========================");
         if (!this.container) return;
         if (!task) { this.showError('İş kaydı bulunamadı.'); return; }
 
@@ -333,14 +338,22 @@ export class TaskDetailManager {
 
     // 🔥 YENİ EKLENDİ: Tutarları ekrana basarken [object Object] sorununu format fonksiyonu ile çözdük.
     _generateAccrualsHtml(accruals) {
-        if (!accruals || accruals.length === 0) return `<div class="text-muted small font-italic p-2">Bağlı tahakkuk bulunmuyor.</div>`;
-        return accruals.map(acc => {
+        console.log("=== HTML ÇİZİM BAŞLADI ===");
+        console.log("Çizilecek Tahakkuk Verisi:", accruals);
+
+        if (!accruals || accruals.length === 0) {
+            return `<div class="text-muted small font-italic p-2">Bağlı tahakkuk bulunmuyor.</div>`;
+        }
+
+        const html = accruals.map(acc => {
             let statusColor = '#f39c12'; 
             let statusText = 'Ödenmedi';
             if(acc.status === 'paid') { statusColor = '#27ae60'; statusText = 'Ödendi'; }
             else if(acc.status === 'cancelled') { statusColor = '#95a5a6'; statusText = 'İptal'; }
             
-            const amountStr = this._formatMoney(acc.total_amount || acc.totalAmount);
+            // 🔥 YENİ ŞEMA: Supabase'den totalAmount objesi geliyor { amount: 150, currency: 'TRY' }
+            const amountStr = this._formatMoney(acc.totalAmount);
+            console.log(`Tahakkuk #${acc.id} için formatlanan tutar:`, amountStr);
 
             return `
             <div class="d-flex justify-content-between align-items-center p-3 mb-2 rounded bg-white border">
@@ -350,10 +363,13 @@ export class TaskDetailManager {
                 </div>
                 <div class="text-right">
                     <span class="badge badge-pill text-white" style="background-color: ${statusColor}; font-size: 0.75rem;">${statusText}</span>
-                    <div class="text-muted small mt-1">${this._formatDate(acc.created_at || acc.createdAt)}</div>
+                    <div class="text-muted small mt-1">${this._formatDate(acc.createdAt || acc.created_at)}</div>
                 </div>
             </div>`;
         }).join('');
+
+        console.log("Oluşturulan Tahakkuk HTML'i:", html);
+        return html;
     }
 
     _formatDate(dateVal) {
