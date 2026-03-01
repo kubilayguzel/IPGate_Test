@@ -27,6 +27,7 @@ export class TaskUpdateUIManager {
     }
 
     fillForm(task, users) {
+        // Temel alanların doldurulması
         this.elements.title.value = task.title || '';
         this.elements.desc.value = task.description || '';
         this.elements.priority.value = task.priority || 'medium';
@@ -45,17 +46,29 @@ export class TaskUpdateUIManager {
             this.elements.deliveryDate._flatpickr.setDate(operationalFormatted, false);
         }
         
-        const typeParts = (task.taskType || '').split('_');
-        const main = typeParts[0] || '';
-        const sub = typeParts.slice(1).join(' ');
+        // İş ID gösterimi
         this.elements.taskIdDisplay.value = task.id ? `#${task.id}` : '-';
 
+        // Atanan kullanıcı eşleştirmesi
         const user = users.find(u => u.id === task.assignedTo_uid);
         this.elements.assignedDisplay.value = user ? (user.displayName || user.email) : 'Atanmamış';
 
+        // 🔥 İtiraz Sahibi (Opposition Owner) Bilgisini Gösteren Blok
+        // HTML'e eklediğimiz "wrapper" üzerinden kontrol sağlıyoruz
+        const oppOwnerWrapper = document.getElementById('oppositionOwnerWrapper');
+        const oppOwnerDisplay = document.getElementById('oppositionOwnerDisplay');
+
+        if (task.oppositionOwner && oppOwnerWrapper && oppOwnerDisplay) {
+            oppOwnerDisplay.textContent = task.oppositionOwner;
+            oppOwnerWrapper.style.display = 'block'; // Tüm alanı görünür yap
+        } else if (oppOwnerWrapper) {
+            oppOwnerWrapper.style.display = 'none'; // Veri yoksa alanı tamamen gizle
+        }
+
+        // Durum dropdown'ını doldur
         this.populateStatusDropdown(task.status);
     }
-
+    
     // Zaman dilimi sapmalarını önlemek için güvenli formatlayıcı
     formatDateForInput(date) {
         if (!date) return '';
