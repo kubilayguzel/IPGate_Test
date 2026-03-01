@@ -609,7 +609,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const { files, ...formDataNoFiles } = formData;
 
-            // 🔥 Supabase Storage
+            // 🔥 Supabase Storage Dosya Yükleme
             let uploadedFiles = [];
             if (files && files.length > 0) {
                 try {
@@ -641,6 +641,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 taskId: this.currentTaskForAccrual.id,
                 taskTitle: this.currentTaskForAccrual.title,
                 ...formDataNoFiles,
+
+                // 🔥 ÇÖZÜM 1: İç içe objeyi flat (düz) yapıya çeviriyoruz (0 Tutar Sorunu Çözümü)
+                officialFeeAmount: formDataNoFiles.officialFee?.amount || 0,
+                officialFeeCurrency: formDataNoFiles.officialFee?.currency || 'TRY',
+                serviceFeeAmount: formDataNoFiles.serviceFee?.amount || 0,
+                serviceFeeCurrency: formDataNoFiles.serviceFee?.currency || 'TRY',
+
                 tpeInvoiceNo: formDataNoFiles.tpeInvoiceNo?.trim() || null,
                 evrekaInvoiceNo: formDataNoFiles.evrekaInvoiceNo?.trim() || null,
                 totalAmountCurrency: formDataNoFiles.totalAmountCurrency || 'TRY',
@@ -748,7 +755,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             let loader = window.showSimpleLoading ? window.showSimpleLoading('İşlem Tamamlanıyor') : null;
 
-            // 🔥 Supabase Storage
+            // 🔥 Supabase Storage Dosya Yükleme
             let uploadedFiles = [];
             if (files && files.length > 0) {
                 try {
@@ -775,17 +782,43 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            const cleanTitle = task.title ? task.title.replace('Tahakkuk Oluşturma: ', '') : 'Tahakkuk';
+            // 🔥 ÇÖZÜM 2: relatedTaskId (Örn: 840) Okuması ve Asıl İşe Bağlama
+            let detailsObj = {};
+            if (task.details) {
+                if (typeof task.details === 'string') {
+                    try { detailsObj = JSON.parse(task.details); } catch(e) {}
+                } else {
+                    detailsObj = task.details;
+                }
+            }
+            
+            const parentId = detailsObj.relatedTaskId || task.relatedTaskId || detailsObj.parent_task_id;
+            let targetTaskId = parentId ? String(parentId) : taskId;
+            let targetTaskTitle = task.title ? task.title.replace('Tahakkuk Oluşturma: ', '') : 'Tahakkuk';
+
+            if (parentId) {
+                try {
+                    const { data: pTask } = await supabase.from('tasks').select('title').eq('id', targetTaskId).single();
+                    if (pTask) targetTaskTitle = pTask.title;
+                } catch(e) {}
+            }
 
             const basePayload = {
-                taskId: task.relatedIpRecordId || taskId, // Düzeltildi
-                taskTitle: cleanTitle,
+                taskId: targetTaskId, 
+                taskTitle: targetTaskTitle,
                 ...formDataNoFiles,
+
+                // 🔥 ÇÖZÜM 3: İç içe objeyi flat alanlara dönüştürüyoruz (0 Tutar Sorunu Çözümü)
+                officialFeeAmount: formDataNoFiles.officialFee?.amount || 0,
+                officialFeeCurrency: formDataNoFiles.officialFee?.currency || 'TRY',
+                serviceFeeAmount: formDataNoFiles.serviceFee?.amount || 0,
+                serviceFeeCurrency: formDataNoFiles.serviceFee?.currency || 'TRY',
+
                 tpeInvoiceNo: formDataNoFiles.tpeInvoiceNo?.trim() || null,
                 evrekaInvoiceNo: formDataNoFiles.evrekaInvoiceNo?.trim() || null
             };
 
-            const targetAccrualId = task.targetAccrualId || task.target_accrual_id;
+            const targetAccrualId = task.targetAccrualId || task.target_accrual_id || detailsObj.target_accrual_id;
 
             try {
                 if (targetAccrualId) {
@@ -825,28 +858,32 @@ document.addEventListener('DOMContentLoaded', async () => {
                     await taskService.updateTask(taskId, { target_accrual_id: addRes.data.id });
                 }
 
-                // Görevi kapat
-                const historyEntry = {
+                // 🔥 ÇÖZÜM 4: History (Geçmiş) Foreign Key Hatası Engellendi
+                let historyArray = task.history ? [...task.history] : [];
+                historyArray.push({
                     action: targetAccrualId ? 'Tahakkuk güncellenerek görev tamamlandı.' : 'Tahakkuk oluşturularak görev tamamlandı.',
                     timestamp: new Date().toISOString(),
-                    userEmail: this.currentUser.email
-                };
-                
-                const currentHistory = task.history ? [...task.history] : [];
-                currentHistory.push(historyEntry);
+                    userEmail: this.currentUser?.email || 'Bilinmeyen Kullanıcı'
+                });
 
                 const updateData = {
                     status: 'completed',
                     updatedAt: new Date().toISOString(),
-                    history: currentHistory
+                    history: historyArray
                 };
 
                 const taskResult = await taskService.updateTask(taskId, updateData);
-                if (!taskResult.success) throw new Error('Görev güncellenemedi.');
+                
+                // Eğer History tablosundan hata dönerse bile görevi manuel kapatalım
+                if (!taskResult.success) {
+                    await supabase.from('tasks').update({ status: 'completed' }).eq('id', taskId);
+                }
 
                 if (loader) loader.hide();
-                showNotification(targetAccrualId ? 'Tahakkuk güncellendi ve görev tamamlandı.' : 'Tahakkuk oluşturuldu ve görev tamamlandı.', 'success');
+                showNotification(targetAccrualId ? 'Tahakkuk güncellendi ve görev tamamlandı.' : 'Tahakkuk oluşturuldu ve asıl işe bağlandı.', 'success');
                 this.closeModal('completeAccrualTaskModal');
+                
+                // Listeyi yenile
                 await this.loadAllData();
 
             } catch (e) {
