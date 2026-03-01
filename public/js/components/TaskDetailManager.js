@@ -34,7 +34,6 @@ export class TaskDetailManager {
             </div>`;
     }
 
-    // 🔥 YENİ EKLENDİ: [object Object] hatasını çözen para birimi dönüştürücü
     _formatMoney(amountData) {
         if (!amountData) return '0 TRY';
         if (Array.isArray(amountData)) {
@@ -48,11 +47,6 @@ export class TaskDetailManager {
     }
 
     async render(task, options = {}) {
-        console.log("=== MODAL RENDER DEBUG ===");
-        console.log("Gelen Görev (Task):", task);
-        console.log("Gelen Seçenekler (Options):", options);
-        console.log("Gelen Tahakkuklar (options.accruals):", options.accruals);
-        console.log("==========================");
         if (!this.container) return;
         if (!task) { this.showError('İş kaydı bulunamadı.'); return; }
 
@@ -66,23 +60,35 @@ export class TaskDetailManager {
 
             let { ipRecord, transactionType, assignedUser, accruals = [] } = options;
 
-            // 🔥 Supabase: IP Record Kontrolü
-            const targetRecordId = task.related_ip_record_id || task.relatedIpRecordId;
+            // 🔥 YENİ SUPABASE ENTEGRASYONU: Asıl İşin Portföyünü Bulma (Type 53 Tahakkuk İşleri İçin)
+            let targetRecordId = task.ip_record_id || task.related_ip_record_id || task.relatedIpRecordId;
+            
+            if (!targetRecordId && (String(task.taskType) === '53' || (task.title || '').toLowerCase().includes('tahakkuk'))) {
+                let detailsObj = typeof task.details === 'string' ? JSON.parse(task.details) : (task.details || {});
+                let parentId = detailsObj.relatedTaskId || task.relatedTaskId || detailsObj.parent_task_id;
+                
+                if (parentId) {
+                    try {
+                        const { data: pTask } = await supabase.from('tasks').select('ip_record_id, related_ip_record_id').eq('id', String(parentId)).single();
+                        if (pTask) targetRecordId = pTask.ip_record_id || pTask.related_ip_record_id;
+                    } catch(e) {}
+                }
+            }
+
+            // Eğer veritabanından ilişkili IP Record'u (Marka, Patent, Dava) çekmemiz gerekiyorsa:
             if (!ipRecord && targetRecordId) {
                 try {
-                    const { data: ipDoc } = await supabase.from('ip_records').select('*').eq('id', targetRecordId).maybeSingle();
+                    const { data: ipDoc } = await supabase.from('ip_records').select('*').eq('id', String(targetRecordId)).maybeSingle();
                     if (ipDoc) ipRecord = ipDoc;
                     else {
-                        const { data: suitDoc } = await supabase.from('suits').select('*').eq('id', targetRecordId).maybeSingle();
+                        const { data: suitDoc } = await supabase.from('suits').select('*').eq('id', String(targetRecordId)).maybeSingle();
                         if (suitDoc) ipRecord = suitDoc;
                     }
                 } catch (e) { console.warn("IP Record fetch error:", e); }
             }
 
-            // 🔥 Supabase: İlgili Taraf Çözümleme
-            let relatedPartyTxt = task.relatedPartyName || task.iprecordApplicantName || '-';
-
             // --- Veri Formatlama ---
+            let relatedPartyTxt = task.relatedPartyName || task.iprecordApplicantName || '-';
             const assignedName = assignedUser ? (assignedUser.displayName || assignedUser.email) : (task.assignedTo_email || 'Atanmamış');
             const relatedRecordTxt = ipRecord ? (ipRecord.application_number || ipRecord.title || ipRecord.brand_name) : 'İlgili kayıt bulunamadı';
             const taskTypeDisplay = transactionType ? (transactionType.alias || transactionType.name) : (task.taskType || '-');
@@ -102,13 +108,12 @@ export class TaskDetailManager {
 
             const html = `
             <div style="${styles.container}">
-                
                 <div style="${styles.card} padding: 20px; display: flex; justify-content: space-between; align-items: center; border-top: 4px solid #1e3c72;">
                     <div>
                         <h5 class="mb-1" style="font-weight: 700; color: #2d3748;">${task.title || 'Başlıksız Görev'}</h5>
                         <div class="text-muted small">
                             <span class="mr-3"><i class="fas fa-hashtag mr-1"></i>${task.id}</span>
-                            <span><i class="far fa-clock mr-1"></i>${this._formatDate(task.createdAt)}</span>
+                            <span><i class="far fa-clock mr-1"></i>${this._formatDate(task.createdAt || task.created_at)}</span>
                         </div>
                     </div>
                     <span class="badge badge-pill px-3 py-2" style="font-size: 0.85rem; background-color: #1e3c72; color: #fff;">
@@ -121,7 +126,6 @@ export class TaskDetailManager {
                         <i class="fas fa-star mr-2 text-warning"></i> TEMEL BİLGİLER
                     </div>
                     <div style="${styles.cardBody}">
-                        
                         <div class="mb-4">
                             <label style="${styles.label}">İLGİLİ TARAF / MÜVEKKİL</label>
                             <div style="${styles.valueBox} border-left: 4px solid #1e3c72;">
@@ -146,7 +150,6 @@ export class TaskDetailManager {
                                  <span style="font-size: 1rem; font-weight: 500;">${relatedRecordTxt}</span>
                             </div>
                         </div>
-
                     </div>
                 </div>
 
@@ -170,13 +173,12 @@ export class TaskDetailManager {
                                 <label style="${styles.label}">RESMİ BİTİŞ</label>
                                 <div style="${styles.valueBox}">
                                     <i class="far fa-calendar-alt text-muted mr-2"></i>
-                                    <span class="${task.officialDueDate ? 'text-danger font-weight-bold' : 'text-muted'}">
-                                        ${this._formatDate(task.officialDueDate)}
+                                    <span class="${task.officialDueDate || task.official_due_date ? 'text-danger font-weight-bold' : 'text-muted'}">
+                                        ${this._formatDate(task.officialDueDate || task.official_due_date)}
                                     </span>
                                 </div>
                             </div>
                         </div>
-
                         <div>
                             <label style="${styles.label}">AÇIKLAMA</label>
                             <div style="${styles.valueBox} height: auto; align-items: flex-start; min-height: 60px; white-space: pre-wrap; line-height: 1.6; color: #525f7f;">${task.description || 'Açıklama girilmemiş.'}</div>
@@ -201,7 +203,6 @@ export class TaskDetailManager {
                         ${accrualsHtml}
                     </div>
                 </div>
-
             </div>`;
 
             this.container.innerHTML = html;
@@ -336,24 +337,18 @@ export class TaskDetailManager {
         return items.length ? items.join('') : `<div class="text-muted small font-italic p-2">Ekli belge bulunmuyor.</div>`;
     }
 
-    // 🔥 YENİ EKLENDİ: Tutarları ekrana basarken [object Object] sorununu format fonksiyonu ile çözdük.
     _generateAccrualsHtml(accruals) {
-        console.log("=== HTML ÇİZİM BAŞLADI ===");
-        console.log("Çizilecek Tahakkuk Verisi:", accruals);
-
         if (!accruals || accruals.length === 0) {
             return `<div class="text-muted small font-italic p-2">Bağlı tahakkuk bulunmuyor.</div>`;
         }
 
-        const html = accruals.map(acc => {
+        return accruals.map(acc => {
             let statusColor = '#f39c12'; 
             let statusText = 'Ödenmedi';
             if(acc.status === 'paid') { statusColor = '#27ae60'; statusText = 'Ödendi'; }
             else if(acc.status === 'cancelled') { statusColor = '#95a5a6'; statusText = 'İptal'; }
             
-            // 🔥 YENİ ŞEMA: Supabase'den totalAmount objesi geliyor { amount: 150, currency: 'TRY' }
-            const amountStr = this._formatMoney(acc.totalAmount);
-            console.log(`Tahakkuk #${acc.id} için formatlanan tutar:`, amountStr);
+            const amountStr = this._formatMoney(acc.totalAmount || acc.total_amount);
 
             return `
             <div class="d-flex justify-content-between align-items-center p-3 mb-2 rounded bg-white border">
@@ -367,9 +362,6 @@ export class TaskDetailManager {
                 </div>
             </div>`;
         }).join('');
-
-        console.log("Oluşturulan Tahakkuk HTML'i:", html);
-        return html;
     }
 
     _formatDate(dateVal) {
