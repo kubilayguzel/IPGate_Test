@@ -1250,6 +1250,9 @@ export const taskService = {
 // ==========================================
 // 9. TAHAKKUK (ACCRUAL) SERVİSİ
 // ==========================================
+// ==========================================
+// 9. TAHAKKUK (ACCRUAL) SERVİSİ
+// ==========================================
 export const accrualService = {
     
     async _getNextAccrualId() {
@@ -1279,60 +1282,113 @@ export const accrualService = {
         try {
             const nextId = await this._getNextAccrualId();
             
-            // 🔴 Burada details GÖNDERİLMİYOR, accrualData zaten düzleştirilmiş
-            const payload = { ...accrualData, id: nextId };
+            const payload = { 
+                id: nextId,
+                task_id: String(accrualData.taskId),
+                status: accrualData.status || 'unpaid',
+                accrual_type: accrualData.accrualType || null,
+                payment_date: accrualData.paymentDate || null,
+                evreka_invoice_no: accrualData.evrekaInvoiceNo || null,
+                tpe_invoice_no: accrualData.tpeInvoiceNo || null,
+                tp_invoice_party_id: accrualData.tpInvoicePartyId || null,
+                service_invoice_party_id: accrualData.serviceInvoicePartyId || null,
+                official_fee_amount: accrualData.officialFeeAmount || 0,
+                official_fee_currency: accrualData.officialFeeCurrency || 'TRY',
+                service_fee_amount: accrualData.serviceFeeAmount || 0,
+                service_fee_currency: accrualData.serviceFeeCurrency || 'TRY',
+                
+                // 🔥 YENİ DB MANTIĞI: Dizi (Array) formatını doğrudan kaydediyoruz. 
+                // Eğer formdan boş gelirse varsayılan olarak [{ amount: 0, currency: 'TRY' }] yazar.
+                total_amount: accrualData.totalAmount || [{ amount: 0, currency: 'TRY' }],
+                remaining_amount: accrualData.remainingAmount || [{ amount: 0, currency: 'TRY' }],
+                
+                vat_rate: accrualData.vatRate || 0,
+                apply_vat_to_official_fee: accrualData.applyVatToOfficialFee || false,
+                is_foreign_transaction: accrualData.isForeignTransaction || false
+            };
+
+            Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
 
             const { data, error } = await supabase.from('accruals').insert(payload).select('id').single();
             if (error) throw error;
             return { success: true, data: { id: data.id } };
         } catch (error) {
-            console.error("Accrual add error:", error);
+            console.error("Tahakkuk ekleme hatası:", error);
             return { success: false, error: error.message };
         }
     },
 
     async updateAccrual(id, updateData) {
         try {
-            const payload = { ...updateData };
+            const payload = {
+                status: updateData.status,
+                accrual_type: updateData.accrualType,
+                payment_date: updateData.paymentDate,
+                evreka_invoice_no: updateData.evrekaInvoiceNo,
+                tpe_invoice_no: updateData.tpeInvoiceNo,
+                tp_invoice_party_id: updateData.tpInvoicePartyId,
+                service_invoice_party_id: updateData.serviceInvoicePartyId,
+                official_fee_amount: updateData.officialFeeAmount,
+                official_fee_currency: updateData.officialFeeCurrency,
+                service_fee_amount: updateData.serviceFeeAmount,
+                service_fee_currency: updateData.serviceFeeCurrency,
+                
+                // 🔥 YENİ DB MANTIĞI: Sadece diziyi güncelliyoruz, ayrı currency kolonları yok.
+                total_amount: updateData.totalAmount,
+                remaining_amount: updateData.remainingAmount,
+                
+                vat_rate: updateData.vatRate,
+                apply_vat_to_official_fee: updateData.applyVatToOfficialFee,
+                is_foreign_transaction: updateData.isForeignTransaction,
+                updated_at: new Date().toISOString()
+            };
+
             Object.keys(payload).forEach(key => { if (payload[key] === undefined) delete payload[key]; });
 
             const { error } = await supabase.from('accruals').update(payload).eq('id', String(id));
             if (error) throw error;
             return { success: true };
         } catch (error) {
-            console.error("Accrual update error:", error);
+            console.error("Tahakkuk güncelleme hatası:", error);
             return { success: false, error: error.message };
         }
     },
 
     async getAccrualsByTaskId(taskId) {
+        console.log(`=== TAHAKKUK (ACCRUAL) DEBUG - TASK ID: ${taskId} ===`);
         try {
             const { data, error } = await supabase.from('accruals').select('*').eq('task_id', String(taskId));
-            if (error) throw error;
             
-            // 🔴 UI'ın beklediği CamelCase haritalamayı yapıyoruz (Dövizler JSONB'den gelecek)
+            if (error) {
+                console.error("Supabase'den çekerken hata:", error);
+                throw error;
+            }
+            
             const mappedData = data.map(acc => ({
                 id: acc.id,
                 taskId: acc.task_id,
-                taskTitle: acc.task_title,
-                officialFee: acc.official_fee, 
-                serviceFee: acc.service_fee,   
-                totalAmount: acc.total_amount, 
-                remainingAmount: acc.remaining_amount, 
-                vatRate: acc.vat_rate,
-                applyVatToOfficialFee: acc.apply_vat_to_official_fee,
                 status: acc.status,
-                tpInvoiceParty: acc.tp_invoice_party_id ? { id: acc.tp_invoice_party_id, name: acc.tp_invoice_party_name } : null,
-                serviceInvoiceParty: acc.service_invoice_party_id ? { id: acc.service_invoice_party_id, name: acc.service_invoice_party_name } : null,
-                isForeignTransaction: acc.is_foreign_transaction,
-                files: acc.files || [],
+                accrualType: acc.accrual_type,
+                
+                // 🔥 YENİ DB MANTIĞI: Supabase'den gelen JSONB dizisini OLDUĞU GİBİ arayüze paslıyoruz.
+                // TaskDetailManager'daki _formatMoney() fonksiyonu bu diziyi otomatik olarak "15150 TRY" şekline çevirecek.
+                totalAmount: acc.total_amount, 
+                remainingAmount: acc.remaining_amount,
+                
+                officialFeeAmount: acc.official_fee_amount,
+                officialFeeCurrency: acc.official_fee_currency,
+                serviceFeeAmount: acc.service_fee_amount,
+                serviceFeeCurrency: acc.service_fee_currency,
+                tpInvoicePartyId: acc.tp_invoice_party_id,
+                serviceInvoicePartyId: acc.service_invoice_party_id,
                 createdAt: acc.created_at,
                 updatedAt: acc.updated_at
             }));
             
+            console.log("UI İçin Haritalanmış Veri:", mappedData);
             return { success: true, data: mappedData };
         } catch (error) {
-            console.error("Accrual fetch error:", error);
+            console.error("Tahakkukları getirme hatası:", error);
             return { success: false, error: error.message, data: [] };
         }
     }
