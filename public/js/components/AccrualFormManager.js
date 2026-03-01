@@ -1,35 +1,20 @@
 // public/js/components/AccrualFormManager.js
 
 export class AccrualFormManager {
-    /**
-     * @param {string} containerId - Formun içine çizileceği div'in ID'si
-     * @param {string} prefix - ID çakışmalarını önlemek için ön ek
-     * @param {Array} allPersons - Kişi arama için kullanılacak kişi listesi
-     * @param {Object} options - Özel ayarlar (örn: { isFreestyle: true })
-     */
     constructor(containerId, prefix, allPersons = [], options = {}) {
         this.container = document.getElementById(containerId);
         this.prefix = prefix;
         this.allPersons = allPersons;
-        this.isFreestyle = options.isFreestyle || false; // 🔥 YENİ: Serbest Tahakkuk Modu
+        this.isFreestyle = options.isFreestyle || false; 
         
-        // Seçim Durumları
         this.selectedTpParty = null;
         this.selectedForeignParty = null;
     }
 
-    /**
-     * Formu HTML olarak oluşturur ve container içine basar.
-     */
     render() {
-        if (!this.container) {
-            console.error(`Container not found for ID: ${this.containerId}`);
-            return;
-        }
+        if (!this.container) return;
 
         const p = this.prefix;
-        
-        // 🔥 DÜZELTME: Select kutularının sıkışmasını önleyen yükseklik ve padding ayarları eklendi
         const selectStyle = "width: 110px !important; min-width: 110px !important; flex: 0 0 110px !important; border-top-left-radius: 0; border-bottom-left-radius: 0; background-color: #f8f9fa; font-weight:600; height: 50px !important; padding: 0 10px !important; appearance: auto;";
         const inputHeightStyle = "height: 50px !important;";
 
@@ -322,7 +307,6 @@ export class AccrualFormManager {
             else if(i.type !== 'hidden') i.value = '';
         });
         
-        // 🔥 YENİ: Türü de sıfırla
         document.getElementById(`${p}AccrualType`).value = this.isFreestyle ? 'Masraf' : 'Hizmet';
         if (this.isFreestyle) document.getElementById(`${p}Subject`).value = '';
 
@@ -355,8 +339,7 @@ export class AccrualFormManager {
         const p = this.prefix;
         if(!data) return;
 
-        // 🔥 YENİ: Türü ayarla (Eskilerde yoksa Hizmet varsay)
-        document.getElementById(`${p}AccrualType`).value = data.type || (this.isFreestyle ? 'Masraf' : 'Hizmet');
+        document.getElementById(`${p}AccrualType`).value = data.type || data.accrualType || (this.isFreestyle ? 'Masraf' : 'Hizmet');
         if (this.isFreestyle && data.subject) document.getElementById(`${p}Subject`).value = data.subject;
 
         if (data.officialFee) {
@@ -418,7 +401,6 @@ export class AccrualFormManager {
     getData() {
         const p = this.prefix;
         
-        // 🔥 YENİ: Tür ve Konu Okuma
         const accrualType = document.getElementById(`${p}AccrualType`).value;
         let subjectText = '';
 
@@ -473,17 +455,24 @@ export class AccrualFormManager {
         return {
             success: true,
             data: {
-                type: accrualType, // 🔥 EKLENDİ
-                subject: subjectText, // 🔥 EKLENDİ (Sadece Serbest için dolar)
-                isFreestyle: this.isFreestyle, // 🔥 EKLENDİ (Bağımsız olduğunu işaretler)
+                type: accrualType, 
+                accrualType: accrualType, // DB'ye uyum için
+                subject: subjectText, 
+                isFreestyle: this.isFreestyle, 
                 officialFee: { amount: officialFee, currency: offCurr },
                 serviceFee: { amount: serviceFee, currency: srvCurr },
                 vatRate: vatRate,
                 applyVatToOfficialFee: applyVatToOfficial,
                 totalAmount: totalAmountArray, 
-                totalAmountCurrency: totalAmountArray.length > 0 ? totalAmountArray[0].currency : 'TRY',
+                
+                // 🔥 THE FIX: Veritabanı Native Sütunları için ID'leri Gönderiyoruz!
+                tpInvoicePartyId: tpParty ? tpParty.id : null,
+                serviceInvoicePartyId: serviceParty ? serviceParty.id : null,
+                
+                // Geriye dönük uyumluluk ve arayüz okuması için (Zararı yok)
                 tpInvoiceParty: tpParty,
                 serviceInvoiceParty: serviceParty,
+                
                 isForeignTransaction: isForeign,
                 tpeInvoiceNo: tpeInvoiceNo,
                 evrekaInvoiceNo: evrekaInvoiceNo,
@@ -502,20 +491,16 @@ export class AccrualFormManager {
 
         let finalDoc = null;
 
-        // 1. Gelen veri doğrudan bir evrak objesi mi? (Yeni veya eski format)
         if (docOrTask && (docOrTask.url || docOrTask.downloadURL || docOrTask.fileUrl)) {
             finalDoc = docOrTask;
         } 
-        // 2. Gelen veri komple bir TASK (İş) objesi mi? (Eğer Component'e tüm iş atılırsa diye güvenlik ağı)
         else if (docOrTask) {
-            // YENİ FORMAT: details.documents dizisi içinde ara
             if (docOrTask.details && Array.isArray(docOrTask.details.documents)) {
                 finalDoc = docOrTask.details.documents.find(d => d.type === 'epats_document');
             }
             if (!finalDoc && Array.isArray(docOrTask.documents)) {
                 finalDoc = docOrTask.documents.find(d => d.type === 'epats_document');
             }
-            // ESKİ FORMAT: details.epatsDocument objesi
             if (!finalDoc && docOrTask.details && docOrTask.details.epatsDocument) {
                 finalDoc = docOrTask.details.epatsDocument;
             }
@@ -524,7 +509,6 @@ export class AccrualFormManager {
             }
         }
 
-        // 3. Hiçbir şey bulunamadıysa KESİN OLARAK GİZLE
         if (!finalDoc || (!finalDoc.url && !finalDoc.downloadURL && !finalDoc.fileUrl)) {
             container.style.setProperty('display', 'none', 'important');
             if (nameEl) nameEl.textContent = 'Belge Adı';
@@ -532,13 +516,10 @@ export class AccrualFormManager {
             return;
         }
 
-        // 4. Belge bulundu! URL ve İsimleri bağla ve ZORLA GÖSTER (!important)
         const fileUrl = finalDoc.url || finalDoc.downloadURL || finalDoc.fileUrl;
-        
         if (nameEl) nameEl.textContent = finalDoc.name || finalDoc.fileName || 'EPATS Belgesi';
         if (linkEl) linkEl.href = fileUrl;
         
-        // Bootstrap veya başka bir CSS sınıfının bunu ezmesini engelliyoruz
         container.style.setProperty('display', 'flex', 'important');
     }
 }
