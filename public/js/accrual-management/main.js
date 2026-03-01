@@ -5,12 +5,10 @@ import { loadSharedLayout } from '../layout-loader.js';
 import Pagination from '../pagination.js'; 
 import { showNotification } from '../../utils.js';
 
-// Modüller
 import { AccrualDataManager } from './AccrualDataManager.js';
 import { AccrualUIManager } from './AccrualUIManager.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // 🔥 Supabase Auth Kontrolü
     const user = await waitForAuthUser({ requireAuth: true, redirectTo: 'index.html', graceMs: 1200 });
     if (!user) return;
     
@@ -121,8 +119,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     { header: 'R.Ü. PB', key: 'officialFeeCurr', width: 8 }, { header: 'Hizmet Ücreti', key: 'serviceFee', width: 15 },
                     { header: 'H.Ü. PB', key: 'serviceFeeCurr', width: 8 }, { header: 'KDV Oranı (%)', key: 'vatRate', width: 12 },
                     { header: 'KDV Tutarı', key: 'vatAmount', width: 15 }, { header: 'KDV PB', key: 'vatCurr', width: 8 },
-                    { header: 'Toplam Tutar', key: 'totalAmount', width: 15 }, { header: 'Toplam PB', key: 'totalAmountCurr', width: 8 },
-                    { header: 'Kalan Tutar', key: 'remainingAmount', width: 15 }, { header: 'Kalan PB', key: 'remainingAmountCurr', width: 8 }
+                    // 🔥 YENİ EXCEL SÜTUNLARI: Diziyi birleştirip metin olarak basıyoruz ki Excel patlamasın
+                    { header: 'Toplam Tutar', key: 'totalAmountStr', width: 25 }, 
+                    { header: 'Kalan Tutar', key: 'remainingAmountStr', width: 25 }
                 ];
 
                 const headerRow = worksheet.getRow(1);
@@ -133,28 +132,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
                 });
 
-                const createAccumulator = () => ({}); 
-                const addToAccumulator = (acc, currency, type, amount) => {
-                    const curr = currency || 'TRY';
-                    if (!acc[curr]) acc[curr] = { official: 0, service: 0, vat: 0, total: 0, remaining: 0 };
-                    acc[curr][type] += (parseFloat(amount) || 0);
-                };
-
-                let monthlyAccumulator = createAccumulator();
-                let grandAccumulator = createAccumulator();
-                let currentMonthKey = null;
-
                 for (let i = 0; i < dataToExport.length; i++) {
                     const acc = dataToExport[i];
                     const dateObj = acc.createdAt instanceof Date ? acc.createdAt : new Date(acc.createdAt || 0);
-                    const rowMonthKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}`;
                     const formattedDate = dateObj.toLocaleDateString('tr-TR');
-
-                    if (currentMonthKey && currentMonthKey !== rowMonthKey) {
-                        this.addTotalRow(worksheet, `Ara Toplam (${currentMonthKey})`, monthlyAccumulator);
-                        monthlyAccumulator = createAccumulator(); 
-                    }
-                    currentMonthKey = rowMonthKey;
 
                     const task = this.dataManager.allTasks[String(acc.taskId)];
                     const typeObj = task ? this.dataManager.allTransactionTypes.find(t => t.id === task.taskType) : null;
@@ -174,15 +155,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const vatAmt = baseForVat * (vatRate / 100);
                     const vatCurr = serviceCurr; 
 
-                    let totalAmt = 0; let totalCurr = 'TRY';
-                    if (Array.isArray(acc.totalAmount) && acc.totalAmount.length > 0) {
-                        totalAmt = acc.totalAmount[0].amount; totalCurr = acc.totalAmount[0].currency;
-                    } else { totalAmt = officialAmt + serviceAmt + vatAmt; totalCurr = officialCurr; }
+                    // 🔥 YENİ DİZİ (ARRAY) SİSTEMİ EXCEL ADAPTASYONU
+                    const formatArray = (arr) => {
+                        if (!Array.isArray(arr) || arr.length === 0) return '0 TRY';
+                        return arr.map(x => `${x.amount} ${x.currency}`).join(' + ');
+                    };
 
-                    let remAmt = 0; let remCurr = totalCurr;
-                    if (Array.isArray(acc.remainingAmount) && acc.remainingAmount.length > 0) {
-                        remAmt = acc.remainingAmount[0].amount; remCurr = acc.remainingAmount[0].currency;
-                    } else { if (acc.status === 'unpaid') remAmt = totalAmt; }
+                    const totalStr = formatArray(acc.totalAmount);
+                    const remStr = acc.status === 'paid' ? '0 TRY' : formatArray(acc.remainingAmount);
 
                     worksheet.addRow({
                         id: acc.id, createdAt: formattedDate, type: acc.type || 'Hizmet', 
@@ -193,25 +173,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         party: partyName, tpeInvoiceNo: acc.tpeInvoiceNo || '', evrekaInvoiceNo: acc.evrekaInvoiceNo || '',
                         officialFee: officialAmt, officialFeeCurr: officialCurr, serviceFee: serviceAmt,
                         serviceFeeCurr: serviceCurr, vatRate: vatRate, vatAmount: vatAmt, vatCurr: vatCurr,
-                        totalAmount: totalAmt, totalAmountCurr: totalCurr, remainingAmount: remAmt, remainingAmountCurr: remCurr
+                        totalAmountStr: totalStr, remainingAmountStr: remStr
                     });
-
-                    addToAccumulator(monthlyAccumulator, officialCurr, 'official', officialAmt);
-                    addToAccumulator(monthlyAccumulator, serviceCurr, 'service', serviceAmt);
-                    addToAccumulator(monthlyAccumulator, vatCurr, 'vat', vatAmt);
-                    addToAccumulator(monthlyAccumulator, totalCurr, 'total', totalAmt);
-                    addToAccumulator(monthlyAccumulator, remCurr, 'remaining', remAmt);
-                    
-                    addToAccumulator(grandAccumulator, officialCurr, 'official', officialAmt);
-                    addToAccumulator(grandAccumulator, serviceCurr, 'service', serviceAmt);
-                    addToAccumulator(grandAccumulator, vatCurr, 'vat', vatAmt);
-                    addToAccumulator(grandAccumulator, totalCurr, 'total', totalAmt);
-                    addToAccumulator(grandAccumulator, remCurr, 'remaining', remAmt);
                 }
-
-                if (currentMonthKey) this.addTotalRow(worksheet, `Ara Toplam (${currentMonthKey})`, monthlyAccumulator);
-                worksheet.addRow([]);
-                this.addTotalRow(worksheet, 'GENEL TOPLAM', grandAccumulator, true);
 
                 const buffer = await workbook.xlsx.writeBuffer();
                 const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -220,21 +184,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 showNotification(`${dataToExport.length} kayıt başarıyla aktarıldı!`, 'success');
             } catch (error) { showNotification('Excel oluşturulurken hata oluştu: ' + error.message, 'error'); } 
             finally { this.uiManager.toggleLoading(false); }
-        }
-
-        addTotalRow(worksheet, label, accumulator, isGrandTotal = false) {
-            const currencies = Object.keys(accumulator);
-            if (currencies.length === 0) return;
-            currencies.forEach(curr => {
-                const data = accumulator[curr];
-                const row = worksheet.addRow({
-                    taskTitle: `${label} (${curr})`, 
-                    officialFee: data.official, officialFeeCurr: curr, serviceFee: data.service, serviceFeeCurr: curr,
-                    vatAmount: data.vat, vatCurr: curr, totalAmount: data.total, totalAmountCurr: curr, remainingAmount: data.remaining, remainingAmountCurr: curr
-                });
-                row.font = { bold: true, color: isGrandTotal ? { argb: 'FFFF0000' } : undefined }; 
-                row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isGrandTotal ? 'FFFFE0E0' : 'FFEEEEEE' } };
-            });
         }
 
         setupEventListeners() {
@@ -309,22 +258,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 if (btn.classList.contains('view-btn')) {
                     this.uiManager.showViewDetailModal(this.dataManager.allAccruals.find(a => a.id === id));
-} else if (btn.classList.contains('edit-btn')) {
+                } else if (btn.classList.contains('edit-btn')) {
                     this.uiManager.toggleLoading(true);
                     try {
                         const acc = this.dataManager.allAccruals.find(a => a.id === id);
                         const task = await this.dataManager.getFreshTaskDetail(acc.taskId);
                         
-                        // 🔥 1. ADIM: "DEDEKTİF" FONKSİYONU - Tüm objeyi tarayıp EPATS'ı bulur!
                         const findEpats = (obj) => {
                             if (!obj || typeof obj !== 'object') return null;
-                            
-                            // Eğer bu bir EPATS belgesiyse (içinde url ve name varsa) hemen yakala
                             if (obj.url && obj.name && (obj.turkpatentEvrakNo || obj.documentDate || obj.name.includes('.pdf'))) {
                                 return obj;
                             }
-                            
-                            // Değilse alt katmanlara inip aramaya devam et
                             for (let key in obj) {
                                 let found = findEpats(obj[key]);
                                 if (found) return found;
@@ -332,17 +276,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                             return null;
                         };
 
-                        // 2. ADIM: Görevin tüm verisini tarayıp belgeyi bulmasını sağla
                         let epatsDoc = findEpats(task);
-
-                        // Eğer veritabanından String olarak geldiyse Objeye çevir
                         if (typeof epatsDoc === 'string') {
                             try { epatsDoc = JSON.parse(epatsDoc); } catch(e) {}
                         }
-
-                        console.log("=======================================");
-                        console.log("🕵️ DEDEKTİFİN BULDUĞU BELGE:", epatsDoc);
-                        console.log("=======================================");
 
                         this.uiManager.initEditModal(acc, this.dataManager.allPersons, epatsDoc);
                     } catch (err) {
