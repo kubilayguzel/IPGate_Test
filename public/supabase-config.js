@@ -1064,11 +1064,14 @@ export const taskService = {
     },
 
     async getTaskById(taskId) {
+        // 1. Ana Görevi Çek
         const { data: taskData, error } = await supabase.from('tasks').select('*').eq('id', String(taskId)).single();
         if (error) return { success: false, error: error.message };
+        
         const enrichedData = await this._enrichTasksWithRelations([taskData]);
         const task = enrichedData[0];
 
+        // 2. Dökümanları ve Geçmişi Çek
         const [docsRes, histRes] = await Promise.all([
             supabase.from('task_documents').select('*').eq('task_id', String(taskId)),
             supabase.from('task_history').select('*').eq('task_id', String(taskId)).order('created_at', { ascending: true })
@@ -1081,11 +1084,66 @@ export const taskService = {
         }));
 
         task.history = (histRes.data || []).map(h => ({
-            id: h.id, // 🔥 ÇÖZÜM 2: History ID'lerini de UI'a gönderiyoruz
-            action: h.action,
-            userEmail: h.user_id, 
-            timestamp: h.created_at
+            id: h.id, action: h.action, userEmail: h.user_id, timestamp: h.created_at
         }));
+
+        // 3. 🔥 YENİ MANTIK VE DETAYLI LOGLAR: İtiraz Sahibi (Parent Transaction)
+        let oppositionOwner = null;
+        console.log(`=== İTİRAZ SAHİBİ (OPPOSITION) DEBUG - TASK: ${taskId} ===`);
+        
+        try {
+            // A) Görev ID'si ile eşleşen ilk transaction'ı bul
+            const { data: subTrans, error: subErr } = await supabase
+                .from('transactions')
+                .select('parent_id')
+                .eq('task_id', String(taskId))
+                .limit(1)
+                .maybeSingle();
+
+            console.log("ADIM 1 - Alt İşlem (Sub-Transaction) Sorgusu:", subTrans, "| Hata:", subErr || "Yok");
+
+            if (subTrans && subTrans.parent_id) {
+                // B) Ana transaction'a git ve SADECE opposition_owner'ı çek
+                const { data: parentTrans, error: parentErr } = await supabase
+                    .from('transactions')
+                    .select('opposition_owner') // <-- Sadece bu! Başka hiçbir hayalet sütun yok.
+                    .eq('id', subTrans.parent_id)
+                    .maybeSingle();
+
+                console.log(`ADIM 2 - Ana İşlem (Parent ID: ${subTrans.parent_id}) Sorgusu:`, parentTrans, "| Hata:", parentErr || "Yok");
+
+                if (parentTrans) {
+                    // C) Sadece opposition_owner verisini al
+                    const ownerData = parentTrans.opposition_owner;
+                    console.log("ADIM 3 - Bulunan Sahip Verisi (Ham):", ownerData);
+
+                    // D) Eğer gelen veri bir UUID ise Kişiler (persons) tablosundan adını bul
+                    if (ownerData && String(ownerData).includes('-') && String(ownerData).length > 20) {
+                        console.log("ADIM 4 - Bu veri bir ID (UUID). Persons tablosunda isim aranıyor...");
+                        
+                        const { data: personData, error: personErr } = await supabase
+                            .from('persons')
+                            .select('name')
+                            .eq('id', ownerData)
+                            .maybeSingle();
+                        
+                        console.log("ADIM 5 - Persons Tablosu Sonucu:", personData, "| Hata:", personErr || "Yok");
+                        oppositionOwner = personData ? personData.name : ownerData;
+                    } else {
+                        console.log("ADIM 4 - Bu veri düz metin (İsim) veya boş. Doğrudan alınıyor.");
+                        oppositionOwner = ownerData;
+                    }
+                }
+            } else {
+                console.log("UYARI: Bu göreve bağlı bir alt işlem bulunamadı veya işlemin parent_id'si yok.");
+            }
+        } catch (transErr) {
+            console.error("İtiraz sahibi aranırken beklenmeyen hata:", transErr);
+        }
+
+        task.oppositionOwner = oppositionOwner || null;
+        console.log("FİNAL - Task Nesnesine Atanan oppositionOwner:", task.oppositionOwner);
+        console.log("=== DEBUG BİTTİ ===");
 
         return { success: true, data: task };
     },
@@ -1164,16 +1222,27 @@ export const taskService = {
 
             // 🔥 ÇÖZÜM 2 (Devamı): GEÇMİŞTE SADECE YENİLERİ EKLE (409 Hatasını Engeller)
             if (updateData.history && updateData.history.length > 0) {
-                const newHistories = updateData.history.filter(h => !h.id); // ID'si olmayanlar YENİ eklenenlerdir
+                const newHistories = updateData.history.filter(h => !h.id); 
+                
                 if (newHistories.length > 0) {
+                    // Mevcut oturumdan kullanıcının gerçek ID'sini alalım
+                    const { data: { session } } = await supabase.auth.getSession();
+                    const currentUserId = session?.user?.id;
+
                     const histToInsert = newHistories.map(h => ({
                         task_id: String(taskId),
                         action: h.action,
-                        user_id: h.userEmail, 
+                        // 🔥 KRİTİK: Email yerine session'dan gelen gerçek USER ID'yi yazıyoruz
+                        user_id: currentUserId || h.userEmail, 
                         created_at: h.timestamp || new Date().toISOString(),
-                        details: {}
+                        details: { user_email: h.userEmail } // E-postayı yedek olarak details içine atabiliriz
                     }));
-                    await supabase.from('task_history').insert(histToInsert);
+
+                    const { error: histError } = await supabase
+                        .from('task_history')
+                        .insert(histToInsert);
+                    
+                    if (histError) console.error("❌ History Hatası:", histError.message);
                 }
             }
 
