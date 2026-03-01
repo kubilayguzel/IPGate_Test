@@ -40,8 +40,9 @@ class TaskUpdateController {
         this.taskId = new URLSearchParams(window.location.search).get('id');
         if (!this.taskId) return window.location.href = 'task-management.html';
 
-        const user = authService.getCurrentUser();
-        if (!user) return window.location.href = 'index.html';
+        // 🔥 Yeni Supabase Oturum Kontrolü
+        const session = await authService.getCurrentSession();
+        if (!session) return window.location.href = 'index.html';
         
         try {
             this.masterData = await this.dataManager.loadAllInitialData();
@@ -288,7 +289,7 @@ class TaskUpdateController {
             
             // 🔥 ÇÖZÜM: Dosya adındaki boşluk ve Türkçe/özel karakterleri temizle
             const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-            const path = `task_documents/${this.taskId}/${id}_${cleanFileName}`;
+            const path = `tasks/${this.taskId}/${id}_${cleanFileName}`;
             
             try {
                 const url = await this.dataManager.uploadFile(file, path);
@@ -355,7 +356,7 @@ class TaskUpdateController {
         
         // 🔥 ÇÖZÜM: Dosya adındaki boşluk ve Türkçe/özel karakterleri temizle
         const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-        const path = `epats_documents/${id}_${cleanFileName}`;
+        const path = `tasks/${this.taskId}/epats_${id}_${cleanFileName}`;
         
         try {
             const url = await this.dataManager.uploadFile(file, path);
@@ -521,11 +522,20 @@ class TaskUpdateController {
             this.currentDocuments[epatsDocIndex].documentDate = evrakDate;
         }
 
-        const currentUser = authService.getCurrentUser();
+        // Kullanıcı bilgisini profilden de alacak şekilde güvenli hale getirelim
+        let userEmail = 'Bilinmiyor';
+        try {
+            const session = await authService.getCurrentSession();
+            if (session) {
+                const { data: profile } = await supabase.from('users').select('email').eq('id', session.user.id).single();
+                userEmail = profile?.email || session.user.email;
+            }
+        } catch(e) {}
+
         const newHistoryEntry = {
             action: "Görev güncellendi",
             timestamp: new Date().toISOString(),
-            userEmail: currentUser?.email || 'Bilinmiyor'
+            userEmail: userEmail
         };
         const history = this.taskData.history ? [...this.taskData.history] : [];
         history.push(newHistoryEntry);
@@ -533,14 +543,14 @@ class TaskUpdateController {
         const officialDateVal = document.getElementById('taskDueDate').value;
         const operationalDateVal = document.getElementById('deliveryDate').value;
 
-        // Supabase için doğru isimlendirmelerle veriyi yolluyoruz
+        // 🔥 Supabase _enrichTasksWithRelations ve updateTask için doğru isimlendirmelerle veriyi yolluyoruz
         const updateData = {
             status: document.getElementById('taskStatus').value,
             title: document.getElementById('taskTitle').value,
             description: document.getElementById('taskDescription').value,
             priority: document.getElementById('taskPriority').value,
-            relatedIpRecordId: this.selectedIpRecordId,
-            relatedPartyId: this.selectedPersonId, 
+            relatedIpRecordId: this.selectedIpRecordId, // updateTask fonksiyonu bunu yakalar
+            relatedPartyId: this.selectedPersonId,      // updateTask fonksiyonu bunu yakalar
             documents: this.currentDocuments,
             history: history,
             officialDueDate: officialDateVal ? new Date(officialDateVal).toISOString() : null,
@@ -554,7 +564,8 @@ class TaskUpdateController {
             if (this.selectedIpRecordId) {
                 try {
                     let transId = this.taskData.transactionId || await this.dataManager.findTransactionIdByTaskId(this.selectedIpRecordId, this.taskId);
-                    if (transId) await this.dataManager.updateTransaction(this.selectedIpRecordId, transId, { documents: this.currentDocuments });
+                    // Dökümanlar zaten task_documents tablosuna kaydedildiği için transactions tablosuna gönderilmez.
+                    if (transId) await this.dataManager.updateTransaction(this.selectedIpRecordId, transId, { updated_at: new Date().toISOString() });
                 } catch (err) { console.error("Senkronizasyon hatası:", err); }
             }
             
