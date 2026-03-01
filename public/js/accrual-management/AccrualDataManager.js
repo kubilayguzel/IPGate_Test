@@ -364,7 +364,13 @@ export class AccrualDataManager {
             remaining_amount: newAmountArray,
             vat_rate: formData.vatRate || 0,
             apply_vat_to_official_fee: formData.applyVatToOfficialFee || false,
-            is_foreign_transaction: formData.isForeignTransaction || false
+            is_foreign_transaction: formData.isForeignTransaction || false,
+            
+            // 🔥 EKSİK OLAN KİŞİ (MÜVEKKİL) VE FATURA NO ALANLARI EKLENDİ
+            tp_invoice_party_id: formData.tpInvoicePartyId || null,
+            service_invoice_party_id: formData.serviceInvoicePartyId || null,
+            tpe_invoice_no: formData.tpeInvoiceNo || null,
+            evreka_invoice_no: formData.evrekaInvoiceNo || null
         };
 
         const { error } = await supabase.from('accruals').insert(payload);
