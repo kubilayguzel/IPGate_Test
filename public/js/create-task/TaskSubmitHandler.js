@@ -31,8 +31,6 @@ export class TaskSubmitHandler {
     async handleFormSubmit(e, state) {
         e.preventDefault();
         
-        console.log('🚀 [DEBUG] handleFormSubmit tetiklendi (Supabase, Bülten Fix).');
-        
         const { 
             selectedTaskType, selectedIpRecord, selectedRelatedParties, selectedRelatedParty,
             selectedApplicants, priorities, uploadedFiles,
@@ -44,7 +42,7 @@ export class TaskSubmitHandler {
             return;
         }
 
-        const submitBtn = document.getElementById('saveTaskBtn');
+        const submitBtn = document.getElementById('saveTaskBtn') || document.getElementById('submitTaskBtn');
         if (submitBtn) submitBtn.disabled = true;
 
         try {
@@ -114,12 +112,15 @@ export class TaskSubmitHandler {
                 history: []
             };
 
-            // 4. Geçmiş Logu
-            const currentUser = authService.getCurrentUser();
+            // 🔥 4. Geçmiş Logu (SUPABASE ASYNC AUTH DÜZELTMESİ)
+            const session = await authService.getCurrentSession();
+            const currentUser = session ? session.user : null;
+            const userNameOrEmail = currentUser?.email || currentUser?.user_metadata?.display_name || 'Sistem';
+
             taskData.history.push({
                 action: "Görev oluşturuldu",
                 timestamp: new Date().toISOString(),
-                userEmail: currentUser?.email || currentUser?.displayName || 'Bilinmiyor'
+                userEmail: userNameOrEmail
             });
 
             // 5. Tarih Atamaları
@@ -141,9 +142,7 @@ export class TaskSubmitHandler {
                 }
             }
             
-            // 7. 🔥 BÜLTEN - KAYIT OLUŞTURMA BAĞLANTISI (HATA BURADA ÇÖZÜLDÜ)
-            // Sadece bülten aramasından yeni gelmiş ham verilerde (_source = bulletin) 
-            // ve portföyde zaten kayıtlı olmayan (portfolio_status'ü boş olan) verilerde çalışır.
+            // 7. Bülten - Kayıt Oluşturma Bağlantısı
             const isRawBulletinRecord = selectedIpRecord && 
                                         (selectedIpRecord.source === 'bulletin' || selectedIpRecord._source === 'bulletin') &&
                                         !selectedIpRecord.portfolio_status &&
@@ -166,7 +165,6 @@ export class TaskSubmitHandler {
                 taskData.related_ip_record_id = newRecordId;
             }
 
-            // Tarih Hesaplamaları
             await this._calculateTaskDates(taskData, selectedTaskType, selectedIpRecord);
 
             // 9. Dosya Yükleme İşlemleri
@@ -207,24 +205,38 @@ export class TaskSubmitHandler {
             // 10. GÖREVİ VERİTABANINA YAZ
             const taskResult = await taskService.addTask(taskData);
             if (!taskResult.success) throw new Error(taskResult.error);
+            const newTaskId = taskResult.data.id;
+
+            // 🔥 10.5 GÖREV EVRAKLARINI YENİ TABLOYA YAZ (SUPABASE DÜZELTMESİ)
+            if (taskData.documents && taskData.documents.length > 0) {
+                const docsToInsert = taskData.documents.map(d => ({
+                    task_id: newTaskId,
+                    document_name: d.name,
+                    document_url: d.url,
+                    document_type: d.type || 'standard_document',
+                    uploaded_at: new Date().toISOString()
+                }));
+                const { error: docError } = await supabase.from('task_documents').insert(docsToInsert);
+                if (docError) console.error("Görev evrakları eklenirken hata:", docError);
+            }
 
             // 11. Dava (Suit) ve Transaction İşlemleri
             if (selectedTaskType.ipType === 'suit' || String(selectedTaskType.id) === '49') {
-                await this._handleSuitCreation(state, taskData, taskResult.data.id);
+                await this._handleSuitCreation(state, taskData, newTaskId);
             }
 
             if (taskData.related_ip_record_id) {
                 await this._addTransactionToPortfolio(
                     taskData.related_ip_record_id, 
                     selectedTaskType, 
-                    taskResult.data.id, 
+                    newTaskId, 
                     state, 
                     taskData.documents
                 );
             }
 
             // 12. Tahakkuk (Accrual) Oluşturma
-            await this._handleAccrualLogic(taskResult.data.id, taskData.title, selectedTaskType, state, accrualData, isFreeTransaction);
+            await this._handleAccrualLogic(newTaskId, taskData.title, selectedTaskType, state, accrualData, isFreeTransaction);
 
             showNotification('İş başarıyla oluşturuldu!', 'success');
             setTimeout(() => {
@@ -601,7 +613,9 @@ export class TaskSubmitHandler {
             parentId = this.selectedParentTransactionId;
         }
 
-        const currentUser = authService.getCurrentUser();
+        // 🔥 SUPABASE ASYNC AUTH DÜZELTMESİ
+        const session = await authService.getCurrentSession();
+        const currentUser = session ? session.user : null;
 
         const transactionData = {
             id: this.generateUUID(), 
@@ -613,7 +627,7 @@ export class TaskSubmitHandler {
             task_id: String(taskId),
             user_id: currentUser?.id || null,
             user_email: currentUser?.email || null,
-            user_name: currentUser?.displayName || null,
+            user_name: currentUser?.user_metadata?.display_name || null,
             transaction_date: new Date().toISOString(),
             created_at: new Date().toISOString()
         };
