@@ -420,5 +420,6 @@ export const FormTemplates = {
                 </div>
             </div>
         </div>
-    `
+    `,
+    getSuitForm: () => `<div id="suitFormContainer"></div>`
 }; 
