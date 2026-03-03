@@ -147,30 +147,53 @@ export class TaskSubmitHandler {
 
             await this._calculateTaskDates(taskData, selectedTaskType, selectedIpRecord);
 
+            // 1. ÖNCE GÖREVİ (TASK) VERİTABANINA YAZ Kİ BİZE BİR ID VERSİN
+            const taskResult = await taskService.addTask(taskData);
+            if (!taskResult.success) throw new Error(taskResult.error);
+            const newTaskId = taskResult.data.id;
+
+            // 2. DOSYALARI OLUŞAN GÖREVİN ID'Sİ İLE "tasks/TASK_ID/" DİZİNİNE YÜKLE
             if (uploadedFiles && uploadedFiles.length > 0) {
                 const docs = [];
+                const taskDocInserts = [];
+                
                 for (const fileObj of uploadedFiles) {
                     const file = fileObj.file || fileObj;
                     const docId = this.generateUUID();
                     const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                    let storagePath = fileObj.isEpats ? `epats_documents/${Date.now()}_${docId}_${cleanFileName}` : `task_documents/${Date.now()}_${docId}_${cleanFileName}`;
+                    
+                    // 🔥 ÇÖZÜM: 'documents' bucket'ı altında 'tasks/TASK_ID/' klasörü
+                    let storagePath = `tasks/${newTaskId}/${Date.now()}_${docId}_${cleanFileName}`;
 
                     const url = await this.dataManager.uploadFileToStorage(file, storagePath);
                     if (url) {
                         docs.push({ id: docId, name: file.name, url: url, storagePath: storagePath, type: fileObj.isEpats ? 'epats_document' : 'standard_document' });
+                        
+                        taskDocInserts.push({
+                            task_id: String(newTaskId),
+                            document_name: file.name,
+                            document_url: url,
+                            document_type: fileObj.isEpats ? 'epats_document' : 'task_document'
+                        });
+
                         if (fileObj.isEpats) {
                             taskData.details.epats_doc_url = url;
                             taskData.details.epats_doc_name = file.name;
                         }
                     }
                 }
+                
+                // URL'leri taskData objesine ekle (Aşağıdaki işlem ve dava modüllerine paslamak için)
                 taskData.details.documents = docs;
-            }
 
-            // GÖREVİ VERİTABANINA YAZ
-            const taskResult = await taskService.addTask(taskData);
-            if (!taskResult.success) throw new Error(taskResult.error);
-            const newTaskId = taskResult.data.id;
+                // Dosyaları SQL'deki task_documents tablosuna kaydet
+                if (taskDocInserts.length > 0) {
+                    await supabase.from('task_documents').insert(taskDocInserts);
+                }
+                
+                // Görevin detaylarını (JSON) yeni dosya URL'leri ile güncelle
+                await supabase.from('tasks').update({ details: taskData.details }).eq('id', newTaskId);
+            }
 
             // Dava İşlemleri
             if (selectedTaskType.ipType === 'suit' || String(selectedTaskType.id) === '49') {
