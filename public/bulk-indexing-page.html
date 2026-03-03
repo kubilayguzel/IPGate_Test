@@ -375,34 +375,34 @@
                             </div>
 
                             <div class="tab-navigation tabs-container mb-3" style="padding: 0; gap: 10px; margin-bottom: 20px;">
-                                <button class="nav-btn notification-tab-btn active" data-target="matched-notifications-tab">
-                                    <i class="fas fa-check-circle text-success"></i> Eşleşenler
-                                    <span class="badge-counter ml-2" id="matchedTabBadge">0</span>
+                                <button class="nav-btn notification-tab-btn active" data-target="etebs-matched-tab">
+                                    <i class="fas fa-link text-success"></i> ETEBS - Eşleşen
+                                    <span class="badge-counter ml-2" id="etebsMatchedBadge">0</span>
                                 </button>
-                                <button class="nav-btn notification-tab-btn" data-target="unmatched-notifications-tab">
-                                    <i class="fas fa-times-circle text-danger"></i> Eşleşmeyenler
-                                    <span class="badge-counter ml-2" id="unmatchedTabBadge">0</span>
+                                <button class="nav-btn notification-tab-btn" data-target="etebs-unmatched-tab">
+                                    <i class="fas fa-unlink text-danger"></i> ETEBS - Eşleşmeyen
+                                    <span class="badge-counter ml-2" id="etebsUnmatchedBadge">0</span>
                                 </button>
-                                <button class="nav-btn notification-tab-btn" data-target="indexed-notifications-tab">
-                                    <i class="fas fa-check-double text-primary"></i> İndekslenenler
-                                    <span class="badge-counter ml-2" id="indexedTabBadge">0</span>
+                                <button class="nav-btn notification-tab-btn" data-target="manual-uploaded-tab">
+                                    <i class="fas fa-file-upload text-primary"></i> Manuel Yüklenenler
+                                    <span class="badge-counter ml-2" id="manualUploadedBadge">0</span>
                                 </button>
                             </div>
 
                             <div class="tab-content mt-3">
-                                <div id="matched-notifications-tab" class="notification-tab-pane active">
-                                    <div id="matchedNotificationsList" class="pdf-list-container"></div>
-                                    <div id="matchedPagination" class="pagination-container mt-3 d-flex justify-content-center"></div>
+                                <div id="etebs-matched-tab" class="notification-tab-pane active">
+                                    <div id="etebsMatchedList" class="pdf-list-container"></div>
+                                    <div id="etebsMatchedPagination" class="pagination-container mt-3 d-flex justify-content-center"></div>
                                 </div>
 
-                                <div id="unmatched-notifications-tab" class="notification-tab-pane">
-                                    <div id="unmatchedNotificationsList" class="pdf-list-container"></div>
-                                    <div id="unmatchedPagination" class="pagination-container mt-3 d-flex justify-content-center"></div>
+                                <div id="etebs-unmatched-tab" class="notification-tab-pane">
+                                    <div id="etebsUnmatchedList" class="pdf-list-container"></div>
+                                    <div id="etebsUnmatchedPagination" class="pagination-container mt-3 d-flex justify-content-center"></div>
                                 </div>
 
-                                <div id="indexed-notifications-tab" class="notification-tab-pane">
-                                    <div id="indexedNotificationsList" class="pdf-list-container"></div>
-                                    <div id="indexedPagination" class="pagination-container mt-3 d-flex justify-content-center"></div>
+                                <div id="manual-uploaded-tab" class="notification-tab-pane">
+                                    <div id="manualUploadedList" class="pdf-list-container"></div>
+                                    <div id="manualUploadedPagination" class="pagination-container mt-3 d-flex justify-content-center"></div>
                                 </div>
                             </div>
                         </div>
@@ -472,7 +472,7 @@
 <script type="module">
     import { loadSharedLayout } from './js/layout-loader.js';
     import { BulkIndexingModule } from './js/indexing/bulk-upload-manager.js';
-    import { ETEBSManager } from './js/etebs-module.js';
+    import { ETEBSManager } from './js/indexing/etebs-manager.js';
     import { EpatsUiManager } from './js/indexing/epats-ui-manager.js';
     // 🔥 Loader modülünü burada import ederek her zaman erişilebilir kılıyoruz
     import './js/simple-loading.js'; 
