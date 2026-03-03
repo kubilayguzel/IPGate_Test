@@ -417,88 +417,74 @@ export const commonService = {
 // ==========================================
 export const ipRecordsService = {
     
-// A) Tüm Portföyü Getir (Listeleme İçin)
-        async getRecords(forceRefresh = false) {
-            
-            // Sadece Portföy listesinde gösterilen kolonlar çekilir (Minimal Payload)
-            const { data, error } = await supabase
-                .from('ip_records')
-                .select(`
-                    id, ip_type, origin, status, portfolio_status, record_owner_type,
-                    application_number, application_date, registration_number, registration_date, renewal_date,
-                    country_code, wipo_ir, aripo_ir, transaction_hierarchy, parent_id, created_at, updated_at,
-                    ip_record_trademark_details ( brand_name, brand_image_url ),
-                    ip_record_applicants ( persons ( id, name, type ) ),
-                    ip_record_classes ( class_no ),
-                    ip_record_bulletins ( bulletin_no, bulletin_date )
-                `)
-                .order('created_at', { ascending: false });
+// A) Tüm Portföyü Getir (Listeleme İçin) — 🚀 VIEW OPTİMİZASYONU
+    async getRecords(forceRefresh = false) {
+        
+        // 🚀 4 ayrı JOIN yerine tek düz view sorgusu
+        const { data, error } = await supabase
+            .from('portfolio_list_view')
+            .select('*')
+            .order('created_at', { ascending: false });
 
-            if (error) {
-                console.error("Kayıtlar çekilemedi:", error);
-                return { success: false, data: [] };
-            }
+        if (error) {
+            console.error("Kayıtlar çekilemedi:", error);
+            return { success: false, data: [] };
+        }
 
         const mappedData = data.map(record => {
-            let applicantsArray = record.ip_record_applicants
-                ? record.ip_record_applicants.filter(rel => rel.persons).map(rel => ({
-                    id: rel.persons.id, name: rel.persons.name, personType: rel.persons.type
-                })) : [];
+            // applicants_json DB'den hazır jsonb olarak geliyor
+            let applicantsArray = [];
+            try {
+                applicantsArray = Array.isArray(record.applicants_json)
+                    ? record.applicants_json
+                    : JSON.parse(record.applicants_json || '[]');
+            } catch(e) { applicantsArray = []; }
 
-            let classesArray = record.ip_record_classes 
-                ? record.ip_record_classes.map(c => parseInt(c.class_no)).filter(n => !isNaN(n)) 
+            // nice_classes DB'den integer[] olarak geliyor
+            const classesArray = Array.isArray(record.nice_classes)
+                ? record.nice_classes.filter(n => n != null)
                 : [];
 
-            let tmDetails = record.ip_record_trademark_details || {};
-            if (Array.isArray(tmDetails)) tmDetails = tmDetails.length > 0 ? tmDetails[0] : {};
-
-            let imageUrl = tmDetails.brand_image_url;
+            // brand_image_url fallback
+            let imageUrl = record.brand_image_url;
             if (!imageUrl || imageUrl.trim() === '') {
                 imageUrl = `https://guicrctynauzxhyfpdfe.supabase.co/storage/v1/object/public/brand_images/${record.id}/logo.png`;
             }
 
-            let bNo = null;
-            let bDate = null;
-            if (record.ip_record_bulletins && record.ip_record_bulletins.length > 0) {
-                bNo = record.ip_record_bulletins[0].bulletin_no;
-                bDate = record.ip_record_bulletins[0].bulletin_date;
-            }
-
             return {
-                id: record.id, 
-                type: record.ip_type, 
-                origin: record.origin, 
+                id: record.id,
+                type: record.ip_type,
+                origin: record.origin,
                 status: record.status,
                 portfoyStatus: record.portfolio_status,
                 recordOwnerType: record.record_owner_type,
-                applicationNumber: record.application_number, 
+                applicationNumber: record.application_number,
                 applicationDate: record.application_date,
-                registrationNumber: record.registration_number, 
-                registrationDate: record.registration_date, 
+                registrationNumber: record.registration_number,
+                registrationDate: record.registration_date,
                 renewalDate: record.renewal_date,
                 country: record.country_code,
-                wipoIR: record.wipo_ir, 
-                aripoIR: record.aripo_ir, 
+                wipoIR: record.wipo_ir,
+                aripoIR: record.aripo_ir,
                 transactionHierarchy: record.transaction_hierarchy,
                 parentId: record.parent_id,
-                
-                title: tmDetails.brand_name || record.title || '', 
-                brandText: tmDetails.brand_name || record.title || '', 
-                brandImageUrl: imageUrl, 
-                
-                bulletinNo: bNo,
-                bulletinDate: bDate,
+
+                title: record.brand_name || '',
+                brandText: record.brand_name || '',
+                brandImageUrl: imageUrl,
+
+                bulletinNo: null,
+                bulletinDate: null,
 
                 niceClasses: classesArray,
                 applicants: applicantsArray,
-                applicantName: applicantsArray.map(a => a.name).join(', ') || '-',
-                
-                createdAt: record.created_at, 
+                applicantName: record.applicant_names || '-',
+
+                createdAt: record.created_at,
                 updatedAt: record.updated_at
             };
         });
 
-        // 🔥 HATA BURADAYDI: Cache yazma satırı tamamen silindi, veriler doğrudan dönüyor!
         return { success: true, data: mappedData, from: 'server' };
     },
     
@@ -646,12 +632,20 @@ export const ipRecordsService = {
         // 4. SINIFLAR VE EŞYALAR (ip_record_classes)
         if (data.goodsAndServicesByClass && Array.isArray(data.goodsAndServicesByClass)) {
             const classRows = data.goodsAndServicesByClass.map(c => ({ 
-                id: crypto.randomUUID(), // 🔥 ÇÖZÜM 1: Eksik ID eklendi
+                id: crypto.randomUUID(), 
                 ip_record_id: newRecordId, 
                 class_no: parseInt(c.classNo), 
                 items: Array.isArray(c.items) ? c.items : [] 
             }));
-            if(classRows.length > 0) await supabase.from('ip_record_classes').insert(classRows);
+            
+            if (classRows.length > 0) {
+                const { error: classError } = await supabase.from('ip_record_classes').insert(classRows);
+                if (classError) {
+                    console.error("❌ Sınıflar (ip_record_classes) tabloya yazılamadı:", classError);
+                } else {
+                    console.log(`✅ ${classRows.length} adet sınıf başarıyla ip_record_classes tablosuna kaydedildi.`);
+                }
+            }
         }
 
         // 5. RÜÇHANLAR (ip_record_priorities)
