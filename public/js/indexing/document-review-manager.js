@@ -21,8 +21,8 @@ import {
 } from '../../utils.js';
 import '../simple-loading.js';
 
-const UNINDEXED_PDFS_COLLECTION = 'unindexed_pdfs';
-const STORAGE_BUCKET = 'task_documents'; // Supabase Ortak Bucket
+const INCOMING_DOCS_COLLECTION = 'incoming_documents';
+const STORAGE_BUCKET = 'documents';
 const SELCAN_UID = 'dqk6yRN7Kwgf6HIJldLt9Uz77RU2'; 
 const SELCAN_EMAIL = 'selcanakoglu@evrekapatent.com';
 
@@ -57,9 +57,7 @@ export class DocumentReviewManager {
             }
         }
 
-        if (d && typeof d.toDate === 'function') d = d.toDate();
-        else if (d && d.seconds) d = new Date(d.seconds * 1000);
-
+        // 🔥 ÇÖZÜM: Firebase saniye (seconds) dönüşümü tamamen kaldırıldı
         if (!(d instanceof Date)) d = new Date(d);
         if (isNaN(d.getTime())) return '';
 
@@ -92,7 +90,16 @@ export class DocumentReviewManager {
             return;
         }
 
-        this.currentUser = authService.getCurrentUser();
+        // 🔥 ÇÖZÜM: Supabase Asenkron Oturum Kontrolü
+        const session = await authService.getCurrentSession();
+        this.currentUser = session?.user || null;
+
+        // Kullanıcı yoksa işlemi durdur (Güvenlik önlemi)
+        if (!this.currentUser) {
+            console.error("Oturum bulunamadı, işlem durduruldu.");
+            return;
+        }
+
         this.setupEventListeners();
         if (window.EvrekaDatePicker) window.EvrekaDatePicker.refresh();
         await this.loadCountriesOnly();
@@ -277,17 +284,17 @@ export class DocumentReviewManager {
         }
 
         try {
-            // 🔥 SUPABASE SORGUSU
-            const { data: docSnap, error } = await supabase.from(UNINDEXED_PDFS_COLLECTION).select('*').eq('id', String(this.pdfId)).single();
+            // 🔥 SUPABASE SORGUSU (Yeni Tablo)
+            const { data: docSnap, error } = await supabase.from(INCOMING_DOCS_COLLECTION).select('*').eq('id', String(this.pdfId)).single();
             if (error || !docSnap) throw new Error('PDF kaydı bulunamadı.');
             
             this.pdfData = { 
                 id: docSnap.id, 
                 ...docSnap,
                 fileName: docSnap.file_name,
-                fileUrl: docSnap.download_url,
-                matchedRecordId: docSnap.matched_record_id,
-                tebligTarihi: docSnap.teblig_tarihi || docSnap.tebligTarihi 
+                fileUrl: docSnap.file_url,
+                matchedRecordId: docSnap.ip_record_id, // Yeni sütun eşleşmesi
+                tebligTarihi: docSnap.teblig_tarihi 
             };
             console.log("📄 PDF Verisi Yüklendi:", this.pdfData);
 
@@ -735,7 +742,7 @@ export class DocumentReviewManager {
                 if (!ownerInput || !fileInput) throw new Error('İtiraz Sahibi ve PDF zorunludur.');
 
                 // Supabase Storage Upload
-                const storagePath = `task_documents/${this.matchedRecord.id}/${Date.now()}_${fileInput.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
+                const storagePath = `incoming_documents/${this.matchedRecord.id}/${Date.now()}_${fileInput.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
                 const { error: upErr } = await supabase.storage.from(STORAGE_BUCKET).upload(storagePath, fileInput);
                 if (upErr) throw upErr;
                 const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
@@ -743,7 +750,7 @@ export class DocumentReviewManager {
                 oppositionFileName = fileInput.name;
 
                 if (epatsFileInput) {
-                    const epatsPath = `task_documents/${this.matchedRecord.id}/${Date.now()}_${epatsFileInput.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
+                    const epatsPath = `incoming_documents/${this.matchedRecord.id}/${Date.now()}_${epatsFileInput.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
                     await supabase.storage.from(STORAGE_BUCKET).upload(epatsPath, epatsFileInput);
                     const { data: epatsUrlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(epatsPath);
                     oppositionEpatsFileUrl = epatsUrlData.publicUrl;
@@ -777,26 +784,26 @@ export class DocumentReviewManager {
 
             const finalParentId = newParentTxId || parentTxId;
 
-            // 🔥 GÜNCELLENMİŞ TAŞIMA KODU (Yol Temizleyici Eklendi)
+            // 🔥 GÜNCELLENMİŞ TAŞIMA KODU (Bucket ve Klasör Uyumu)
             let finalPdfUrl = this.pdfData.fileUrl || this.pdfData.download_url;
             let finalPdfPath = this.pdfData.file_path || (this.pdfData.details && this.pdfData.details.file_path) || finalPdfUrl;
 
-            if (finalPdfPath && !finalPdfPath.includes('indexed_pdfs/')) {
+            // Dosya zaten indexed klasöründe değilse taşı
+            if (finalPdfPath && !finalPdfPath.includes('incoming_documents/indexed/')) {
                 let sourcePath = finalPdfPath;
                 
-                // Eğer yol tam bir URL ise (http ile başlıyorsa) sadece kovanın (bucket) içindeki kısmı ayıklayalım
                 if (sourcePath.startsWith('http')) {
-                    const urlParts = sourcePath.split('/unindexed_pdfs/');
+                    const urlParts = sourcePath.split('/documents/');
                     if (urlParts.length > 1) {
                         sourcePath = urlParts[1]; 
                     }
                 }
                 
-                // Olası fazladan klasör isimlerini temizle
-                sourcePath = sourcePath.replace('task_documents/', '').replace('unindexed_pdfs/', '');
+                sourcePath = sourcePath.replace('documents/', '');
                 
                 const cleanName = (this.pdfData.fileName || 'evrak.pdf').replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                const targetPath = `indexed_pdfs/${this.matchedRecord.id}/${Date.now()}_${cleanName}`;
+                // Hedef yolu da incoming_documents altına aldık
+                const targetPath = `incoming_documents/indexed/${this.matchedRecord.id}/${Date.now()}_${cleanName}`;
                 
                 const { error: moveError } = await supabase.storage.from(STORAGE_BUCKET).move(sourcePath, targetPath);
                 
@@ -804,7 +811,7 @@ export class DocumentReviewManager {
                     finalPdfPath = targetPath;
                     const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(targetPath);
                     finalPdfUrl = urlData.publicUrl;
-                    console.log("✅ Dosya başarıyla 'indexed_pdfs' klasörüne taşındı.");
+                    console.log("✅ Dosya başarıyla 'incoming_documents/indexed' klasörüne taşındı.");
                 } else {
                     console.warn("⚠️ Dosya taşınamadı:", moveError.message);
                 }
@@ -986,7 +993,7 @@ export class DocumentReviewManager {
                         priority: 'medium',
                         assignedTo_uid: currentAssignedUser.uid, 
                         assignedTo_email: currentAssignedUser.email, 
-                        createdBy: { uid: this.currentUser.uid, email: this.currentUser.email },
+                        createdBy: { uid: this.currentUser.id, email: this.currentUser.email },
                         taskOwner: taskOwner.length > 0 ? taskOwner : null,
                         details: { relatedParty: relatedPartyData },
                         history: [{ action: 'İndeksleme işlemi ile otomatik oluşturuldu.', timestamp: new Date().toISOString(), userEmail: this.currentUser.email }]
@@ -1026,17 +1033,14 @@ export class DocumentReviewManager {
                 } catch (err) {}
             }
 
-            // PDF durumunu Indexed yap
-            await supabase.from(UNINDEXED_PDFS_COLLECTION).update({
+            // PDF durumunu Indexed yap ve yeni şemaya göre kaydet
+            await supabase.from(INCOMING_DOCS_COLLECTION).update({
                 status: 'indexed',
-                download_url: finalPdfUrl, 
-                details: {
-                    ...(this.pdfData.details || {}),
-                    file_path: finalPdfPath, 
-                    indexed_at: new Date().toISOString(),
-                    final_transaction_id: childTransactionId,
-                    matched_record_id: this.matchedRecord.id
-                }
+                file_url: finalPdfUrl, 
+                file_path: finalPdfPath, 
+                indexed_at: new Date().toISOString(),
+                created_transaction_id: childTransactionId,
+                ip_record_id: this.matchedRecord.id
             }).eq('id', String(this.pdfId));
 
             // --- MÜVEKKİL BİLDİRİMİNİ TETİKLE ---
