@@ -153,10 +153,11 @@ export class TaskDataManager {
     async uploadFileToStorage(file, path) {
         if (!file || !path) return null;
         try {
-            const { error } = await supabase.storage.from('task_documents').upload(path, file);
+            // 🔥 ÇÖZÜM: 'task_documents' yerine ortak 'documents' bucket'ı kullanılıyor
+            const { error } = await supabase.storage.from('documents').upload(path, file);
             if (error) throw error;
             
-            const { data } = supabase.storage.from('task_documents').getPublicUrl(path);
+            const { data } = supabase.storage.from('documents').getPublicUrl(path);
             return data.publicUrl;
         } catch (error) {
             console.error("Dosya yükleme hatası:", error);
