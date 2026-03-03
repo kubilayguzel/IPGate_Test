@@ -489,13 +489,15 @@ class CreateTaskController {
         this.validator.checkCompleteness(this.state);
     }
 
-    handleOriginChange(val) {
-        this.resetSelections();
-        this.uiManager.unlockAndClearLawsuitFields();
+    handleOriginChange(val, keepSelections = false) {
+        if (!keepSelections) {
+            this.resetSelections();
+            this.uiManager.unlockAndClearLawsuitFields();
+            const ipRecordContainer = document.getElementById('selectedIpRecordContainer');
+            if(ipRecordContainer) ipRecordContainer.style.display = 'none';
+        }
+
         this.toggleAssetSearchVisibility(val);
-        
-        const ipRecordContainer = document.getElementById('selectedIpRecordContainer');
-        if(ipRecordContainer) ipRecordContainer.style.display = 'none';
 
         const container = document.getElementById('countrySelectionContainer');
         const singleWrapper = document.getElementById('singleCountrySelectWrapper');
@@ -834,7 +836,10 @@ class CreateTaskController {
         const recordOrigin = record.origin || 'TÜRKPATENT';
         
         if (originSelect) {
-            if (originSelect.value !== recordOrigin) { originSelect.value = recordOrigin; this.handleOriginChange(recordOrigin); }
+            if (originSelect.value !== recordOrigin) { 
+                originSelect.value = recordOrigin; 
+                this.handleOriginChange(recordOrigin, true); // 🔥 BURAYA true EKLENDİ
+            }
             originSelect.disabled = true;
         }
         if (mainIpTypeSelect) mainIpTypeSelect.disabled = true;
