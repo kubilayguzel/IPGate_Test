@@ -240,20 +240,111 @@ export class TaskSubmitHandler {
     async _handleAccrualLogic(taskId, taskTitle, taskType, state, accrualData, isFree) {
         if (isFree) return; 
 
-        const hasValidAccrualData = accrualData && ((Array.isArray(accrualData.officialFee) && accrualData.officialFee.length > 0) || accrualData.officialFee?.amount > 0 || accrualData.serviceFee?.amount > 0);
+        const offFee = parseFloat(accrualData?.officialFee?.amount || accrualData?.officialFee || 0);
+        const srvFee = parseFloat(accrualData?.serviceFee?.amount || accrualData?.serviceFee || 0);
+
+        const hasValidAccrualData = accrualData && (offFee > 0 || srvFee > 0);
 
         if (hasValidAccrualData) {
+            const session = await authService.getCurrentSession();
+            const dbUser = state.allUsers.find(u => u.email === session?.user?.email);
+            
+            const newAccrualId = await accrualService._getNextAccrualId();
+
             const finalAccrual = {
-                task_id: String(taskId), task_title: taskTitle, official_fee: accrualData.officialFee || [], service_fee: accrualData.serviceFee || [],   
-                total_amount: accrualData.totalAmount || [], remaining_amount: accrualData.totalAmount || [], vat_rate: Number(accrualData.vatRate) || 20,
-                apply_vat_to_official_fee: Boolean(accrualData.applyVatToOfficialFee), status: 'unpaid', tp_invoice_party_id: accrualData.tpInvoiceParty?.id || null,
-                service_invoice_party_id: accrualData.serviceInvoiceParty?.id || null, is_foreign_transaction: Boolean(accrualData.isForeignTransaction), files: accrualData.files || [], 
-                created_at: new Date().toISOString()
+                id: String(newAccrualId),
+                task_id: String(taskId),
+                status: 'unpaid',
+                accrual_type: 'task_accrual',
+                tp_invoice_party_id: accrualData.tpInvoiceParty?.id || null,
+                service_invoice_party_id: accrualData.serviceInvoiceParty?.id || null,
+                created_by_uid: dbUser ? dbUser.id : null,
+                
+                official_fee_amount: offFee,
+                official_fee_currency: accrualData.officialFee?.currency || 'TRY',
+                service_fee_amount: srvFee,
+                service_fee_currency: accrualData.serviceFee?.currency || 'TRY',
+                
+                total_amount: accrualData.totalAmount ? (Array.isArray(accrualData.totalAmount) ? accrualData.totalAmount : [accrualData.totalAmount]) : [],
+                remaining_amount: accrualData.totalAmount ? (Array.isArray(accrualData.totalAmount) ? accrualData.totalAmount : [accrualData.totalAmount]) : [],
+                
+                vat_rate: Number(accrualData.vatRate) || 20,
+                apply_vat_to_official_fee: Boolean(accrualData.applyVatToOfficialFee),
+                is_foreign_transaction: Boolean(accrualData.isForeignTransaction),
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
             };
-            await accrualService.addAccrual(finalAccrual);
+
+            try {
+                const { error: accError } = await supabase.from('accruals').insert(finalAccrual);
+                if (accError) throw accError;
+                console.log("✅ Tahakkuk başarıyla kaydedildi.");
+
+                // ======================================================
+                // 🔥 DEBUG (LOGLAMA) BÖLÜMÜ BAŞLIYOR
+                // ======================================================
+                console.log("======== TAHAKKUK EVRAK YÜKLEME DEBUG ========");
+                console.log("1. Gelen tüm accrualData objesi:", accrualData);
+                console.log("2. accrualData.files durumu:", accrualData.files);
+                
+                if (!accrualData.files || accrualData.files.length === 0) {
+                    console.warn("⚠️ DİKKAT: Forma dosya eklenmesine rağmen 'accrualData.files' boş geliyor! AccrualFormManager dosyayı yakalayamıyor olabilir.");
+                } else {
+                    console.log(`3. Yüklenecek ${accrualData.files.length} adet dosya bulundu. Yükleme başlıyor...`);
+                    
+                    const docInserts = [];
+                    for (const fileObj of accrualData.files) {
+                        const file = fileObj.file || fileObj; 
+                        console.log(`➡️ İşlenen Dosya: ${file.name} (Boyut: ${file.size} byte, Tip: ${file.type})`);
+                        
+                        const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                        const storagePath = `accruals/${newAccrualId}/${Date.now()}_${cleanFileName}`;
+                        
+                        console.log(`   Yükleme Yolu: documents/${storagePath}`);
+                        
+                        const { error: uploadError } = await supabase.storage
+                            .from('documents')
+                            .upload(storagePath, file, { cacheControl: '3600', upsert: true });
+
+                        if (uploadError) {
+                            console.error(`   ❌ Storage Yükleme Hatası (${file.name}):`, uploadError);
+                            continue; 
+                        }
+                        
+                        console.log(`   ✅ Dosya Storage'a yüklendi.`);
+                        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(storagePath);
+                        
+                        if (urlData && urlData.publicUrl) {
+                            console.log(`   🔗 Public URL Alındı: ${urlData.publicUrl}`);
+                            docInserts.push({
+                                accrual_id: String(newAccrualId),
+                                document_name: file.name,
+                                document_url: urlData.publicUrl,
+                                document_type: file.type || 'other'
+                            });
+                        }
+                    }
+
+                    console.log("4. Veritabanına (accrual_documents) yazılacak dizi:", docInserts);
+                    if (docInserts.length > 0) {
+                        const { error: docError } = await supabase.from('accrual_documents').insert(docInserts);
+                        if (docError) {
+                            console.error("❌ accrual_documents tablosuna yazılamadı:", docError);
+                        } else {
+                            console.log(`✅ ${docInserts.length} evrak başarıyla veritabanına eklendi!`);
+                        }
+                    }
+                }
+                console.log("==============================================");
+                // ======================================================
+
+            } catch (err) {
+                console.error("❌ Tahakkuk kaydedilemedi:", err);
+            }
             return; 
         }
 
+        // --- Tahakkuk Girilmediyse "Tahakkuk Oluşturma Görevi" Ata ---
         let assignedUid = null, assignedEmail = "Atanmamış";
         try {
             const rule = await this.dataManager.getAssignmentRule("53");
@@ -263,16 +354,31 @@ export class TaskSubmitHandler {
             }
         } catch (e) { }
 
+        let accAppNo = "-", accTitle = taskTitle, accAppName = "-";
+        if (state.selectedIpRecord) {
+            const sip = state.selectedIpRecord;
+            accAppNo = sip.application_number || sip.applicationNo || sip.appNo || sip.caseNo || "-";
+            accTitle = sip.title || sip.brand_name || sip.markName || taskTitle;
+            if (Array.isArray(sip.applicants) && sip.applicants.length > 0) accAppName = sip.applicants[0].name || "-";
+            else if (sip.client && sip.client.name) accAppName = sip.client.name;
+        }
+
         const accrualTaskData = {
-            task_type_id: "53",
+            task_type_id: "53", 
             title: `Tahakkuk Oluşturma: ${taskTitle}`,
-            description: `Finansal kaydı oluşturun.`,
+            description: `"${taskTitle}" işi oluşturuldu ancak tahakkuk girilmedi. Lütfen finansal kaydı oluşturun.`,
             priority: 'high',
             status: 'open',
             assigned_to: assignedUid,
             ip_record_id: state.selectedIpRecord ? state.selectedIpRecord.id : null,
-            details: { assigned_to_email: assignedEmail }
+            details: {
+                assigned_to_email: assignedEmail,
+                iprecord_application_no: accAppNo,
+                iprecord_title: accTitle,
+                iprecord_applicant_name: accAppName
+            }
         };
+
         await taskService.addTask(accrualTaskData);
     }
 
@@ -312,30 +418,136 @@ export class TaskSubmitHandler {
 
     async _handleTrademarkApplication(state, taskData) {
         const { selectedApplicants, priorities, uploadedFiles } = state;
-        let brandImageUrl = null;
-        if (uploadedFiles.length > 0) {
-            brandImageUrl = await this.dataManager.uploadFileToStorage(uploadedFiles[0].file || uploadedFiles[0], `brand-images/${Date.now()}_img`);
-        }
         
+        // 🔥 ÇÖZÜM 2: Önce yeni IP Kaydının ID'sini oluşturuyoruz (Görsel klasörü için lazım)
+        const newRecordId = this.generateUUID();
+
+        // 🔥 ÇÖZÜM 2: Marka Görselini Doğrudan 'brand_images' Bucket'ına ID Klasörüyle Yükle
+        let brandImageUrl = null;
+        
+        // Önce özel marka görseli input'undan dosyayı al, yoksa genel formdan geleni al
+        const brandImgInput = document.getElementById('brandExample');
+        let brandFile = null;
+        
+        if (brandImgInput && brandImgInput.files && brandImgInput.files.length > 0) {
+            brandFile = brandImgInput.files[0];
+        } else if (uploadedFiles && uploadedFiles.length > 0) {
+            brandFile = uploadedFiles[0].file || uploadedFiles[0];
+        }
+
+        if (brandFile) {
+            const cleanFileName = brandFile.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+            // Yol: brand_images / KAYIT_ID / ZamanDamgasi_DosyaAdi.png
+            const storagePath = `${newRecordId}/${Date.now()}_${cleanFileName}`;
+            
+            try {
+                // Doğrudan Supabase Storage API kullanarak brand_images'a yükle
+                const { error: uploadError } = await supabase.storage
+                    .from('brand_images')
+                    .upload(storagePath, brandFile, { cacheControl: '3600', upsert: true });
+
+                if (!uploadError) {
+                    const { data: urlData } = supabase.storage.from('brand_images').getPublicUrl(storagePath);
+                    if (urlData && urlData.publicUrl) {
+                        brandImageUrl = urlData.publicUrl;
+                        console.log("✅ Marka görseli 'brand_images' bucket'ına yüklendi:", brandImageUrl);
+                    }
+                } else {
+                    console.error("❌ Marka görseli yükleme hatası:", uploadError);
+                }
+            } catch (e) {
+                console.error("❌ Marka görseli yüklenirken hata oluştu:", e);
+            }
+        }
+
+        const brandType = document.getElementById('brandType')?.value || '';
+        const brandCategory = document.getElementById('brandCategory')?.value || '';
+        const visualDescription = document.getElementById('brandExampleText')?.value?.trim() || ''; 
+        const nonLatin = document.getElementById('nonLatinAlphabet')?.value || '';
+        
+        let cleanBrandName = visualDescription;
+        if (!cleanBrandName && taskData.title) {
+                cleanBrandName = taskData.title.replace(/ Marka Başvurusu$/i, '').trim();
+        }
+
         let origin = document.getElementById('originSelect')?.value || 'TÜRKPATENT';
         let originCountry = 'TR'; 
-        if (origin === 'Yurtdışı Ulusal' || origin === 'FOREIGN_NATIONAL') { origin = 'FOREIGN_NATIONAL'; originCountry = document.getElementById('countrySelect')?.value || ''; }
+        if (origin === 'Yurtdışı Ulusal' || origin === 'FOREIGN_NATIONAL') {
+            origin = 'FOREIGN_NATIONAL';
+            originCountry = document.getElementById('countrySelect')?.value || '';
+        }
+
+        let goodsAndServicesByClass = [];
+        try {
+            const rawNiceClasses = getSelectedNiceClasses();
+            console.log("🔍 Seçilen Ham Sınıflar (UI):", rawNiceClasses);
+            
+            if (Array.isArray(rawNiceClasses)) {
+                goodsAndServicesByClass = rawNiceClasses.reduce((acc, item) => {
+                    let classNo = NaN;
+                    let rawText = '';
+                    
+                    // Daha esnek Regex: "(05) Metin", "05", "Sınıf 5", "5 - Metin" gibi formatları yakalar
+                    const match = String(item).match(/(?:sınıf|class)?\s*\(?(\d+)\)?\s*[-:]?\s*([\s\S]*)/i);
+                    
+                    if (match) {
+                        classNo = parseInt(match[1]);
+                        rawText = match[2] ? match[2].trim() : '';
+                    } else {
+                        classNo = parseInt(item);
+                    }
+
+                    if (!isNaN(classNo)) {
+                        let classObj = acc.find(obj => obj.classNo === classNo);
+                        if (!classObj) {
+                            classObj = { classNo, items: [] };
+                            acc.push(classObj);
+                        }
+                        if (rawText && rawText !== '-' && rawText !== '') {
+                            const lines = rawText.split(/[\n]/).map(l => l.trim()).filter(Boolean);
+                            lines.forEach(line => {
+                                const cleanLine = line.replace(/^\)+|\)+$/g, '').trim(); 
+                                if (cleanLine && !classObj.items.includes(cleanLine)) {
+                                    classObj.items.push(cleanLine);
+                                }
+                            });
+                        }
+                    }
+                    return acc;
+                }, []).sort((a, b) => a.classNo - b.classNo);
+            }
+            console.log("🚀 DB'ye Gönderilecek Sınıflar:", goodsAndServicesByClass);
+        } catch (e) { 
+            console.error("❌ Sınıf ayrıştırma hatası:", e);
+        }
+
+        const applicantsData = selectedApplicants.map(p => ({ id: p.id }));
 
         const newRecordData = {
-            title: document.getElementById('brandExampleText')?.value?.trim() || taskData.title,
-            brandText: document.getElementById('brandExampleText')?.value?.trim(),
+            id: newRecordId, // 🔥 Oluşturduğumuz ID'yi tabloya veriyoruz
+            title: cleanBrandName,
+            brandText: cleanBrandName,
             type: 'trademark',
             recordOwnerType: 'self',
             portfoyStatus: 'active',
             status: 'filed',
             applicationDate: new Date().toISOString().split('T')[0],
-            brandType: document.getElementById('brandType')?.value || '',
-            brandCategory: document.getElementById('brandCategory')?.value || '',
-            nonLatinAlphabet: document.getElementById('nonLatinAlphabet')?.value !== '', 
-            brandImageUrl: brandImageUrl,
+            renewalDate: (() => {
+                const d = new Date();
+                d.setFullYear(d.getFullYear() + 10);
+                return d.toISOString().split('T')[0];
+            })(),
+            brandType: brandType,
+            brandCategory: brandCategory,
+            nonLatinAlphabet: nonLatin !== '', 
+            brandImageUrl: brandImageUrl, // Yüklenen URL
             origin: origin,
             countryCode: originCountry,
-            applicants: selectedApplicants.map(p => ({ id: p.id }))
+            createdFrom: 'create_task', // 🔥 ÇÖZÜM 1: Doğrudan 'create_task' olarak DB'ye iletiliyor
+            
+            applicants: applicantsData,
+            goodsAndServicesByClass: goodsAndServicesByClass,
+            priorities: priorities || []
         };
 
         const result = await ipRecordsService.createRecordFromDataEntry(newRecordData);
