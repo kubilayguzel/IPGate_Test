@@ -104,7 +104,21 @@ export class DocumentReviewManager {
         if (window.EvrekaDatePicker) window.EvrekaDatePicker.refresh();
         await this.loadCountriesOnly();
         await this.loadTransactionTypes();
+        
+        // 🔥 YENİ EKLENEN SATIR: Kayıtları arama için önbelleğe alıyoruz
+        await this.loadAllRecords(); 
+        
         await this.loadData();
+    }
+
+    // 🔥 YENİ EKLENEN FONKSİYON: Portföyü service üzerinden güvenle çeker
+    async loadAllRecords() {
+        try {
+            const recordsResult = await ipRecordsService.getRecords();
+            this.allRecords = recordsResult?.data || recordsResult?.items || recordsResult || [];
+        } catch (error) {
+            console.error('Kayıtlar yüklenirken hata oluştu:', error);
+        }
     }
 
     async loadCountriesOnly() {
@@ -118,9 +132,14 @@ export class DocumentReviewManager {
 
     async loadTransactionTypes() {
         try {
-            const result = await transactionTypeService.getTransactionTypes();
-            if (result.success) this.allTransactionTypes = result.data;
-        } catch (error) { console.error('İşlem tipleri yüklenemedi:', error); }
+            // 🔥 ÇÖZÜM: Eski servisin verileri kırpmasını (index_file sütununu silmesini) 
+            // önlemek için işlem tiplerini doğrudan Supabase'den ham haliyle çekiyoruz.
+            const { data: txTypes, error } = await supabase.from('transaction_types').select('*');
+            if (error) throw error;
+            this.allTransactionTypes = txTypes || [];
+        } catch (error) { 
+            console.error('İşlem tipleri yüklenemedi:', error); 
+        }
     }
 
     async extractTextFromPDF(url) {
@@ -254,8 +273,8 @@ export class DocumentReviewManager {
     }
 
     updateCalculatedDeadline() {
-        const dateVal = document.getElementById('detectedDate').value;
-        const typeId = document.getElementById('detectedType').value;
+        const dateVal = document.getElementById('detectedDate')?.value;
+        const typeId = document.getElementById('detectedType')?.value;
         const displayInput = document.getElementById('calculatedDeadlineDisplay');
         
         if (!dateVal || !typeId || !displayInput) {
@@ -264,14 +283,18 @@ export class DocumentReviewManager {
         }
 
         const typeObj = this.allTransactionTypes.find(t => String(t.id) === String(typeId));
-        if (!typeObj || (typeObj.duePeriod === undefined && typeObj.due_period === undefined)) {
-            displayInput.value = "Süre tanımlanmamış";
+        
+        // 🔥 ÇÖZÜM: Supabase'den gelen 0, null veya undefined durumlarını kontrol ediyoruz
+        let duePeriod = typeObj ? (typeObj.due_period !== undefined ? typeObj.due_period : typeObj.duePeriod) : 0;
+        duePeriod = Number(duePeriod) || 0;
+
+        // Eğer süre 0 ise hesaplama yapma!
+        if (!typeObj || duePeriod === 0) {
+            displayInput.value = "Son Süre Hesaplanmaz";
             return;
         }
 
         const deliveryDate = new Date(dateVal);
-        let duePeriod = Number(typeObj.duePeriod || typeObj.due_period || 0);
-        
         let officialDate = addMonthsToDate(deliveryDate, duePeriod);
         officialDate = findNextWorkingDay(officialDate, TURKEY_HOLIDAYS);
         
@@ -517,20 +540,26 @@ export class DocumentReviewManager {
         if (!selectedParentTxId) return;
         
         const selectedParentTx = this.currentTransactions.find(t => String(t.id) === String(selectedParentTxId));
+        // 🔥 ÇÖZÜM: Yeni şema (transaction_type_id) ve eski şema (type) desteği
         const parentTypeId = selectedParentTx?.transaction_type_id || selectedParentTx?.type;
         
         const parentTypeObj = this.allTransactionTypes.find(t => String(t.id) === String(parentTypeId));
         
         if (!parentTypeObj) return;
         
+        // Supabase snake_case (index_file) formatındaki listeleri okuyoruz
         let allowedChildIds = [];
-        if (Array.isArray(parentTypeObj.index_file)) allowedChildIds = parentTypeObj.index_file.map(String);
-        else if (Array.isArray(parentTypeObj.indexFile)) allowedChildIds = parentTypeObj.indexFile.map(String);
-        else if (Array.isArray(parentTypeObj.allowed_child_types)) allowedChildIds = parentTypeObj.allowed_child_types.map(String);
+        if (Array.isArray(parentTypeObj.index_file) && parentTypeObj.index_file.length > 0) {
+            allowedChildIds = parentTypeObj.index_file.map(String);
+        } else if (Array.isArray(parentTypeObj.indexFile) && parentTypeObj.indexFile.length > 0) {
+            allowedChildIds = parentTypeObj.indexFile.map(String);
+        } else if (Array.isArray(parentTypeObj.allowed_child_types) && parentTypeObj.allowed_child_types.length > 0) {
+            allowedChildIds = parentTypeObj.allowed_child_types.map(String);
+        }
 
         const allowedChildTypes = this.allTransactionTypes
             .filter(t => allowedChildIds.includes(String(t.id)))
-            .sort((a, b) => (a.order || 999) - (b.order || 999));
+            .sort((a, b) => (a.order_index || a.order || 999) - (b.order_index || b.order || 999));
             
         allowedChildTypes.forEach(type => {
             const opt = document.createElement('option');
@@ -539,7 +568,9 @@ export class DocumentReviewManager {
             childSelect.appendChild(opt);
         });
         
-        childSelect.disabled = false;
+        if (allowedChildTypes.length > 0) {
+            childSelect.disabled = false;
+        }
         
         if (this.analysisResult && this.analysisResult.detectedType && typeof this.autoSelectChildType === 'function') {
             this.autoSelectChildType(childSelect);
@@ -780,16 +811,29 @@ export class DocumentReviewManager {
                     newParentDesc = 'Yayına İtirazın Yeniden İncelenmesi (Otomatik)';
                 }
 
+                // 🔥 ÇÖZÜM: Hem İtiraz Dilekçesi hem de (varsa) EPATS evrakı transaction dizisine ekleniyor
+                const parentDocsToSave = [
+                    {
+                        name: oppositionFileName,
+                        url: oppositionFileUrl,
+                        documentDesignation: 'İtiraz Dilekçesi'
+                    }
+                ];
+
+                if (oppositionEpatsFileUrl) {
+                    parentDocsToSave.push({
+                        name: oppositionEpatsFileName,
+                        url: oppositionEpatsFileUrl,
+                        documentDesignation: 'EPATS Evrakı'
+                    });
+                }
+
                 const newParentData = {
                     type: newParentTypeId,
                     description: newParentDesc,
                     transactionHierarchy: 'parent',
                     oppositionOwner: ownerInput,
-                    documents: [{
-                        name: oppositionFileName,
-                        url: oppositionFileUrl,
-                        documentDesignation: 'İtiraz Dilekçesi'
-                    }],
+                    documents: parentDocsToSave, // 🔥 İki evrakı da barındıran dizi eklendi
                     timestamp: new Date().toISOString()
                 };
                 
@@ -799,16 +843,21 @@ export class DocumentReviewManager {
 
             const finalParentId = newParentTxId || parentTxId;
 
+            // 🔥 GÜNCELLENMİŞ TAŞIMA KODU (Yol Parçalama Hatası Düzeltildi)
             let finalPdfUrl = this.pdfData.fileUrl || this.pdfData.download_url;
             let finalPdfPath = this.pdfData.file_path || (this.pdfData.details && this.pdfData.details.file_path) || finalPdfUrl;
 
+            // Dosya zaten indexed klasöründe değilse taşı
             if (finalPdfPath && !finalPdfPath.includes('incoming_documents/indexed/')) {
                 let sourcePath = finalPdfPath;
+                
+                // Eğer path bir URL formatındaysa, sadece bucket'tan (documents) sonrasını al
                 if (sourcePath.startsWith('http')) {
-                    const urlParts = sourcePath.split('/documents/');
-                    if (urlParts.length > 1) sourcePath = urlParts[1]; 
+                    const splitKeyword = `/object/public/${STORAGE_BUCKET}/`;
+                    if (sourcePath.includes(splitKeyword)) {
+                        sourcePath = sourcePath.split(splitKeyword)[1]; 
+                    }
                 }
-                sourcePath = sourcePath.replace('documents/', '');
                 
                 const cleanName = (this.pdfData.fileName || 'evrak.pdf').replace(/[^a-zA-Z0-9.\-_]/g, '_');
                 const targetPath = `incoming_documents/indexed/${this.matchedRecord.id}/${Date.now()}_${cleanName}`;
@@ -819,6 +868,10 @@ export class DocumentReviewManager {
                     finalPdfPath = targetPath;
                     const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(targetPath);
                     finalPdfUrl = urlData.publicUrl;
+                    console.log("✅ Dosya başarıyla taşındı:", targetPath);
+                } else {
+                    console.error("⚠️ Dosya taşınamadı (Storage Hatası):", moveError.message);
+                    // RLS yetkisi eksikse veya dosya bulunamazsa burada hata basar
                 }
             }
 
@@ -918,12 +971,31 @@ export class DocumentReviewManager {
                 let tasksToCreate = [];
                 if (childTypeObj.taskTriggered || childTypeObj.task_triggered) tasksToCreate.push(String(childTypeObj.taskTriggered || childTypeObj.task_triggered));
 
+                // 🔥 ÇÖZÜM: 66 Numaralı (Müvekkil Değerlendirme) İşleminin Sıkı Kuralları
+                const currentChildIdStr = String(childTypeId);
+                const recOwnerType = this.matchedRecord.recordOwnerType; // 'self' veya 'third_party'
+                let isEligibleFor66 = false;
+
+                // 1. Koşulsuz durumlar (Dosya tipine bakılmaksızın)
+                if (['30', '31'].includes(currentChildIdStr)) {
+                    isEligibleFor66 = true;
+                } 
+                // 2. Portföy (self) için olanlar
+                else if (recOwnerType === 'self' && ['32', '33', '34', '35', '50', '51'].includes(currentChildIdStr)) {
+                    isEligibleFor66 = true;
+                } 
+                // 3. Bülten/Karşı Taraf (third_party) için olanlar
+                else if (recOwnerType === 'third_party' && ['51', '52', '31', '32', '35', '36'].includes(currentChildIdStr)) {
+                    isEligibleFor66 = true;
+                }
+
                 let fetchedPersonName = null;
                 if (taskOwner && taskOwner.length > 0) {
                     try {
                         const { data: personData } = await supabase.from('persons').select('*').eq('id', String(taskOwner[0])).single();
                         if (personData) {
-                            if (personData.is_evaluation_required === true && !tasksToCreate.includes("66")) {
+                            // Hem kişinin değerlendirme ayarı açık olmalı, HEM DE o anki işlem (evrak) bu listelere uymalı
+                            if (personData.is_evaluation_required === true && isEligibleFor66 && !tasksToCreate.includes("66")) {
                                 tasksToCreate.push("66");
                             }
                             fetchedPersonName = personData.name || personData.company_name || null;
@@ -957,6 +1029,7 @@ export class DocumentReviewManager {
                     }
                 }
 
+                // 🔥 YENİ DÖNGÜ (Task oluşturma ve Transaction bağlama kısmı)
                 for (const tType of tasksToCreate) {
                     let taskDesc = notes || `Otomatik oluşturulan görev.`;
                     let taskStatus = 'awaiting_client_approval';
@@ -1006,24 +1079,34 @@ export class DocumentReviewManager {
                     const taskResult = await taskService.createTask(taskData);
                     
                     if (taskResult.success) {
-                        const createdTaskId = taskResult.id;
+                        // 🔥 ÇÖZÜM 1: undefined sorununu çözen ID okuması
+                        const createdTaskId = taskResult.data?.id || taskResult.id;
                         
-                        // 🔥 ÇÖZÜM: Transaction güncellenirken "details" yerine doğrudan "task_id" güncellenir
-                        await supabase.from('transactions').update({ task_id: String(createdTaskId) }).eq('id', childTransactionId);
+                        // 🔥 ÇÖZÜM 2: Sadece ana iş için Transaction oluşturur ve günceller (66 dışarıda bırakılır)
+                        if (String(tType) !== "66") {
+                            
+                            if (createdTaskId) {
+                                // Mevcut evrakın (Child Transaction) task_id sütununu gerçek uuid ile güncelliyoruz
+                                await supabase.from('transactions').update({ task_id: String(createdTaskId) }).eq('id', childTransactionId);
+                            }
 
-                        const triggeredTypeObj = this.allTransactionTypes.find(t => String(t.id) === String(tType));
-                        const triggeredTypeName = triggeredTypeObj ? (triggeredTypeObj.alias || triggeredTypeObj.name) : 'Otomatik İşlem';
-                        const targetHierarchy = triggeredTypeObj?.hierarchy || 'child'; 
+                            const triggeredTypeObj = this.allTransactionTypes.find(t => String(t.id) === String(tType));
+                            const triggeredTypeName = triggeredTypeObj ? (triggeredTypeObj.alias || triggeredTypeObj.name) : 'Otomatik İşlem';
+                            const targetHierarchy = triggeredTypeObj?.hierarchy || 'child'; 
 
-                        const triggeredTransactionData = {
-                            type: tType,
-                            description: `${triggeredTypeName} (Otomatik)`,
-                            transactionHierarchy: targetHierarchy,
-                            taskId: String(createdTaskId),
-                            timestamp: new Date().toISOString()
-                        };
-                        if (targetHierarchy === 'child') triggeredTransactionData.parentId = finalParentId;
-                        await this._addTransaction(this.matchedRecord.id, triggeredTransactionData);
+                            const triggeredTransactionData = {
+                                type: tType,
+                                description: `${triggeredTypeName} (Otomatik)`,
+                                transactionHierarchy: targetHierarchy,
+                                taskId: createdTaskId ? String(createdTaskId) : null,
+                                timestamp: new Date().toISOString()
+                            };
+                            
+                            if (targetHierarchy === 'child') triggeredTransactionData.parentId = finalParentId;
+                            
+                            // Görevin (Task) Transaction yansıması veritabanına yazılır
+                            await this._addTransaction(this.matchedRecord.id, triggeredTransactionData);
+                        }
                     }
                 }
             }
@@ -1112,34 +1195,39 @@ export class DocumentReviewManager {
         }
     }
 
+    // 🔥 DÜZELTİLDİ: SQL tablosu yerine doğrudan formattan geçmiş önbellek üzerinden arama
     async handleManualSearch(query) {
         const container = document.getElementById('manualSearchResults');
         if (!query || query.length < 3) { container.style.display = 'none'; return; }
         
-        const { data } = await supabase.from('ip_records').select('*')
-            .or(`title.ilike.%${query}%,brand_name.ilike.%${query}%,application_number.ilike.%${query}%`)
-            .limit(10);
+        const lowerQuery = query.toLowerCase();
+        
+        const filteredData = this.allRecords.filter(r => {
+            const title = (r.title || r.markName || r.brand_name || '').toLowerCase();
+            const appNo = String(r.applicationNumber || r.applicationNo || r.wipo_ir || r.aripo_ir || r.application_number || '').toLowerCase();
+            return title.includes(lowerQuery) || appNo.includes(lowerQuery);
+        }).slice(0, 15);
             
-        if (!data || data.length === 0) {
+        if (filteredData.length === 0) {
             container.innerHTML = '<div class="p-2 text-muted italic">Sonuç bulunamadı.</div>';
             container.style.display = 'block';
             return;
         }
 
-        container.innerHTML = data.map(r => {
+        container.innerHTML = filteredData.map(r => {
             const countryName = this.countryMap.get(r.country_code || r.country) || r.country_code || r.country || '-';
-            const detailText = `${r.application_number || r.wipo_ir || '-'} • ${r.origin || 'WIPO'} • ${countryName}`;
+            const detailText = `${r.applicationNumber || r.applicationNo || r.wipo_ir || '-'} • ${r.origin || 'WIPO'} • ${countryName}`;
             
             return `
                 <div class="search-result-item p-2 border-bottom" style="cursor:pointer" data-id="${r.id}">
-                    <div class="font-weight-bold text-primary" style="font-size:0.9rem;">${r.title || r.brand_name || '(İsimsiz)'}</div>
+                    <div class="font-weight-bold text-primary" style="font-size:0.9rem;">${r.title || r.markName || r.brand_name || '(İsimsiz)'}</div>
                     <div class="small text-muted" style="font-size:0.75rem;">${detailText}</div>
                 </div>`;
         }).join('');
             
         container.querySelectorAll('.search-result-item').forEach(el => {
             el.onclick = () => {
-                const selected = data.find(rec => rec.id === el.dataset.id);
+                const selected = filteredData.find(rec => rec.id === el.dataset.id);
                 if (selected) this.selectRecordWithHierarchy(selected);
                 container.style.display = 'none';
             };
