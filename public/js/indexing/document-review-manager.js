@@ -1280,8 +1280,15 @@ export class DocumentReviewManager {
         listEl.innerHTML = '';
         [parent, ...children].forEach(rec => {
             const isParent = rec.id === parent.id;
-            const recDetails = rec.details || rec;
+            const recDetails = rec.details || {};
+            
+            // 🔥 ÇÖZÜM 1: Undefined hatalarını önlemek için varsayılan (fallback) değerler eklendi
             const country = isParent ? 'Uluslararası' : (this.countryMap.get(rec.country_code || rec.country || recDetails.country) || rec.country_code || rec.country || recDetails.country || '-');
+            const originStr = rec.origin || recDetails.origin || '-';
+            const titleStr = rec.title || rec.brand_name || recDetails.title || '(İsimsiz)';
+            
+            // Hem wipo_ir hem aripo_ir alanlarını kontrol ediyoruz
+            const irStr = rec.wipo_ir || rec.aripo_ir || recDetails.wipoIR || recDetails.aripoIR || recDetails.internationalRegNumber || '-';
             
             const item = document.createElement('button');
             item.className = "list-group-item list-group-item-action d-flex justify-content-between align-items-center mb-2 border rounded shadow-sm";
@@ -1289,8 +1296,8 @@ export class DocumentReviewManager {
                 <div class="d-flex align-items-center">
                     <i class="fas ${isParent ? 'fa-globe-americas text-primary' : 'fa-flag text-danger'} fa-lg mr-3"></i>
                     <div>
-                        <div class="font-weight-bold">${rec.title || rec.brand_name || recDetails.title}</div>
-                        <div class="small text-muted">${rec.wipo_ir || recDetails.wipoIR || recDetails.internationalRegNumber || '-'} • ${rec.origin || recDetails.origin} • ${country}</div>
+                        <div class="font-weight-bold">${titleStr}</div>
+                        <div class="small text-muted">${irStr} • ${originStr} • ${country}</div>
                     </div>
                 </div>
                 <span class="badge ${isParent ? 'badge-primary' : 'badge-light border'} px-2 py-1">${isParent ? 'ANA KAYIT' : 'ULUSAL'}</span>
