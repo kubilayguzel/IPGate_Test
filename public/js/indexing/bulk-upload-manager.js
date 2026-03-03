@@ -989,7 +989,7 @@ export class BulkIndexingModule {
 
         fetchFiles(); 
 
-        this.unsubscribe = supabase.channel('unindexed_pdfs_changes')
+        this.unsubscribe = supabase.channel('incoming_documents_changes') // İsim temizlendi
             .on('postgres_changes', { 
                 event: '*', 
                 schema: 'public', 
