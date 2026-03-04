@@ -397,6 +397,21 @@ export class TaskSubmitHandler {
             else if (sip.client && sip.client.name) accAppName = sip.client.name;
         }
 
+        // 🔥 YENİ 1: Görev Sahibini (Müvekkil/Rakip) State Üzerinden Güvenle Bulma
+        let targetOwnerId = null;
+        if (state.selectedRelatedParties && state.selectedRelatedParties.length > 0) {
+            targetOwnerId = String(state.selectedRelatedParties[0].id);
+        } else if (state.selectedIpRecord) {
+            if (state.selectedIpRecord.client_id) {
+                targetOwnerId = String(state.selectedIpRecord.client_id);
+            } else if (state.selectedIpRecord.applicants && state.selectedIpRecord.applicants.length > 0) {
+                const firstApp = state.selectedIpRecord.applicants[0];
+                targetOwnerId = String(firstApp.id || firstApp.person_id || (firstApp.persons && firstApp.persons.id));
+            }
+        } else if (state.selectedApplicants && state.selectedApplicants.length > 0) {
+            targetOwnerId = String(state.selectedApplicants[0].id);
+        }
+
         const accrualTaskData = {
             task_type_id: "53", 
             title: `Tahakkuk Oluşturma: ${taskTitle}`,
@@ -405,15 +420,40 @@ export class TaskSubmitHandler {
             status: 'open',
             assigned_to: assignedUid,
             ip_record_id: state.selectedIpRecord ? state.selectedIpRecord.id : null,
+            task_owner_id: targetOwnerId, 
             details: {
                 assigned_to_email: assignedEmail,
                 iprecord_application_no: accAppNo,
                 iprecord_title: accTitle,
-                iprecord_applicant_name: accAppName
+                iprecord_applicant_name: accAppName,
+                parent_task_id: String(taskId) 
             }
         };
 
-        await taskService.addTask(accrualTaskData);
+        // 1. Görevi oluştur
+        const accResult = await taskService.addTask(accrualTaskData);
+        
+        // 🔥 ÇÖZÜM: details kolonunun veritabanı tarafından ezilmesini engellemek için, 
+        // görev oluştuktan hemen sonra Supabase'e doğrudan müdahale edip JSON'u güncelliyoruz.
+        if (accResult && accResult.success) {
+            const newAccTaskId = accResult.data?.id || accResult.id;
+            
+            if (newAccTaskId) {
+                // Veritabanının o saniye oluşturduğu güncel JSON'u çek
+                const { data: dbData } = await supabase.from('tasks').select('details').eq('id', newAccTaskId).single();
+                let mergedDetails = dbData?.details || {};
+                
+                // Silinmesini istemediğimiz verileri zorla içine yaz
+                mergedDetails.assigned_to_email = assignedEmail;
+                mergedDetails.iprecord_application_no = accAppNo;
+                mergedDetails.iprecord_title = accTitle;
+                mergedDetails.iprecord_applicant_name = accAppName;
+                mergedDetails.parent_task_id = String(taskId); // <- ASIL HEDEFİMİZ (İşin koptuğu yer)
+                
+                // Güvenli bir şekilde geri yükle
+                await supabase.from('tasks').update({ details: mergedDetails }).eq('id', newAccTaskId);
+            }
+        }
     }
 
     async _calculateTaskDates(taskData, taskType, ipRecord) {
