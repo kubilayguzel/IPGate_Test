@@ -2,6 +2,7 @@
 
 import { AccrualFormManager } from '../components/AccrualFormManager.js';
 import { TaskDetailManager } from '../components/TaskDetailManager.js';
+import { supabase } from '../../supabase-config.js';
 
 export class AccrualUIManager {
     constructor() {
@@ -236,37 +237,60 @@ export class AccrualUIManager {
         this.editFormManager.reset();
         this.editFormManager.setData(accrual);
         
-        // 🔥 YENİ KİMLİK ÇÖZÜMLEME MANTĞI (Details JSON İçinden)
+        // 🔥 LOGLU YAPI
+        console.log(`\n[DEBUG-DOC] --- BELGE ARAMA BAŞLADI ---`);
+        console.log(`[DEBUG-DOC] Tahakkuk Objyesi:`, accrual);
+
         if (epatsDocument) {
+            console.log(`[DEBUG-DOC] ✅ Belge zaten parametre olarak gelmiş, gösteriliyor.`);
             this.editFormManager.showEpatsDoc(epatsDocument);
         } else if (accrual.taskId && accrual.taskId !== 'null' && accrual.taskId !== 'undefined') {
             
-            // 1. Sadece details sütununu çekiyoruz
+            console.log(`[DEBUG-DOC] 1. Supabase'den tahakkuk görevi (ID: ${accrual.taskId}) çekiliyor...`);
+            
             supabase.from('tasks').select('details').eq('id', accrual.taskId).single()
             .then(({data, error}) => {
                 if (error) {
-                    console.error("Tahakkuk işi çekilirken hata:", error.message);
+                    console.error("[DEBUG-DOC] ❌ Tahakkuk işi çekilirken hata:", error.message);
                     return;
                 }
                 
+                console.log(`[DEBUG-DOC] 2. Tahakkuk işi bulundu. Details:`, data?.details);
+
                 if (data && data.details) {
-                    // 2. Details'in içinden bizim eklediğimiz parent_task_id'yi bul
-                    const parentTaskId = data.details.parent_task_id || data.details.related_task_id || data.details.relatedTaskId;
+                    const targetTaskId = data.details.parent_task_id || accrual.taskId;
+                    console.log(`[DEBUG-DOC] 3. Aranacak Asıl Görev ID'si (Target Task ID): ${targetTaskId}`);
                     
-                    if (parentTaskId) {
-                        // 3. Asıl İşi (Örn: Marka Tescil Belgesi İşi) çek ve EPATS belgesini bastır
-                        supabase.from('tasks').select('*').eq('id', parentTaskId).single()
-                        .then(({data: parentData}) => {
-                            if (parentData) {
-                                this.editFormManager.showEpatsDoc(parentData);
-                            }
-                        });
-                    } else {
-                        // Fallback: Belki belge doğrudan bu tahakkuk işine kopyalanmıştır
-                        this.editFormManager.showEpatsDoc(data);
-                    }
+                    console.log(`[DEBUG-DOC] 4. task_documents tablosunda aranıyor...`);
+                    supabase.from('task_documents')
+                        .select('document_name, document_url, document_type')
+                        .eq('task_id', targetTaskId)
+                        .order('uploaded_at', { ascending: false })
+                    .then(({data: docData, error: docError}) => {
+                        if (docError) {
+                            console.error("[DEBUG-DOC] ❌ task_documents sorgu hatası:", docError.message);
+                            return;
+                        }
+
+                        console.log(`[DEBUG-DOC] 5. task_documents sonucu:`, docData);
+
+                        if (docData && docData.length > 0) {
+                            const targetDoc = docData.find(d => d.document_type === 'epats_document') || docData[0];
+                            console.log(`[DEBUG-DOC] ✅ Ekrana Basılacak Belge Seçildi:`, targetDoc);
+                            
+                            this.editFormManager.showEpatsDoc({
+                                url: targetDoc.document_url,
+                                name: targetDoc.document_name
+                            });
+                        } else {
+                            console.warn(`[DEBUG-DOC] ⚠️ HATA: task_documents tablosunda 'task_id=${targetTaskId}' olan hiç kayıt bulunamadı!`);
+                            this.editFormManager.showEpatsDoc(null);
+                        }
+                    });
                 }
-            }).catch(err => console.error("Belge zinciri çözümlenirken hata:", err));
+            }).catch(err => console.error("[DEBUG-DOC] ❌ Yakalanamayan hata:", err));
+        } else {
+             console.log(`[DEBUG-DOC] ⚠️ Tahakkuk kaydında taskId yok veya geçersiz!`);
         }
 
         this.editModal.classList.add('show');
