@@ -862,38 +862,58 @@ document.addEventListener('DOMContentLoaded', async () => {
             const task = this.allTasks.find(t => t.id === taskId);
             if (!task) return;
 
-            document.getElementById('targetTaskIdForCompletion').value = taskId;
+            const taskIdInput = document.getElementById('targetTaskIdForCompletion');
+            if(taskIdInput) taskIdInput.value = taskId;
 
             if(this.completeTaskFormManager) {
                 this.completeTaskFormManager.reset();
                 
-                const getEpats = (t) => {
-                    if (!t) return null;
-                    if (t.documents && Array.isArray(t.documents)) return t.documents.find(d => d.type === 'epats_document');
-                    return t.epatsDocument || null;
-                };
-
-                let epatsDoc = getEpats(task);
-                const parentId = task.transactionId || null;
-                
-                if (!epatsDoc && parentId) {
-                    try {
-                        const { data: tx } = await supabase.from('transactions').select('task_id').eq('id', parentId).maybeSingle();
-                        if (tx && tx.task_id) {
-                            const { data: parentSnap } = await supabase.from('tasks').select('*').eq('id', String(tx.task_id)).maybeSingle();
-                            if (parentSnap) epatsDoc = getEpats(parentSnap);
-                        }
-                    } catch (e) { console.warn('Parent task fetch error:', e); }
+                // 🔥 ÇÖZÜM: Yeni mimariye uygun Parent Task ID bulma
+                let detailsObj = {};
+                if (task.details) {
+                    if (typeof task.details === 'string') {
+                        try { detailsObj = JSON.parse(task.details); } catch(e) {}
+                    } else {
+                        detailsObj = task.details;
+                    }
                 }
                 
-                this.completeTaskFormManager.showEpatsDoc(epatsDoc);
+                // Asıl İşin (Parent) ID'sini bul
+                const parentId = task.related_task_id || task.relatedTaskId || detailsObj.parent_task_id;
+                
+                // Başlangıçta evrak alanını temizle
+                this.completeTaskFormManager.showEpatsDoc(null);
 
-                const targetAccrualId = task.targetAccrualId || task.target_accrual_id; // Yeni jsonb olmayan yapıya göre
+                // Eğer asıl işin ID'sini bulduysak, task_documents tablosuna gidip PDF'i çekiyoruz
+                if (parentId) {
+                    try {
+                        const { data: docData } = await supabase
+                            .from('task_documents')
+                            .select('document_name, document_url, document_type')
+                            .eq('task_id', String(parentId))
+                            .order('uploaded_at', { ascending: false });
+
+                        if (docData && docData.length > 0) {
+                            // Öncelik EPATS belgesi, yoksa ilk belge
+                            const targetDoc = docData.find(d => d.document_type === 'epats_document') || docData[0];
+                            
+                            // Bulunan belgeyi forma gönderiyoruz
+                            this.completeTaskFormManager.showEpatsDoc({
+                                url: targetDoc.document_url,
+                                name: targetDoc.document_name
+                            });
+                        }
+                    } catch (e) { 
+                        console.warn('Belge çekilirken hata oluştu:', e); 
+                    }
+                }
+
+                // --- Mevcut Tahakkuk Verilerini Forma Doldurma Kısmı (Aynı Kalıyor) ---
+                const targetAccrualId = task.targetAccrualId || task.target_accrual_id || detailsObj.target_accrual_id; 
                 if (targetAccrualId) {
                     try {
                         const { data: accSnap } = await supabase.from('accruals').select('*').eq('id', String(targetAccrualId)).single();
                         if (accSnap) {
-                            // Backend'den (snake) gelen veriyi UI'a (camel) mapleyerek Set et
                             const mappedAcc = {
                                 ...accSnap,
                                 totalAmount: accSnap.total_amount,
@@ -912,7 +932,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            document.getElementById('completeAccrualTaskModal').classList.add('show');
+            const modal = document.getElementById('completeAccrualTaskModal');
+            if(modal) modal.classList.add('show');
         }
 
         async handleCompleteAccrualSubmission() {
