@@ -189,36 +189,42 @@ function setupUploadEvents() {
 
       const finalRecords = [];
       const finalGoods = [];
+      
+      // 🔥 YENİ DB: Ana bülten ID'sini önceden belirliyoruz ki alt tablolara (records) bağlayabilelim
+      const bulletinDbId = `bulletin_main_${bulletinNo}`;
 
       recordsMap.forEach((r) => {
           if (r.mark_name) {
               const safeAppNo = r.application_no.replace(/\//g, '_').replace(/-/g, '_');
               const imgMatch = imageFiles.find(img => img.name.includes(safeAppNo));
-              let image_path = null;
+              let image_url = null; // Kolon adı image_url oldu
               if (imgMatch) {
-                  image_path = `bulletins/trademark_${bulletinNo}_images/${imgMatch.name.split('/').pop()}`;
+                  image_url = `bulletins/trademark_${bulletinNo}_images/${imgMatch.name.split('/').pop()}`;
               }
 
               const deterministicId = `bull_${bulletinNo}_app_${safeAppNo}`;
 
+              // 🔥 YENİ DB: Kolon isimleri ve tipleri şemaya göre (ARRAY, JSONB) düzeltildi
               finalRecords.push({
                   id: deterministicId, 
-                  application_no: r.application_no,
-                  bulletin_no: r.bulletin_no,
-                  mark_name: r.mark_name,
+                  bulletin_id: bulletinDbId, // bulletin_no yerine foreign key
+                  application_number: r.application_no, // application_no -> application_number
+                  brand_name: r.mark_name, // mark_name -> brand_name
                   application_date: r.application_date,
-                  nice_classes: r.nice_classes,
-                  holders: r.holders.join(', '),
-                  image_path: image_path,
+                  // String olan sınıfları DB'deki text[] (ARRAY) formatına çeviriyoruz
+                  nice_classes: r.nice_classes ? r.nice_classes.split(/[,\s]+/).filter(Boolean) : [], 
+                  // Sahipleri virgüllü string yerine doğrudan Dizi olarak veriyoruz (DB JSONB bekliyor)
+                  holders: r.holders, 
+                  image_url: image_url, // image_path -> image_url
+                  source: 'turkpatent',
                   created_at: new Date().toISOString()
               });
 
               r.goodsObjects.forEach((g, idx) => {
                   finalGoods.push({
                       id: `${deterministicId}_class_${g.classNo}_${idx}`, 
-                      application_no: r.application_no,
-                      bulletin_no: r.bulletin_no,
-                      class_no: g.classNo,
+                      bulletin_record_id: deterministicId, // İlişkisel bağ: application_no yerine record ID'si
+                      class_number: parseInt(g.classNo, 10) || null, // DB Integer bekliyor
                       class_text: g.classText,
                       created_at: new Date().toISOString()
                   });
@@ -226,13 +232,13 @@ function setupUploadEvents() {
           }
       });
 
-      const bulletinDbId = `bulletin_main_${bulletinNo}`;
-      const { error: bulletinError } = await supabase.from('trademark_bulletins').upsert({ 
+      // Ana bülten kaydını oluşturma (Aynı kalıyor)
+        const { error: bulletinError } = await supabase.from('trademark_bulletins').upsert({ 
           id: bulletinDbId, 
           bulletin_no: bulletinNo, 
           bulletin_date: formatDateForSupabase(bulletinDate),
           created_at: new Date().toISOString()
-      }, { onConflict: 'bulletin_no' }); // 🔥 Hata çıkmasını önleyen güvenlik katmanı
+      }, { onConflict: 'id' });
       
       if (bulletinError) {
           throw new Error("Ana bülten kaydı oluşturulamadı: " + bulletinError.message);
