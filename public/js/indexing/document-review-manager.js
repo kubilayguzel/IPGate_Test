@@ -104,14 +104,10 @@ export class DocumentReviewManager {
         if (window.EvrekaDatePicker) window.EvrekaDatePicker.refresh();
         await this.loadCountriesOnly();
         await this.loadTransactionTypes();
-        
-        // 🔥 YENİ EKLENEN SATIR: Kayıtları arama için önbelleğe alıyoruz
         await this.loadAllRecords(); 
-        
         await this.loadData();
     }
 
-    // 🔥 YENİ EKLENEN FONKSİYON: Portföyü service üzerinden güvenle çeker
     async loadAllRecords() {
         try {
             const recordsResult = await ipRecordsService.getRecords();
@@ -132,8 +128,6 @@ export class DocumentReviewManager {
 
     async loadTransactionTypes() {
         try {
-            // 🔥 ÇÖZÜM: Eski servisin verileri kırpmasını (index_file sütununu silmesini) 
-            // önlemek için işlem tiplerini doğrudan Supabase'den ham haliyle çekiyoruz.
             const { data: txTypes, error } = await supabase.from('transaction_types').select('*');
             if (error) throw error;
             this.allTransactionTypes = txTypes || [];
@@ -283,12 +277,9 @@ export class DocumentReviewManager {
         }
 
         const typeObj = this.allTransactionTypes.find(t => String(t.id) === String(typeId));
-        
-        // 🔥 ÇÖZÜM: Supabase'den gelen 0, null veya undefined durumlarını kontrol ediyoruz
         let duePeriod = typeObj ? (typeObj.due_period !== undefined ? typeObj.due_period : typeObj.duePeriod) : 0;
         duePeriod = Number(duePeriod) || 0;
 
-        // Eğer süre 0 ise hesaplama yapma!
         if (!typeObj || duePeriod === 0) {
             displayInput.value = "Son Süre Hesaplanmaz";
             return;
@@ -411,7 +402,7 @@ export class DocumentReviewManager {
 
                 const manualSearchInput = document.getElementById('manualSearchInput');
                 if (manualSearchInput) {
-                    manualSearchInput.value = this.matchedRecord.applicationNumber || this.matchedRecord.applicationNo || '';
+                    manualSearchInput.value = this.matchedRecord.applicationNumber || this.matchedRecord.application_number || '';
                 }
 
                 let namesList = [];
@@ -427,7 +418,7 @@ export class DocumentReviewManager {
                             try {
                                 const { data: pData } = await supabase.from('persons').select('*').eq('id', String(app.id)).single();
                                 if (pData) namesList.push(pData.name || pData.company_name || pData.details?.companyName || '-');
-                            } catch (e) { console.error("Kişi bilgisi sorgulanırken hata:", e); }
+                            } catch (e) {}
                         }
                     }
                 }
@@ -540,14 +531,12 @@ export class DocumentReviewManager {
         if (!selectedParentTxId) return;
         
         const selectedParentTx = this.currentTransactions.find(t => String(t.id) === String(selectedParentTxId));
-        // 🔥 ÇÖZÜM: Yeni şema (transaction_type_id) ve eski şema (type) desteği
         const parentTypeId = selectedParentTx?.transaction_type_id || selectedParentTx?.type;
         
         const parentTypeObj = this.allTransactionTypes.find(t => String(t.id) === String(parentTypeId));
         
         if (!parentTypeObj) return;
         
-        // Supabase snake_case (index_file) formatındaki listeleri okuyoruz
         let allowedChildIds = [];
         if (Array.isArray(parentTypeObj.index_file) && parentTypeObj.index_file.length > 0) {
             allowedChildIds = parentTypeObj.index_file.map(String);
@@ -570,10 +559,6 @@ export class DocumentReviewManager {
         
         if (allowedChildTypes.length > 0) {
             childSelect.disabled = false;
-        }
-        
-        if (this.analysisResult && this.analysisResult.detectedType && typeof this.autoSelectChildType === 'function') {
-            this.autoSelectChildType(childSelect);
         }
     }
 
@@ -661,7 +646,6 @@ export class DocumentReviewManager {
         }
     }
 
-    // 🔥 ÇÖZÜM: Veritabanı tablosunun SADECE var olan kolonlarına kayıt yapılır.
     async _addTransaction(recordId, txData) {
         const txId = generateUUID();
         const payload = {
@@ -710,34 +694,7 @@ export class DocumentReviewManager {
             return;
         }
 
-        try {
-            const childSelect = document.getElementById('detectedType');
-            const selectedText = childSelect?.options?.[childSelect.selectedIndex]?.text || '';
-            const typeText = String(selectedText).toLowerCase();
-            const parentTx = this.currentTransactions?.find(t => String(t.id) === String(parentTxId));
-            const parentTypeId = String(parentTx?.transaction_type_id || parentTx?.type || '');
-
-            const isRegistryIndexing =
-                String(childTypeId) === '45' ||
-                typeText.includes('tescil belgesi') ||
-                (String(childTypeId) === '40' && (parentTypeId === '6' || parentTypeId === '17'));
-
-            if (isRegistryIndexing) {
-                const regNoEl = document.getElementById('registry-registration-no');
-                const regDateEl = document.getElementById('registry-registration-date');
-                const regNo = String(regNoEl?.value || '').trim();
-                const regDate = String(regDateEl?.value || '').trim();
-
-                if (!regNo || !regDate) {
-                    showNotification('Tescil Belgesi için Tescil No ve Tarih zorunludur.', 'error');
-                    if (!regNo && regNoEl) regNoEl.focus();
-                    else if (!regDate && regDateEl) regDateEl.focus();
-                    return;
-                }
-            }
-        } catch (e) {}
-
-        // 🔥 ÇÖZÜM: IP Records güncellenirken native ve json objeleri ayrıldı
+        // 🔥 ÇÖZÜM: IP Records güncellenirken "details" json'ı yerine sadece NATIVE SÜTUNLARA kayıt yapılır
         const regSection = document.getElementById('registry-editor-section');
         if (regSection && regSection.style.display !== 'none' && this.matchedRecord) {
             try {
@@ -745,25 +702,18 @@ export class DocumentReviewManager {
                 const regDateVal = document.getElementById('registry-registration-date')?.value;
                 const statusVal = document.getElementById('registry-status')?.value || document.getElementById('status')?.value;
 
-                const jsonUpdates = {};
                 const nativeUpdates = {};
 
-                if (regNoVal) jsonUpdates.registrationNumber = regNoVal;
-                if (regDateVal) jsonUpdates.registrationDate = regDateVal;
+                if (regNoVal) nativeUpdates.registration_number = regNoVal;
+                if (regDateVal) nativeUpdates.registration_date = regDateVal;
                 if (statusVal) nativeUpdates.status = statusVal;
 
-                const finalPayload = { ...nativeUpdates };
-                if (Object.keys(jsonUpdates).length > 0) {
-                    finalPayload.details = { ...(this.matchedRecord.details || {}), ...jsonUpdates };
-                }
-
-                if (Object.keys(finalPayload).length > 0) {
-                    await supabase.from('ip_records').update(finalPayload).eq('id', this.matchedRecord.id);
+                if (Object.keys(nativeUpdates).length > 0) {
+                    await supabase.from('ip_records').update(nativeUpdates).eq('id', this.matchedRecord.id);
                     showNotification('Kayıt bilgileri güncellendi.', 'success');
                 }
             } catch (err) {
                 console.error("Kayıt güncelleme hatası:", err);
-                showNotification('Veriler güncellenirken hata oluştu ancak indeksleme devam ediyor.', 'warning');
             }
         }
 
@@ -811,7 +761,6 @@ export class DocumentReviewManager {
                     newParentDesc = 'Yayına İtirazın Yeniden İncelenmesi (Otomatik)';
                 }
 
-                // 🔥 ÇÖZÜM: Hem İtiraz Dilekçesi hem de (varsa) EPATS evrakı transaction dizisine ekleniyor
                 const parentDocsToSave = [
                     {
                         name: oppositionFileName,
@@ -833,7 +782,7 @@ export class DocumentReviewManager {
                     description: newParentDesc,
                     transactionHierarchy: 'parent',
                     oppositionOwner: ownerInput,
-                    documents: parentDocsToSave, // 🔥 İki evrakı da barındıran dizi eklendi
+                    documents: parentDocsToSave,
                     timestamp: new Date().toISOString()
                 };
                 
@@ -843,15 +792,11 @@ export class DocumentReviewManager {
 
             const finalParentId = newParentTxId || parentTxId;
 
-            // 🔥 GÜNCELLENMİŞ TAŞIMA KODU (Yol Parçalama Hatası Düzeltildi)
             let finalPdfUrl = this.pdfData.fileUrl || this.pdfData.download_url;
             let finalPdfPath = this.pdfData.file_path || (this.pdfData.details && this.pdfData.details.file_path) || finalPdfUrl;
 
-            // Dosya zaten indexed klasöründe değilse taşı
             if (finalPdfPath && !finalPdfPath.includes('incoming_documents/indexed/')) {
                 let sourcePath = finalPdfPath;
-                
-                // Eğer path bir URL formatındaysa, sadece bucket'tan (documents) sonrasını al
                 if (sourcePath.startsWith('http')) {
                     const splitKeyword = `/object/public/${STORAGE_BUCKET}/`;
                     if (sourcePath.includes(splitKeyword)) {
@@ -868,10 +813,6 @@ export class DocumentReviewManager {
                     finalPdfPath = targetPath;
                     const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(targetPath);
                     finalPdfUrl = urlData.publicUrl;
-                    console.log("✅ Dosya başarıyla taşındı:", targetPath);
-                } else {
-                    console.error("⚠️ Dosya taşınamadı (Storage Hatası):", moveError.message);
-                    // RLS yetkisi eksikse veya dosya bulunamazsa burada hata basar
                 }
             }
 
@@ -893,7 +834,6 @@ export class DocumentReviewManager {
 
             let shouldTriggerTask = false;
             const recordType = (this.matchedRecord.recordOwnerType === 'self') ? 'Portföy' : '3. Taraf';
-            
             const pTypeIdStr = String(parentTx?.transaction_type_id || parentTx?.type || ''); 
             const childTypeIdStr = String(childTypeId);
             
@@ -933,7 +873,6 @@ export class DocumentReviewManager {
                     taskDueDate.setDate(taskDueDate.getDate() - 1);
                 }
 
-                let assignedUser = { uid: SELCAN_UID, email: SELCAN_EMAIL };
                 let relatedPartyData = null;
                 let taskOwner = []; 
 
@@ -971,21 +910,15 @@ export class DocumentReviewManager {
                 let tasksToCreate = [];
                 if (childTypeObj.taskTriggered || childTypeObj.task_triggered) tasksToCreate.push(String(childTypeObj.taskTriggered || childTypeObj.task_triggered));
 
-                // 🔥 ÇÖZÜM: 66 Numaralı (Müvekkil Değerlendirme) İşleminin Sıkı Kuralları
                 const currentChildIdStr = String(childTypeId);
-                const recOwnerType = this.matchedRecord.recordOwnerType; // 'self' veya 'third_party'
+                const recOwnerType = this.matchedRecord.recordOwnerType;
                 let isEligibleFor66 = false;
 
-                // 1. Koşulsuz durumlar (Dosya tipine bakılmaksızın)
                 if (['30', '31'].includes(currentChildIdStr)) {
                     isEligibleFor66 = true;
-                } 
-                // 2. Portföy (self) için olanlar
-                else if (recOwnerType === 'self' && ['32', '33', '34', '35', '50', '51'].includes(currentChildIdStr)) {
+                } else if (recOwnerType === 'self' && ['32', '33', '34', '35', '50', '51'].includes(currentChildIdStr)) {
                     isEligibleFor66 = true;
-                } 
-                // 3. Bülten/Karşı Taraf (third_party) için olanlar
-                else if (recOwnerType === 'third_party' && ['51', '52', '31', '32', '35', '36'].includes(currentChildIdStr)) {
+                } else if (recOwnerType === 'third_party' && ['51', '52', '31', '32', '35', '36'].includes(currentChildIdStr)) {
                     isEligibleFor66 = true;
                 }
 
@@ -994,7 +927,6 @@ export class DocumentReviewManager {
                     try {
                         const { data: personData } = await supabase.from('persons').select('*').eq('id', String(taskOwner[0])).single();
                         if (personData) {
-                            // Hem kişinin değerlendirme ayarı açık olmalı, HEM DE o anki işlem (evrak) bu listelere uymalı
                             if (personData.is_evaluation_required === true && isEligibleFor66 && !tasksToCreate.includes("66")) {
                                 tasksToCreate.push("66");
                             }
@@ -1003,8 +935,8 @@ export class DocumentReviewManager {
                     } catch (e) {}
                 }
 
-                let ipAppNo = this.matchedRecord.applicationNumber || this.matchedRecord.applicationNo || "-";
-                let ipTitle = this.matchedRecord.title || this.matchedRecord.markName || "-";
+                let ipAppNo = this.matchedRecord.applicationNumber || this.matchedRecord.application_number || "-";
+                let ipTitle = this.matchedRecord.title || this.matchedRecord.mark_name || "-";
                 let ipAppName = "-";
 
                 const isSelfPortfolio = (this.matchedRecord.recordOwnerType === 'self');
@@ -1015,7 +947,7 @@ export class DocumentReviewManager {
                         if (relatedPartyData) relatedPartyData.name = fetchedPersonName;
                     }
                     else if (relatedPartyData && relatedPartyData.name) ipAppName = relatedPartyData.name;
-                    else if (parentTx && (parentTx.oppositionOwner || parentTx.opposition_owner)) ipAppName = (parentTx.oppositionOwner || parentTx.opposition_owner);
+                    else if (parentTx && (parentTx.opposition_owner || parentTx.oppositionOwner)) ipAppName = (parentTx.opposition_owner || parentTx.oppositionOwner);
                     else if (this.matchedRecord.client && this.matchedRecord.client.name) ipAppName = this.matchedRecord.client.name;
                     else ipAppName = "Müvekkil (Belirtilmemiş)";
                 } else {
@@ -1029,7 +961,6 @@ export class DocumentReviewManager {
                     }
                 }
 
-                // 🔥 YENİ DÖNGÜ (Task oluşturma ve Transaction bağlama kısmı)
                 for (const tType of tasksToCreate) {
                     let taskDesc = notes || `Otomatik oluşturulan görev.`;
                     let taskStatus = 'awaiting_client_approval';
@@ -1038,7 +969,6 @@ export class DocumentReviewManager {
                     if (String(tType) === "66") {
                         taskDesc = "Müvekkil değerlendirme ayarı açık olduğu için ek olarak tetiklendi.";
                         taskStatus = 'open'; 
-                        
                         try {
                             const { data: assignmentRule } = await supabase.from('task_assignments').select('assignee_ids').eq('id', '66').single();
                             if (assignmentRule && assignmentRule.assignee_ids && assignmentRule.assignee_ids.length > 0) {
@@ -1079,14 +1009,10 @@ export class DocumentReviewManager {
                     const taskResult = await taskService.createTask(taskData);
                     
                     if (taskResult.success) {
-                        // 🔥 ÇÖZÜM 1: undefined sorununu çözen ID okuması
                         const createdTaskId = taskResult.data?.id || taskResult.id;
                         
-                        // 🔥 ÇÖZÜM 2: Sadece ana iş için Transaction oluşturur ve günceller (66 dışarıda bırakılır)
                         if (String(tType) !== "66") {
-                            
                             if (createdTaskId) {
-                                // Mevcut evrakın (Child Transaction) task_id sütununu gerçek uuid ile güncelliyoruz
                                 await supabase.from('transactions').update({ task_id: String(createdTaskId) }).eq('id', childTransactionId);
                             }
 
@@ -1101,10 +1027,8 @@ export class DocumentReviewManager {
                                 taskId: createdTaskId ? String(createdTaskId) : null,
                                 timestamp: new Date().toISOString()
                             };
-                            
                             if (targetHierarchy === 'child') triggeredTransactionData.parentId = finalParentId;
                             
-                            // Görevin (Task) Transaction yansıması veritabanına yazılır
                             await this._addTransaction(this.matchedRecord.id, triggeredTransactionData);
                         }
                     }
@@ -1113,7 +1037,6 @@ export class DocumentReviewManager {
 
             if (finalParentId && childTypeId) {
                 try {
-                    // 🔥 ÇÖZÜM: Request Result, olmayan details tablosuna değil işlemin "note" alanına kaydedilir
                     const { data: pTx } = await supabase.from('transactions').select('note').eq('id', finalParentId).single();
                     const existingNote = pTx?.note || '';
                     const newNote = existingNote ? `${existingNote}\n[Sonuç İşlemi: ${childTypeId}]` : `[Sonuç İşlemi: ${childTypeId}]`;
@@ -1195,7 +1118,6 @@ export class DocumentReviewManager {
         }
     }
 
-    // 🔥 DÜZELTİLDİ: SQL tablosu yerine doğrudan formattan geçmiş önbellek üzerinden arama
     async handleManualSearch(query) {
         const container = document.getElementById('manualSearchResults');
         if (!query || query.length < 3) { container.style.display = 'none'; return; }
@@ -1204,7 +1126,7 @@ export class DocumentReviewManager {
         
         const filteredData = this.allRecords.filter(r => {
             const title = (r.title || r.markName || r.brand_name || '').toLowerCase();
-            const appNo = String(r.applicationNumber || r.applicationNo || r.wipo_ir || r.aripo_ir || r.application_number || '').toLowerCase();
+            const appNo = String(r.applicationNumber || r.application_number || r.wipo_ir || r.aripo_ir || '').toLowerCase();
             return title.includes(lowerQuery) || appNo.includes(lowerQuery);
         }).slice(0, 15);
             
@@ -1216,7 +1138,7 @@ export class DocumentReviewManager {
 
         container.innerHTML = filteredData.map(r => {
             const countryName = this.countryMap.get(r.country_code || r.country) || r.country_code || r.country || '-';
-            const detailText = `${r.applicationNumber || r.applicationNo || r.wipo_ir || '-'} • ${r.origin || 'WIPO'} • ${countryName}`;
+            const detailText = `${r.applicationNumber || r.application_number || r.wipo_ir || '-'} • ${r.origin || 'WIPO'} • ${countryName}`;
             
             return `
                 <div class="search-result-item p-2 border-bottom" style="cursor:pointer" data-id="${r.id}">
@@ -1235,6 +1157,7 @@ export class DocumentReviewManager {
         container.style.display = 'block';
     }
 
+    // 🔥 ÇÖZÜM: WIPO alt kayıtlarını (children) ararken eski details objesi yerine native sütunlara bakar
     async selectRecordWithHierarchy(record) {
         if (!record) return;
 
@@ -1248,16 +1171,18 @@ export class DocumentReviewManager {
             
             try {
                 const parentId = record.id;
-                const parentIR = String(record.internationalRegNumber || record.wipo_ir || '').replace(/\D/g, '');
+                const parentIR = String(record.internationalRegNumber || record.wipo_ir || record.aripo_ir || '').replace(/\D/g, '');
                 
                 const { data: childrenData } = await supabase.from('ip_records')
-                                        .select('*')
+                                        .select(`
+                                            *,
+                                            details:ip_record_trademark_details(brand_name)
+                                        `)
                                         .eq('transaction_hierarchy', 'child');
 
                 const children = (childrenData || []).filter(child => {
-                    const cDetails = child.details || {};
-                    const childIR = String(child.wipo_ir || cDetails.wipoIR || cDetails.internationalRegNumber || '').replace(/\D/g, '');
-                    return (child.parent_id === parentId || cDetails.parentId === parentId) || (parentIR !== "" && childIR === parentIR);
+                    const childIR = String(child.wipo_ir || child.aripo_ir || '').replace(/\D/g, '');
+                    return (child.parent_id === parentId) || (parentIR !== "" && childIR === parentIR);
                 });
 
                 if (window.SimpleLoadingController) window.SimpleLoadingController.hide();
@@ -1280,15 +1205,13 @@ export class DocumentReviewManager {
         listEl.innerHTML = '';
         [parent, ...children].forEach(rec => {
             const isParent = rec.id === parent.id;
-            const recDetails = rec.details || {};
             
-            // 🔥 ÇÖZÜM 1: Undefined hatalarını önlemek için varsayılan (fallback) değerler eklendi
-            const country = isParent ? 'Uluslararası' : (this.countryMap.get(rec.country_code || rec.country || recDetails.country) || rec.country_code || rec.country || recDetails.country || '-');
-            const originStr = rec.origin || recDetails.origin || '-';
-            const titleStr = rec.title || rec.brand_name || recDetails.title || '(İsimsiz)';
+            const country = isParent ? 'Uluslararası' : (this.countryMap.get(rec.country_code) || rec.country_code || '-');
+            const originStr = rec.origin || '-';
             
-            // Hem wipo_ir hem aripo_ir alanlarını kontrol ediyoruz
-            const irStr = rec.wipo_ir || rec.aripo_ir || recDetails.wipoIR || recDetails.aripoIR || recDetails.internationalRegNumber || '-';
+            // Marka adı join edilmiş tablodan (details) gelebilir veya mevcut recordda olabilir
+            const titleStr = rec.brand_name || rec.title || (rec.details && rec.details.brand_name) || '(İsimsiz)';
+            const irStr = rec.wipo_ir || rec.aripo_ir || '-';
             
             const item = document.createElement('button');
             item.className = "list-group-item list-group-item-action d-flex justify-content-between align-items-center mb-2 border rounded shadow-sm";
