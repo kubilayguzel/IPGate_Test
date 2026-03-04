@@ -67,9 +67,11 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
         tp_queue_index: 0,
         tp_app_no: null,
 
-        // ✅ EKLE: UI’dan gelen url’yi sakla (yoksa fallback)
+      // ✅ EKLE: UI’dan gelen url’yi sakla (yoksa fallback)
         tp_upload_url: request.uploadUrl || fallbackUrl,
+        tp_token: request.token // 🔥 EKLENEN SATIR: Supabase token'ı
       },
+      
       () => {
         chrome.tabs.create(
           { url: "https://epats.turkpatent.gov.tr/run/TP/EDEVLET/giris" },
