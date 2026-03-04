@@ -16,7 +16,6 @@ serve(async (req: Request) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // 🔥 GÜNCELLEME 1: transactionId eklendi
     const { recordId, childTypeId, transactionId, tebligTarihi, sonItirazTarihi, pdfId } = await req.json();
 
     if (!recordId) throw new Error("recordId eksik!");
@@ -35,16 +34,24 @@ serve(async (req: Request) => {
 
     const ipType = (record.ip_type || 'trademark').toLowerCase();
     
-    const brandName = (record.details && record.details.length > 0) ? record.details[0].brand_name : record.title || '-';
+    // 🔥 ÇÖZÜM 1: Marka Adı (Subject'teki "-" sorunu)
+    let brandName = '-';
+    if (record.details && record.details.length > 0 && record.details[0].brand_name) {
+        brandName = record.details[0].brand_name;
+    } else if (record.title) {
+        brandName = record.title;
+    }
+
     const brandImageUrl = (record.details && record.details.length > 0 && record.details[0].brand_image_url) 
-                          ? record.details[0].brand_image_url 
-                          : 'https://via.placeholder.com/150?text=Gorsel+Yok';
+                          ? record.details[0].brand_image_url : 'https://via.placeholder.com/150?text=Gorsel+Yok';
     
+    // 🔥 ÇÖZÜM 4: Müvekkil İz Sürme Mantığı
     let clientName = 'Sayın İlgili';
     let fallbackEmail = null;
     let ownerIds: string[] = [];
 
-    if (record.applicants && record.applicants.length > 0) {
+    // SENARYO A: Kendi Markamız (Self) -> Başvuru sahiplerini al
+    if (record.record_owner_type === 'self' && record.applicants && record.applicants.length > 0) {
         const firstApp = record.applicants[0].persons;
         if (firstApp) {
             clientName = firstApp.name || clientName;
@@ -53,6 +60,37 @@ serve(async (req: Request) => {
         record.applicants.forEach((app: any) => {
             if (app.persons && app.persons.id) ownerIds.push(app.persons.id);
         });
+    } 
+    // SENARYO B: Rakip Marka (Third Party) -> Transaction üzerinden Task Owner'a (Müvekkile) ulaş
+    else if (transactionId) {
+        const { data: txData } = await supabaseAdmin.from('transactions').select('task_id, parent_id').eq('id', transactionId).single();
+        let targetTaskId = txData?.task_id;
+        
+        if (!targetTaskId && txData?.parent_id) {
+            const { data: pTx } = await supabaseAdmin.from('transactions').select('task_id').eq('id', txData.parent_id).single();
+            targetTaskId = pTx?.task_id;
+        }
+
+        if (targetTaskId) {
+            const { data: taskData } = await supabaseAdmin.from('tasks').select('task_owner_id, details').eq('id', targetTaskId).single();
+            if (taskData?.task_owner_id) {
+                const { data: cData } = await supabaseAdmin.from('persons').select('id, name, email').eq('id', taskData.task_owner_id).single();
+                if (cData) {
+                    clientName = cData.name || clientName;
+                    fallbackEmail = cData.email;
+                    ownerIds.push(cData.id);
+                }
+            } else if (taskData?.details?.related_party_name) {
+                clientName = taskData.details.related_party_name;
+            }
+        }
+    }
+
+    // İşlem Türü İsmini Bul
+    let taskTypeName = String(childTypeId);
+    const { data: ttData } = await supabaseAdmin.from('transaction_types').select('name, alias').eq('id', childTypeId).maybeSingle();
+    if (ttData) {
+        taskTypeName = ttData.alias || ttData.name || taskTypeName;
     }
 
     let targetTemplateId = `tmpl_${childTypeId}_document`;
@@ -61,7 +99,7 @@ serve(async (req: Request) => {
 
     const { data: template } = await supabaseAdmin.from('mail_templates').select('*').eq('id', targetTemplateId).maybeSingle();
     
-    let finalBody = template?.body || template?.body1 || `<p>Yeni evrak tebliğ edilmiştir. Evrak tipi kodu: ${childTypeId}</p>`;
+    let finalBody = template?.body || template?.body1 || `<p>Yeni evrak tebliğ edilmiştir. Evrak tipi: ${taskTypeName}</p>`;
     let finalSubject = template?.subject || template?.mail_subject || `Evreka IP: Yeni Evrak Bildirimi (${record.application_number || ''})`;
 
     let toList: string[] = [];
@@ -134,7 +172,7 @@ serve(async (req: Request) => {
       '{{son_itiraz_tarihi}}': formatDateTR(sonItirazTarihi),
       '{{transactionDate}}': formatDateTR(tebligTarihi),
       '{{objection_deadline}}': formatDateTR(sonItirazTarihi),
-      '{{docType}}': 'Resmi Yazı',
+      '{{docType}}': taskTypeName, // 🔥 ÇÖZÜM 2: İşlem ismi şablona gönderiliyor
       '{{markImageUrl}}': brandImageUrl
     };
 
@@ -151,7 +189,7 @@ serve(async (req: Request) => {
       to_list: uniqueTo,  
       cc_list: uniqueCc,  
       source_document_id: pdfId,
-      associated_transaction_id: transactionId || null, // 🔥 GÜNCELLEME 2: Gerçek UUID kullanıldı
+      associated_transaction_id: transactionId || null, 
       template_id: targetTemplateId,
       status: uniqueTo.length === 0 ? 'missing_info' : 'pending',
       is_draft: uniqueTo.length === 0, 
