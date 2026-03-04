@@ -157,7 +157,7 @@
                 const { count, error: countError } = await supabase
                     .from('trademark_bulletin_records')
                     .select('*', { count: 'exact', head: true })
-                    .eq('bulletin_no', bulletin.bulletin_no);
+                    .eq('bulletin_id', bulletin.id);
                 
                 const recordCount = countError ? '-' : (count || 0);
                 
@@ -253,7 +253,7 @@
             const { error: recordsError } = await supabase
                 .from('trademark_bulletin_records')
                 .delete()
-                .eq('bulletin_no', bulletinNo);
+                .eq('bulletin_id', bulletinId);
                 
             if (recordsError) throw recordsError;
             
