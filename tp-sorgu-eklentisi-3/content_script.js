@@ -151,8 +151,7 @@
       const base64data = await blobToBase64(blob);
       if (!base64data || base64data.length < 1000) throw new Error("Base64 geçersiz");
 
-      const storage = await chrome.storage.local.get(["tp_current_job_id", "tp_current_doc_type"]);
-      const payload = {
+      const storage = await chrome.storage.local.get(["tp_current_job_id", "tp_current_doc_type", "tp_token"]);      const payload = {
         ipRecordId: storage.tp_current_job_id,
         fileBase64: base64data,
         fileName: "Tescil_Belgesi.pdf",
@@ -166,7 +165,10 @@
 
       const uploadRes = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${storage.tp_token}` // 🔥 EKLENEN SATIR: Güvenlik Token'ı
+        },
         body: JSON.stringify({ data: payload }),
       });
 
