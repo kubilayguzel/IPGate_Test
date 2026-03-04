@@ -873,43 +873,49 @@ export class DocumentReviewManager {
                     taskDueDate.setDate(taskDueDate.getDate() - 1);
                 }
 
+                // --- MÜVEKKİL (TASK OWNER) ŞELALE STRATEJİSİ ---
+                let finalTaskOwnerId = null;
                 let relatedPartyData = null;
-                let taskOwner = []; 
 
-                if (this.matchedRecord.recordOwnerType === 'self') {
-                    if (Array.isArray(this.matchedRecord.applicants) && this.matchedRecord.applicants.length > 0) {
-                        taskOwner = this.matchedRecord.applicants.map(app => String(app.id || app.personId || app.person_id)).filter(Boolean);
-                        const app = this.matchedRecord.applicants[0];
-                        if (app && (app.id || app.personId || app.person_id)) {
-                            relatedPartyData = { id: app.id || app.personId || app.person_id, name: app.name || 'İsimsiz' };
+                // 1. Önce Ebeveyn İşlemden (Parent Transaction) gelen eski Görevin sahibini bul
+                if (parentTx && (parentTx.task_id || parentTx.taskId)) {
+                    try {
+                        const prevTaskId = parentTx.task_id || parentTx.taskId;
+                        const { data: prevTask } = await supabase.from('tasks').select('task_owner_id, details').eq('id', prevTaskId).single();
+                        if (prevTask && prevTask.task_owner_id) {
+                            finalTaskOwnerId = String(prevTask.task_owner_id);
+                            relatedPartyData = { id: finalTaskOwnerId, name: prevTask.details?.related_party_name || "Müvekkil" };
                         }
-                    }
-                } 
-                else if (this.matchedRecord.recordOwnerType === 'third_party') {
-                    const triggeringTaskId = parentTx?.triggeringTaskId || parentTx?.task_id || parentTx?.taskId;
-                    if (triggeringTaskId) {
-                        try {
-                            const prevTaskResult = await taskService.getTaskById(triggeringTaskId);
-                            if (prevTaskResult.success && prevTaskResult.data) {
-                                const prevTask = prevTaskResult.data;
-                                if (prevTask.taskOwner || prevTask.task_owner) taskOwner = Array.isArray(prevTask.taskOwner || prevTask.task_owner) ? (prevTask.taskOwner || prevTask.task_owner) : [(prevTask.taskOwner || prevTask.task_owner)];
-                                if (prevTask.details && prevTask.details.relatedParty) relatedPartyData = prevTask.details.relatedParty;
-                            }
-                        } catch (e) {}
-                    }
+                    } catch (e) {}
+                }
 
-                    if ((!taskOwner || taskOwner.length === 0) && this.matchedRecord.client) {
-                        const clientId = this.matchedRecord.client.id || this.matchedRecord.client.personId || this.matchedRecord.client.person_id;
-                        if (clientId) {
-                            taskOwner = [String(clientId)];
-                            relatedPartyData = { id: clientId, name: this.matchedRecord.client.name || 'Müvekkil' };
+                // 2. Eski görevde yoksa (veya eski görev yoksa), doğrudan IP Record'a bak
+                if (!finalTaskOwnerId && this.matchedRecord) {
+                    if (this.matchedRecord.client_id) {
+                        finalTaskOwnerId = String(this.matchedRecord.client_id);
+                        relatedPartyData = { id: finalTaskOwnerId, name: this.matchedRecord.client?.name || 'Müvekkil' };
+                    } else if (this.matchedRecord.client && this.matchedRecord.client.id) { // Eski schema yedeği
+                        finalTaskOwnerId = String(this.matchedRecord.client.id);
+                        relatedPartyData = { id: finalTaskOwnerId, name: this.matchedRecord.client.name || 'Müvekkil' };
+                    } else if (this.matchedRecord.applicants && this.matchedRecord.applicants.length > 0) {
+                        const app = this.matchedRecord.applicants[0];
+                        const appId = app.id || app.person_id || (app.persons && app.persons.id);
+                        const appName = app.name || (app.persons && app.persons.name);
+                        if (appId) {
+                            finalTaskOwnerId = String(appId);
+                            relatedPartyData = { id: finalTaskOwnerId, name: appName || 'Başvuru Sahibi' };
                         }
                     }
                 }
 
-                let tasksToCreate = [];
-                if (childTypeObj.taskTriggered || childTypeObj.task_triggered) tasksToCreate.push(String(childTypeObj.taskTriggered || childTypeObj.task_triggered));
+                let ipAppNo = this.matchedRecord.application_number || this.matchedRecord.applicationNumber || "-";
+                let ipTitle = this.matchedRecord.title || this.matchedRecord.brand_name || "-";
+                let ipAppName = relatedPartyData ? relatedPartyData.name : "-";
 
+                let tasksToCreate = [];
+                if (childTypeObj.task_triggered || childTypeObj.taskTriggered) tasksToCreate.push(String(childTypeObj.task_triggered || childTypeObj.taskTriggered));
+
+                // Ekstra Kural: Müvekkil değerlendirmesi isteniyorsa 66'yı tetikle (Self/Third Party uyumlu)
                 const currentChildIdStr = String(childTypeId);
                 const recOwnerType = this.matchedRecord.recordOwnerType;
                 let isEligibleFor66 = false;
@@ -922,47 +928,17 @@ export class DocumentReviewManager {
                     isEligibleFor66 = true;
                 }
 
-                let fetchedPersonName = null;
-                if (taskOwner && taskOwner.length > 0) {
+                if (finalTaskOwnerId && isEligibleFor66) {
                     try {
-                        const { data: personData } = await supabase.from('persons').select('*').eq('id', String(taskOwner[0])).single();
-                        if (personData) {
-                            if (personData.is_evaluation_required === true && isEligibleFor66 && !tasksToCreate.includes("66")) {
-                                tasksToCreate.push("66");
-                            }
-                            fetchedPersonName = personData.name || personData.company_name || null;
+                        const { data: personData } = await supabase.from('persons').select('is_evaluation_required').eq('id', finalTaskOwnerId).single();
+                        if (personData && personData.is_evaluation_required && !tasksToCreate.includes("66")) {
+                            tasksToCreate.push("66");
                         }
                     } catch (e) {}
                 }
 
-                let ipAppNo = this.matchedRecord.applicationNumber || this.matchedRecord.application_number || "-";
-                let ipTitle = this.matchedRecord.title || this.matchedRecord.mark_name || "-";
-                let ipAppName = "-";
-
-                const isSelfPortfolio = (this.matchedRecord.recordOwnerType === 'self');
-
-                if (!isSelfPortfolio) {
-                    if (fetchedPersonName) {
-                        ipAppName = fetchedPersonName;
-                        if (relatedPartyData) relatedPartyData.name = fetchedPersonName;
-                    }
-                    else if (relatedPartyData && relatedPartyData.name) ipAppName = relatedPartyData.name;
-                    else if (parentTx && (parentTx.opposition_owner || parentTx.oppositionOwner)) ipAppName = (parentTx.opposition_owner || parentTx.oppositionOwner);
-                    else if (this.matchedRecord.client && this.matchedRecord.client.name) ipAppName = this.matchedRecord.client.name;
-                    else ipAppName = "Müvekkil (Belirtilmemiş)";
-                } else {
-                    ipAppName = this.matchedRecord.resolvedNames || "-";
-                    if (ipAppName === "-" || !ipAppName) {
-                        if (Array.isArray(this.matchedRecord.applicants) && this.matchedRecord.applicants.length > 0) {
-                            ipAppName = this.matchedRecord.applicants[0].name || "-";
-                        } else if (this.matchedRecord.client && this.matchedRecord.client.name) {
-                            ipAppName = this.matchedRecord.client.name;
-                        }
-                    }
-                }
-
                 for (const tType of tasksToCreate) {
-                    let taskDesc = notes || `Otomatik oluşturulan görev.`;
+                    let taskDesc = notes || `İndeksleme işlemi ile otomatik oluşturulan görev.`;
                     let taskStatus = 'awaiting_client_approval';
                     let currentAssignedUser = { uid: SELCAN_UID, email: SELCAN_EMAIL }; 
 
@@ -979,31 +955,36 @@ export class DocumentReviewManager {
                         } catch (err) {}
                     }
 
+                    // YENİ SUPABASE (SNAKE_CASE) TASK FORMATI
                     const taskData = {
-                        title: `${childTypeObj.alias || childTypeObj.name} - ${this.matchedRecord.title}`,
+                        title: `${childTypeObj.alias || childTypeObj.name} - ${this.matchedRecord.title || this.matchedRecord.brand_name || ipTitle}`,
                         description: taskDesc,
-                        taskType: tType, 
-                        relatedRecordId: this.matchedRecord.id,
-                        relatedIpRecordId: this.matchedRecord.id,
-                        relatedIpRecordTitle: this.matchedRecord.title,
-                        iprecordApplicationNo: ipAppNo,
-                        iprecordTitle: ipTitle,
-                        iprecordApplicantName: ipAppName,
-                        transactionId: childTransactionId, 
-                        triggeringTransactionType: childTypeId,
-                        deliveryDate: deliveryDateStr,
-                        dueDate: taskDueDate.toISOString(),
-                        officialDueDate: officialDueDate.toISOString(),
-                        createdAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString(),
-                        status: taskStatus, 
+                        task_type_id: String(tType), 
+                        ip_record_id: this.matchedRecord.id,
+                        transaction_id: childTransactionId,
+                        
+                        // 🔥 YENİ MANTIK: Bulunan kesin Sahip ID'si atanıyor
+                        task_owner_id: finalTaskOwnerId,
+                        assigned_to: currentAssignedUser.uid,
+                        
+                        status: taskStatus,
                         priority: 'medium',
-                        assignedTo_uid: currentAssignedUser.uid, 
-                        assignedTo_email: currentAssignedUser.email, 
-                        createdBy: { uid: this.currentUser.id, email: this.currentUser.email },
-                        taskOwner: taskOwner.length > 0 ? taskOwner : null,
-                        details: { relatedParty: relatedPartyData },
-                        history: [{ action: 'İndeksleme işlemi ile otomatik oluşturuldu.', timestamp: new Date().toISOString(), userEmail: this.currentUser.email }]
+                        
+                        details: {
+                            related_party: relatedPartyData,
+                            related_party_name: relatedPartyData?.name || null,
+                            assigned_to_email: currentAssignedUser.email,
+                            iprecord_application_no: ipAppNo,
+                            iprecord_title: ipTitle,
+                            iprecord_applicant_name: ipAppName,
+                            triggering_transaction_type: childTypeId,
+                            history: [{ action: 'İndeksleme işlemi ile otomatik oluşturuldu.', timestamp: new Date().toISOString(), userEmail: this.currentUser.email }]
+                        },
+                        
+                        official_due_date: officialDueDate.toISOString(),
+                        operational_due_date: taskDueDate.toISOString(),
+                        created_at: new Date().toISOString(),
+                        updated_at: new Date().toISOString()
                     };
 
                     const taskResult = await taskService.createTask(taskData);
