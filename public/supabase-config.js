@@ -1457,30 +1457,25 @@ export const accrualService = {
 // 10. MERKEZİ MAİL ALICISI HESAPLAMA SERVİSİ
 // ==========================================
 
-// 🔥 MERKEZİ MAİL ALICISI HESAPLAMA SERVİSİ (DETAYLI LOGLAMALI VERSİYON)
+// ==========================================
+// 10. MERKEZİ MAİL ALICISI HESAPLAMA SERVİSİ
+// ==========================================
 export const mailService = {
     async resolveMailRecipients(ipRecordId, taskType, clientId = null) {
         console.log(`\n======================================================`);
         console.log(`[MAIL SERVICE] 🚀 BAŞLIYOR...`);
-        console.log(`[MAIL SERVICE] Gelen Parametreler -> ipRecordId: ${ipRecordId}, taskType: ${taskType}, clientId: ${clientId}`);
+        console.log(`[MAIL SERVICE] Gelen Parametreler -> ipRecordId: ${ipRecordId}, taskType: ${taskType}, clientId (TaskOwner): ${clientId}`);
         
         let toList = [];
         let ccList = [];
         let targetPersonIds = [];
 
         try {
-            // 1. Kayıt Tipi ve Sahiplik Bilgisini Al
-            const { data: ipRecord, error: ipErr } = await supabase
-                .from('ip_records')
-                .select('record_owner_type, ip_type')
-                .eq('id', ipRecordId)
-                .maybeSingle();
-
+            const { data: ipRecord, error: ipErr } = await supabase.from('ip_records').select('record_owner_type, ip_type').eq('id', ipRecordId).maybeSingle();
+            
             if (ipErr) console.error(`[MAIL SERVICE] ❌ ip_records sorgu hatası:`, ipErr);
-
             if (!ipRecord) {
-                console.warn(`[MAIL SERVICE] ⚠️ IP Record veritabanında bulunamadı! ID: ${ipRecordId}`);
-                console.log(`======================================================\n`);
+                console.warn(`[MAIL SERVICE] ⚠️ IP Record bulunamadı! ID: ${ipRecordId}`);
                 return { to: [], cc: [] };
             }
 
@@ -1488,50 +1483,37 @@ export const mailService = {
             const isThirdParty = ipRecord.record_owner_type === 'third_party';
             console.log(`[MAIL SERVICE] 📋 Dosya Bilgisi -> ipType: ${ipType}, isThirdParty: ${isThirdParty}`);
 
-            // 2. Hedef Kişileri Belirle
+            // Task Owner arayüzden iletildiyse doğrudan hedefe ekle
             if (clientId) {
                 targetPersonIds.push(clientId);
-                console.log(`[MAIL SERVICE] 🎯 Arayüzden doğrudan clientId geldi, listeye eklendi: ${clientId}`);
+                console.log(`[MAIL SERVICE] 🎯 Arayüzden clientId (Task Owner) geldi: ${clientId}`);
             }
 
-            // Eğer 3. taraf değilse ve clientId gelmediyse asıl başvuru sahiplerini bul
+            // Kendi dosyamızsa ve Task Owner gelmediyse başvuru sahiplerine bak
             if (!isThirdParty && targetPersonIds.length === 0) {
-                console.log(`[MAIL SERVICE] 🔍 Kendi dosyamız (Self). Başvuru sahipleri (applicants) aranıyor...`);
-                const { data: applicants, error: appErr } = await supabase
-                    .from('ip_record_applicants')
-                    .select('person_id')
-                    .eq('ip_record_id', ipRecordId);
-                
-                if (appErr) console.error(`[MAIL SERVICE] ❌ ip_record_applicants sorgu hatası:`, appErr);
-                
+                console.log(`[MAIL SERVICE] 🔍 Kendi dosyamız. Başvuru sahipleri (applicants) aranıyor...`);
+                const { data: applicants } = await supabase.from('ip_record_applicants').select('person_id').eq('ip_record_id', ipRecordId);
                 if (applicants && applicants.length > 0) {
                     applicants.forEach(app => targetPersonIds.push(app.person_id));
-                    console.log(`[MAIL SERVICE] ✅ Başvuru sahipleri bulundu:`, targetPersonIds);
-                } else {
-                    console.warn(`[MAIL SERVICE] ⚠️ Bu dosyanın ip_record_applicants tablosunda hiçbir sahibi yok!`);
                 }
-            } else if (isThirdParty && targetPersonIds.length === 0) {
-                console.warn(`[MAIL SERVICE] ⚠️ Bu dosya 3. taraf (Rakip) ama görev sahibi (clientId) iletilmedi! Kime atacağımızı bilemiyoruz.`);
             }
 
-            // 3. Persons Related (Müvekkil İlgili Kişileri) Ayarlarına Bak
+            // KESİN KURAL: Sadece persons_related tablosuna bakılır.
             if (targetPersonIds.length > 0) {
-                console.log(`[MAIL SERVICE] 🕵️ persons_related tablosunda şu ID'ler aranıyor:`, targetPersonIds);
+                console.log(`[MAIL SERVICE] 🕵️ persons_related (İlgili Kişiler) tablosu taranıyor... Aranan person_id'ler:`, targetPersonIds);
                 
-                const { data: relatedPersons, error: relErr } = await supabase
-                    .from('persons_related')
-                    .select('*')
-                    .in('person_id', targetPersonIds);
+                const { data: relatedPersons, error: relErr } = await supabase.from('persons_related').select('*').in('person_id', targetPersonIds);
 
                 if (relErr) console.error(`[MAIL SERVICE] ❌ persons_related sorgu hatası:`, relErr);
 
                 if (relatedPersons && relatedPersons.length > 0) {
-                    console.log(`[MAIL SERVICE] ✅ ${relatedPersons.length} adet yetkili kişi (ilgili) bulundu. Filtreleme başlıyor...`);
-                    
+                    console.log(`[MAIL SERVICE] ✅ persons_related tablosunda ${relatedPersons.length} adet kayıt BULUNDU.`);
+                    console.log(`[MAIL SERVICE] 📦 Dönen Ham Veri:`, JSON.stringify(relatedPersons, null, 2));
+
                     relatedPersons.forEach(related => {
                         const email = related.email ? related.email.trim().toLowerCase() : null;
                         if (!email) {
-                            console.log(`[MAIL SERVICE] ⏭️ İlgili kişinin (ID: ${related.id}) email adresi boş, atlanıyor.`);
+                            console.log(`[MAIL SERVICE] ⏭️ ATLANDI: Kayıt var ama email adresi boş. (ID: ${related.id})`);
                             return;
                         }
 
@@ -1551,43 +1533,44 @@ export const mailService = {
                             notifyCc = related.notify_design_cc;
                         }
 
-                        console.log(`[MAIL SERVICE] ⚙️ Değerlendirme -> Email: ${email} | Sorumlu mu? ${isResponsible} | TO izni var mı? ${notifyTo} | CC izni var mı? ${notifyCc}`);
+                        console.log(`[MAIL SERVICE] ⚙️ EŞLEŞTİRME -> Email: ${email} | Tür: ${ipType} | Sorumlu mu?: ${isResponsible} | TO İzni: ${notifyTo} | CC İzni: ${notifyCc}`);
 
                         if (isResponsible) {
-                            if (notifyTo) toList.push(email);
-                            if (notifyCc) ccList.push(email);
+                            if (notifyTo) {
+                                console.log(`[MAIL SERVICE] 🎯 KABUL EDİLDİ (TO): ${email}`);
+                                toList.push(email);
+                            }
+                            if (notifyCc) {
+                                console.log(`[MAIL SERVICE] 🎯 KABUL EDİLDİ (CC): ${email}`);
+                                ccList.push(email);
+                            }
+                            if (!notifyTo && !notifyCc) {
+                                console.log(`[MAIL SERVICE] 🚫 REDDEDİLDİ: Sorumlu ama TO ve CC izni False.`);
+                            }
+                        } else {
+                            console.log(`[MAIL SERVICE] 🚫 REDDEDİLDİ: Bu türden (${ipType}) sorumlu değil (False).`);
                         }
                     });
                 } else {
-                    console.warn(`[MAIL SERVICE] ⚠️ persons_related tablosunda bu person_id'ler için hiçbir yetkili tanımlı değil!`);
+                    console.warn(`[MAIL SERVICE] ⚠️ DİKKAT: persons_related tablosunda bu person_id'ler için HİÇBİR KAYIT YOK! Veritabanında ilgili kişi eklenmemiş.`);
                 }
             } else {
-                console.warn(`[MAIL SERVICE] ⚠️ targetPersonIds listesi boş, müvekkil tarafına mail atılamayacak.`);
+                console.warn(`[MAIL SERVICE] ⚠️ targetPersonIds listesi boş! Aranacak kimse yok.`);
             }
 
-            // 4. Evreka İçi CC (Ekip Üyeleri) Listesini Al
-            console.log(`[MAIL SERVICE] 🏢 Evreka içi CC (evreka_mail_cc_list) kontrolü yapılıyor. Aranacak TaskType: ${taskType}`);
-            const { data: internalCcs, error: ccErr } = await supabase
-                .from('evreka_mail_cc_list')
-                .select('email, transaction_types');
-
-            if (ccErr) console.error(`[MAIL SERVICE] ❌ evreka_mail_cc_list sorgu hatası:`, ccErr);
-
+            console.log(`[MAIL SERVICE] 🏢 Evreka içi CC (evreka_mail_cc_list) kontrolü yapılıyor...`);
+            const { data: internalCcs } = await supabase.from('evreka_mail_cc_list').select('email, transaction_types');
             if (internalCcs && internalCcs.length > 0) {
                 internalCcs.forEach(internal => {
                     if (internal.email) {
                         const types = internal.transaction_types || [];
                         if (types.includes('All') || types.includes(String(taskType)) || types.includes(Number(taskType))) {
-                            console.log(`[MAIL SERVICE] ➕ İç ekip üyesi CC'ye eklendi: ${internal.email}`);
                             ccList.push(internal.email.trim().toLowerCase());
                         }
                     }
                 });
-            } else {
-                console.log(`[MAIL SERVICE] ℹ️ evreka_mail_cc_list tablosunda hiç kimse bulunamadı.`);
             }
 
-            // 5. Temizlik (Tekrarları sil, TO'da olanı CC'den çıkar)
             toList = [...new Set(toList)].filter(Boolean);
             ccList = [...new Set(ccList)].filter(Boolean);
             ccList = ccList.filter(email => !toList.includes(email));
@@ -1598,7 +1581,6 @@ export const mailService = {
             return { to: toList, cc: ccList };
         } catch (error) {
             console.error(`[MAIL SERVICE] ❌ KRİTİK HATA:`, error);
-            console.log(`======================================================\n`);
             return { to: [], cc: [] };
         }
     }
