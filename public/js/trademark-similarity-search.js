@@ -602,7 +602,22 @@ const loadInitialData = async () => {
     
     await loadBulletinOptions();
 
-    const { data: monitoringData } = await supabase.from('monitoring_trademarks').select('*');
+    // 🔥 DÜZELTME: Olmayan client_id kaldırıldı. Alias yerine gerçek tablo isimleri kullanıldı ve ip_record_classes eklendi.
+    const { data: monitoringData, error } = await supabase
+        .from('monitoring_trademarks')
+        .select(`
+            id, ip_record_id, search_mark_name, brand_text_search, nice_class_search,
+            ip_records (
+                application_number, application_date,
+                ip_record_trademark_details (brand_name, brand_image_url),
+                ip_record_applicants (person_id),
+                ip_record_classes (class_no)
+            )
+        `);
+
+    if (error) {
+        console.error("❌ İzlenen Markalar Çekilirken Supabase Hatası:", error.message);
+    }
 
     const ensureArray = (val) => {
         if (!val) return [];
@@ -613,22 +628,39 @@ const loadInitialData = async () => {
 
     if (monitoringData) {
         monitoringTrademarks = monitoringData.map(d => {
+            const ip = d.ip_records || {};
+            
+            // Tablo ilişkilerinden gelen veriler
+            const details = ip.ip_record_trademark_details ? (Array.isArray(ip.ip_record_trademark_details) ? ip.ip_record_trademark_details[0] : ip.ip_record_trademark_details) : {};
+            const applicants = ip.ip_record_applicants || [];
+            const classes = ip.ip_record_classes || [];
+
+            const markName = details.brand_name || d.search_mark_name || 'Bilinmeyen Marka';
+            let ownerName = 'Bilinmeyen Sahip';
+            let ownerId = null;
+
+            if (applicants.length > 0 && applicants[0].person_id) {
+                const foundPerson = allPersons.find(p => p.id === applicants[0].person_id);
+                if (foundPerson) { ownerName = foundPerson.name; ownerId = foundPerson.id; }
+            }
+            if (!ownerId) ownerId = `owner_${ownerName.toLowerCase().replace(/[^a-z0-9]/gi, '').substring(0, 20)}`;
+
+            // Sınıfları Diziye Çevirme (Örn: [25, 35])
+            const niceClassesArray = classes.map(c => String(c.class_no));
+
             const tmData = {
-                id: d.id, title: d.mark_name, markName: d.mark_name, applicationNo: d.application_no, 
-                applicationNumber: d.application_no, applicationDate: d.application_date, ipRecordId: d.ip_record_id, ownerName: d.owner_name,
+                id: d.id, title: markName, markName: markName, 
+                applicationNo: ip.application_number || "-", applicationNumber: ip.application_number || "-", 
+                applicationDate: ip.application_date, ipRecordId: d.ip_record_id, ownerName: ownerName,
                 brandTextSearch: ensureArray(d.brand_text_search), niceClassSearch: ensureArray(d.nice_class_search),
-                niceClasses: ensureArray(d.nice_classes), imagePath: d.image_path, 
-                applicants: d.owner_name ? [{ name: d.owner_name }] : []
+                niceClasses: niceClassesArray, imagePath: details.brand_image_url || '', 
+                applicants: [{ name: ownerName }]
             };
             
-            let ownerName = d.owner_name && d.owner_name.trim() !== '' && d.owner_name !== '-' ? d.owner_name : 'Bilinmeyen Sahip';
-            let ownerId = d.ip_record_id || `owner_${ownerName.toLowerCase().replace(/[^a-z0-9]/gi, '').substring(0, 20)}`;
             tmData.ownerInfo = { key: ownerId, id: ownerId, name: ownerName };
-            
-            // 🔥 SÜPER HIZLANDIRICI: Filtre aramaları için her şeyi en baştan hesapla ve küçük harfle kaydet
             tmData._searchOwner = ownerName.toLowerCase();
-            tmData._searchNice = _uniqNice(tmData).toLowerCase();
-            tmData._searchBrand = (tmData.title || tmData.markName || '').toLowerCase();
+            tmData._searchNice = niceClassesArray.join(', ');
+            tmData._searchBrand = markName.toLowerCase();
             
             return tmData;
         });
@@ -736,56 +768,41 @@ const loadDataFromCache = async (bulletinKey) => {
     const infoMessageContainer = document.getElementById('infoMessageContainer');
     
     try {
-        const { count, error: countErr } = await supabase
+        // 🔥 YENİ DB: Supabase INNER JOIN (!inner) ile ilişkili tablodan verileri tek seferde çekiyoruz
+        const { data, error } = await supabase
             .from('monitoring_trademark_records')
-            .select('*', { count: 'exact', head: true })
-            .eq('bulletin_id', bulletinKey);
+            .select(`
+                id, monitored_trademark_id, similarity_score, is_similar, success_chance, note, source,
+                bulletin_record:trademark_bulletin_records!inner (
+                    id, application_number, application_date, brand_name, nice_classes, holders, image_url, bulletin_id
+                )
+            `)
+            .eq('bulletin_record.bulletin_id', bulletinKey);
 
-        if (countErr) throw countErr;
+        if (error) throw error;
 
         let cachedResults = [];
 
-        if (count > 0) {
-            const limit = 20000;
-            const fetchPromises = [];
-            
-            for (let offset = 0; offset < count; offset += limit) {
-                fetchPromises.push(
-                    supabase.from('monitoring_trademark_records')
-                    .select('*')
-                    .eq('bulletin_id', bulletinKey)
-                    .range(offset, offset + limit - 1)
-                );
-            }
-
-            const responses = await Promise.all(fetchPromises);
-            
-            responses.forEach(res => {
-                if (res.data && res.data.length > 0) {
-                    const mappedData = res.data.map(item => ({
-                        id: item.id,
-                        objectID: item.id,
-                        monitoredTrademarkId: item.monitored_trademark_id,
-                        markName: item.similar_mark_name,
-                        applicationNo: item.similar_application_no,
-                        applicationDate: item.application_date,
-                        niceClasses: item.nice_classes,
-                        similarityScore: item.similarity_score,
-                        holders: item.holders,
-                        imagePath: item.image_path,
-                        bulletinId: item.bulletin_id,
-                        
-                        // 🔥 İŞTE SORUNUN ÇÖZÜMÜ BURASI:
-                        // Veritabanındaki 'is_similar' değerini alıp arayüze 'isSimilar' olarak öğretiyoruz.
-                        // Eğer değer false değilse (true veya undefined ise) her zaman "Benzer" (true) kabul et!
-                        isSimilar: item.is_similar === true, 
-                        
-                        bs: item.bs_value || '', 
-                        note: item.note || '',   
-                        source: 'cache'
-                    }));
-                    cachedResults = cachedResults.concat(mappedData);
-                }
+        if (data && data.length > 0) {
+            cachedResults = data.map(item => {
+                const bRec = item.bulletin_record || {};
+                return {
+                    id: item.id,
+                    objectID: item.id,
+                    monitoredTrademarkId: item.monitored_trademark_id,
+                    markName: bRec.brand_name,
+                    applicationNo: bRec.application_number,
+                    applicationDate: bRec.application_date,
+                    niceClasses: Array.isArray(bRec.nice_classes) ? bRec.nice_classes.join(', ') : bRec.nice_classes,
+                    similarityScore: item.similarity_score,
+                    holders: bRec.holders,
+                    imagePath: bRec.image_url,
+                    bulletinId: bRec.bulletin_id,
+                    isSimilar: item.is_similar === true, 
+                    bs: item.success_chance || '', // 🔥 B.Ş değeri için db'deki success_chance kolonu
+                    note: item.note || '',   
+                    source: item.source || 'cache'
+                };
             });
         }
 
@@ -797,12 +814,9 @@ const loadDataFromCache = async (bulletinKey) => {
                 : '';
         }
         
-        if (noRecordsMessage) {
-            noRecordsMessage.style.display = cachedResults.length > 0 ? 'none' : 'block';
-        }
+        if (noRecordsMessage) noRecordsMessage.style.display = cachedResults.length > 0 ? 'none' : 'block';
         
         await groupAndSortResults();
-        
         if (pagination) pagination.update(allSimilarResults.length);
         renderCurrentPageOfResults();
         
@@ -984,21 +998,47 @@ const performSearch = async () => {
                 
                 await Promise.all(chunk.map(async ([monitoredTrademarkId, results]) => {
                      try {
-                        await searchRecordService.saveRecord(bulletinKey, monitoredTrademarkId, {
-                            results,
-                            searchDate: new Date().toISOString()
-                        });
+                         // 1. Gelen sonuçların Application Number'larına göre bülten tablosundaki gerçek ID'lerini (bulletin_record_id) bulalım
+                         const appNumbers = results.map(r => r.applicationNo).filter(Boolean);
+                         const { data: bRecords } = await supabase
+                             .from('trademark_bulletin_records')
+                             .select('id, application_number')
+                             .eq('bulletin_id', bulletinKey)
+                             .in('application_number', appNumbers);
+
+                         const appNoToRecordId = {};
+                         if (bRecords) {
+                             bRecords.forEach(br => { appNoToRecordId[br.application_number] = br.id; });
+                         }
+
+                         // 2. Yalnızca ID'leri ve skorları ilişki tablosuna yazalım (Normalize DB)
+                         const recordsToInsert = results.map(r => {
+                             const bRecId = appNoToRecordId[r.applicationNo];
+                             if (!bRecId) return null; // Bülten tablosunda yoksa ilişki kuramayız
+                             
+                             return {
+                                 monitored_trademark_id: monitoredTrademarkId,
+                                 bulletin_record_id: bRecId,
+                                 similarity_score: r.similarityScore,
+                                 is_similar: false,
+                                 source: 'auto'
+                             };
+                         }).filter(r => r !== null);
+
+                         if (recordsToInsert.length > 0) {
+                             const { error: saveErr } = await supabase
+                                 .from('monitoring_trademark_records')
+                                 .insert(recordsToInsert);
+                             if (saveErr) throw saveErr;
+                         }
+
                      } catch (saveErr) {
                          console.warn(`Kayıt uyarısı (${monitoredTrademarkId}):`, saveErr);
                      }
                 }));
 
                 await new Promise(r => setTimeout(r, DELAY_MS));
-
-                SimpleLoading.updateText(
-                    'Sonuçlar Kaydediliyor...', 
-                    `${Math.min(i + SAVE_BATCH_SIZE, entries.length)} / ${entries.length} marka grubu`
-                );
+                SimpleLoading.updateText('Sonuçlar Kaydediliyor...', `${Math.min(i + SAVE_BATCH_SIZE, entries.length)} / ${entries.length} marka grubu`);
             }
         }
     } catch (error) {
@@ -1112,8 +1152,8 @@ const handleSimilarityToggle = async (event) => {
 
 const handleBsChange = async (event) => {
     const { resultId } = event.target.dataset;
-    // 🔥 Eski tablo adı düzeltildi
-    await supabase.from('monitoring_trademark_records').update({ bs_value: event.target.value }).eq('id', resultId);
+    // 🔥 DB Şeması: success_chance
+    await supabase.from('monitoring_trademark_records').update({ success_chance: event.target.value }).eq('id', resultId);
 };
 
 const handleNoteCellClick = (cell) => {
@@ -1172,18 +1212,31 @@ const buildReportData = async (results) => {
         let ipData = null;
 
         const appNoToSearch = monitoredTm.applicationNumber || monitoredTm.applicationNo;
+        
+        // 🔥 YENİ DB: Sınıfları, Detayları ve Kişileri JOIN ile tek seferde çekiyoruz.
+        const ipQuery = `
+            *, 
+            ip_record_trademark_details(*), 
+            ip_record_applicants(*), 
+            ip_record_classes(*)
+        `;
+        
         if (appNoToSearch) {
-            const { data: ipSnap } = await supabase.from('ip_records').select('*').eq('application_number', appNoToSearch).limit(1).single();
+            const { data: ipSnap } = await supabase.from('ip_records').select(ipQuery).eq('application_number', appNoToSearch).limit(1).maybeSingle();
             if (ipSnap) ipData = ipSnap;
         }
         if (!ipData && (monitoredTm.ipRecordId || monitoredTm.sourceRecordId)) {
-            const { data: ipDoc } = await supabase.from('ip_records').select('*').eq('id', monitoredTm.ipRecordId || monitoredTm.sourceRecordId).limit(1).single();
+            const { data: ipDoc } = await supabase.from('ip_records').select(ipQuery).eq('id', monitoredTm.ipRecordId || monitoredTm.sourceRecordId).limit(1).maybeSingle();
             if (ipDoc) ipData = ipDoc;
         }
 
-        // 🔥 ARTIK AĞIR VERİTABANI SORGUSU YOK! Veriyi doğrudan r (results) objesinden çekiyoruz.
+        // 🔥 YENİ DB: İlişkisel tablolardan dönen verileri güvenle çıkarıyoruz
+        const tmDetails = ipData?.ip_record_trademark_details ? (Array.isArray(ipData.ip_record_trademark_details) ? ipData.ip_record_trademark_details[0] : ipData.ip_record_trademark_details) : {};
+        const ipClasses = ipData?.ip_record_classes || [];
+        const ipApplicants = ipData?.ip_record_applicants || [];
+
         let hitHolders = r.holders || [];
-        let hitAppDate = r.applicationDate || "-"; // Doğrudan tablodan okunan tarih!
+        let hitAppDate = r.applicationDate || "-"; 
         let hitAppNo = r.applicationNo || "-";
         let hitNice = r.niceClasses || [];
 
@@ -1193,29 +1246,38 @@ const buildReportData = async (results) => {
             if (!isNaN(hd.getTime())) hitAppDate = `${String(hd.getDate()).padStart(2, '0')}.${String(hd.getMonth() + 1).padStart(2, '0')}.${hd.getFullYear()}`;
         }
 
+        // 🔥 YENİ DB: Sınıfları `ip_record_classes` tablosundan alıyoruz
         let mClasses = [];
-        let rawClasses = ipData?.nice_classes || ipData?.niceClasses || monitoredTm?.niceClasses || monitoredTm?.nice_classes;
-        if (!rawClasses && ipData?.goodsAndServicesByClass) {
-            rawClasses = ipData.goodsAndServicesByClass.map(c => c.classNo || c);
-        }
-        if (typeof rawClasses === 'string') {
-            mClasses = rawClasses.split(/[,\s]+/).filter(Boolean);
-        } else if (Array.isArray(rawClasses)) {
-            mClasses = rawClasses.map(c => typeof c === 'object' ? (c.classNo || c.class_no) : c).filter(Boolean);
+        if (ipClasses.length > 0) {
+            mClasses = ipClasses.map(c => String(c.class_no));
+        } else {
+             // Fallback
+             let rawClasses = monitoredTm?.niceClasses || monitoredTm?.nice_classes;
+             if (typeof rawClasses === 'string') {
+                 mClasses = rawClasses.split(/[,\s]+/).filter(Boolean);
+             } else if (Array.isArray(rawClasses)) {
+                 mClasses = rawClasses.map(String).filter(Boolean);
+             }
         }
         mClasses = Array.from(new Set(mClasses)).sort((a, b) => Number(a) - Number(b));
 
+        // 🔥 YENİ DB: Sahip Bilgisini person listesinden ID eşleştirerek buluyoruz
         let ownerNameStr = "-";
-        if (ipData?.applicants && typeof ipData.applicants === 'string') try { ipData.applicants = JSON.parse(ipData.applicants); } catch(e){}
-        if (ipData?.applicants && Array.isArray(ipData.applicants) && ipData.applicants.length > 0) {
-            ownerNameStr = ipData.applicants.map(a => a.name || a.companyName || a.id).join(", ");
+        if (ipApplicants.length > 0 && ipApplicants[0].person_id) {
+             const foundPerson = allPersons.find(p => p.id === ipApplicants[0].person_id);
+             if(foundPerson) ownerNameStr = foundPerson.name;
         } else {
-            ownerNameStr = _pickOwners(ipData, monitoredTm, allPersons) || monitoredTm?.ownerName || "-";
+             ownerNameStr = monitoredTm?.ownerName || "-";
         }
-        const monitoredClientId = _getOwnerKey(ipData, monitoredTm, allPersons).id;
+        
+        let monitoredClientId = ipData?.client_id || monitoredTm.ownerInfo?.id;
+        if(!monitoredClientId) {
+             monitoredClientId = _getOwnerKey(ipData, monitoredTm, allPersons).id;
+        }
 
-        const monitoredName = ipData?.title || ipData?.mark_name || monitoredTm?.title || monitoredTm?.markName || "Marka Adı Yok";
-        const monitoredImg = _normalizeImageSrc(ipData?.brand_image_url || ipData?.image_path || monitoredTm?.imagePath || '');
+        // 🔥 YENİ DB: İsim ve Resmi `ip_record_trademark_details` içinden okuyoruz
+        const monitoredName = tmDetails?.brand_name || ipData?.title || monitoredTm?.title || monitoredTm?.markName || "Marka Adı Yok";
+        const monitoredImg = _normalizeImageSrc(tmDetails?.brand_image_url || ipData?.image_path || monitoredTm?.imagePath || '');
         const monitoredAppNo = ipData?.application_number || monitoredTm?.applicationNo || "-";
         const monitoredAppDate = _pickAppDate(ipData, monitoredTm);
 
