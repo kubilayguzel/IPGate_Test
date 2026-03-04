@@ -437,12 +437,43 @@ export class TaskSubmitHandler {
 
     _enrichTaskWithParties(taskData, taskType, relatedParties, singleParty, ipRecord) {
         const tIdStr = String(taskType.id);
-        if (RELATED_PARTY_REQUIRED.has(tIdStr) && relatedParties && relatedParties.length) {
-            taskData.details.related_party_id = relatedParties[0].id;
-            taskData.details.related_party_name = relatedParties[0].name;
+        
+        let finalOwnerId = null;
+        let finalOwnerName = null;
+
+        // 1. STRATEJİ: Formda açıkça "İlgili Kişi / Müvekkil / Sahip" seçilmişse onu al.
+        if (relatedParties && relatedParties.length > 0) {
+            finalOwnerId = String(relatedParties[0].id);
+            finalOwnerName = relatedParties[0].name;
+            
+            if (RELATED_PARTY_REQUIRED.has(tIdStr)) {
+                taskData.details.related_party_id = finalOwnerId;
+                taskData.details.related_party_name = finalOwnerName;
+            }
         } 
+        // 2. STRATEJİ: Seçilmediyse, doğrudan IP Record'un (Varlığın) sahibine/müvekkiline bak.
+        else if (ipRecord) {
+            // A) 3. Taraf dosyasıysa (Rakipse) veya atanmış müvekkil varsa
+            if (ipRecord.client_id) {
+                finalOwnerId = String(ipRecord.client_id);
+                finalOwnerName = ipRecord.client?.name || "Müvekkil";
+            } 
+            // B) Kendi dosyamızsa ve başvuru sahibi varsa
+            else if (ipRecord.applicants && ipRecord.applicants.length > 0) {
+                const firstApp = ipRecord.applicants[0];
+                finalOwnerId = String(firstApp.id || firstApp.person_id || (firstApp.persons && firstApp.persons.id));
+                finalOwnerName = firstApp.name || (firstApp.persons && firstApp.persons.name) || "Başvuru Sahibi";
+            }
+        }
+
+        // 🔥 Şelale mantığıyla bulunan en geçerli ID'yi Task Owner olarak set et
+        if (finalOwnerId) {
+            taskData.task_owner_id = finalOwnerId;
+        }
+
+        // Karşı Taraf (Rakip) Bilgisi (İtiraz işlemleri için)
         if (['7', '19', '20'].includes(tIdStr)) {
-            const opponent = (relatedParties && relatedParties.length) ? relatedParties[0] : singleParty;
+            const opponent = singleParty || (relatedParties && relatedParties.length > 1 ? relatedParties[1] : null);
             if (opponent) {
                 taskData.details.opponent_id = opponent.id;
                 taskData.details.opponent_name = opponent.name;
