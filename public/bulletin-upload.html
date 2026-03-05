@@ -228,7 +228,7 @@
             
             // 1. Önbellek (Cache) tablosunu temizle
             updateDeleteProgress(10, 'Önbellek temizleniyor...', 'Arama kalıntıları siliniyor');
-            await supabase.from('search_results_cache').delete().ilike('bulletin_key', `${bulletinNo}%`);
+            await supabase.from('bulletin_search_results').delete().ilike('bulletin_key', `${bulletinNo}%`);
 
             // 2. 🔥 YENİ: Storage'dan Görselleri Silme İşlemi (Klasör İçeriğini Temizleme)
             updateDeleteProgress(30, 'Görseller siliniyor...', 'Bu işlem dosya sayısına göre biraz sürebilir');
