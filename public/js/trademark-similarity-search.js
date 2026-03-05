@@ -108,44 +108,36 @@ const _getBrandImageByAppNo = async (appNo) => {
     if (!appNo || appNo === '-') return '';
     if (_storageUrlCache.has(appNo)) return _storageUrlCache.get(appNo);
 
-    // Boşlukları temizle ve güvenli arama formatına getir
     const safeAppNo = appNo.toString().trim().replace(/\s+/g, '%');
 
     try {
-        // 1. Önce bülten kayıtlarında ara (Sadece resmi olanları getir)
+        // 🔥 GÜNCEL ŞEMA: application_number ve image_url
         const { data: bRec } = await supabase
             .from('trademark_bulletin_records')
-            .select('image_path')
-            .ilike('application_no', `%${safeAppNo}%`)
-            .not('image_path', 'is', null)
+            .select('image_url')
+            .ilike('application_number', `%${safeAppNo}%`)
+            .not('image_url', 'is', null)
             .limit(1);
 
-        if (bRec && bRec.length > 0 && bRec[0].image_path) {
-            const url = _normalizeImageSrc(bRec[0].image_path);
+        if (bRec && bRec.length > 0 && bRec[0].image_url) {
+            const url = _normalizeImageSrc(bRec[0].image_url);
             _storageUrlCache.set(appNo, url);
             return url;
         }
 
-        // 2. Bulamazsa Portföyde ara
-        // 🔥 KRİTİK DÜZELTME: Tabloda olmayan 'details' kolonu sorgudan çıkartıldı (400 Bad Request hatasını çözer)
-        const { data: ipRec, error: ipErr } = await supabase
+        const { data: ipData } = await supabase
             .from('ip_records')
-            .select('brand_image_url') 
-            .ilike('application_number', `%${safeAppNo}%`) 
+            .select('application_number, ip_record_trademark_details(brand_image_url)')
+            .ilike('application_number', `%${safeAppNo}%`)
             .limit(1);
-            
-        if (ipErr) throw ipErr;
 
-        if (ipRec && ipRec.length > 0) {
-            const foundImage = ipRec[0].brand_image_url;
-            if (foundImage) {
-                const url = _normalizeImageSrc(foundImage);
-                _storageUrlCache.set(appNo, url);
-                return url;
-            }
+        if (ipData && ipData.length > 0 && ipData[0].ip_record_trademark_details && ipData[0].ip_record_trademark_details.brand_image_url) {
+            const url = _normalizeImageSrc(ipData[0].ip_record_trademark_details.brand_image_url);
+            _storageUrlCache.set(appNo, url);
+            return url;
         }
     } catch (err) {
-        console.warn("Görsel aranırken hata oluştu (AppNo: " + appNo + "):", err.message || err);
+        console.warn("Görsel aranırken hata oluştu:", err.message);
     }
 
     _storageUrlCache.set(appNo, '');
@@ -289,25 +281,25 @@ const refreshTriggeredStatus = async (bulletinNo) => {
         taskTriggeredStatus.clear();
         if (!bulletinNo) return;
         
-        // 🔥 Şemaya %100 Uyumlu Sorgu
+        // 🔥 GÜNCEL ŞEMA: task_type_id ve details kullanıyoruz
         const { data: tasks, error } = await supabase.from('tasks')
-            .select('client_id, bulletin_no')
-            .eq('task_type', '66')
-            .in('status', ['open', 'awaiting_client_approval'])
-            .eq('bulletin_no', String(bulletinNo)); // Doğrudan kolondan arar!
+            .select('task_owner_id, details')
+            .eq('task_type_id', '66') 
+            .in('status', ['open', 'awaiting_client_approval']);
             
         if (error) throw error;
         if (!tasks || tasks.length === 0) return;
         
         tasks.forEach(t => {
-            if (t.client_id) {
-                taskTriggeredStatus.set(String(t.client_id), 'Evet');
+            if (t.details && t.details.bulletinNo === bulletinNo && t.task_owner_id) {
+                taskTriggeredStatus.set(String(t.task_owner_id), 'Evet');
             }
         });
     } catch (e) { 
         console.error("Görev durumu kontrol hatası:", e); 
     }
 };
+
 // --- 5. RENDER FUNCTIONS ---
 const renderMonitoringList = () => {
     const tbody = document.getElementById('monitoringListBody');
@@ -1355,13 +1347,13 @@ const handleReportGeneration = async (event, options = {}) => {
                     const { data: insertedMail, error: mailError } = await supabase.from('mail_notifications').insert({
                         related_ip_record_id: targetRecordId,
                         client_id: finalClientId,
-                        bulletin_no: String(bulletinNo),
-                        applicant_name: firstMark.ownerName,
+                        // Şemada olmayan kolonları dynamic_parent_context'e gömüyoruz
+                        dynamic_parent_context: JSON.stringify({ bulletin_no: bulletinNo, applicant_name: firstMark.ownerName }),
                         subject: subject,
                         body: body,
                         template_id: "tmpl_watchnotice",
-                        to_list: finalTo,  // Otomatik TO
-                        cc_list: finalCc,  // Otomatik CC
+                        to_list: finalTo, 
+                        cc_list: finalCc, 
                         status: "awaiting_client_approval", 
                         notification_type: "marka",
                         source: "bulletin_watch_system",
@@ -1376,13 +1368,13 @@ const handleReportGeneration = async (event, options = {}) => {
                             const zipFileName = `${ownerName.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 25)}_Rapor_${bulletinNo}.zip`;
                             const storagePath = `mail_attachments/${Date.now()}_${zipFileName}`;
                             
-                            // Önceden oluşturulmuş Blob'u (ZIP) yüklüyoruz
                             const { error: uploadError } = await supabase.storage.from('task_documents').upload(storagePath, blob);
                             
                             if (!uploadError) {
                                 const { data: urlData } = supabase.storage.from('task_documents').getPublicUrl(storagePath);
                                 
-                                await supabase.from('mail_notification_attachments').insert({
+                                // Tablo adı mail_attachments olarak güncellendi
+                                await supabase.from('mail_attachments').insert({
                                     notification_id: insertedMail.id,
                                     url: urlData.publicUrl,
                                     file_name: zipFileName,
@@ -1452,11 +1444,16 @@ const queryTpRecordForManualAdd = async () => {
     
     SimpleLoading.show('Sorgulanıyor...', 'Veritabanında aranıyor...');
     try {
+        // İlk olarak bültenin UUID'sini buluyoruz
+        const { data: bData } = await supabase.from('trademark_bulletins').select('id').eq('bulletin_no', bNo).limit(1);
+        if (!bData || bData.length === 0) throw new Error("Bülten bulunamadı.");
+
+        // Ardından record tablosunda doğru kolonlarla arıyoruz
         const { data, error } = await supabase
             .from('trademark_bulletin_records')
             .select('*')
-            .eq('bulletin_no', bNo)
-            .ilike('application_no', `%${appNo}%`); 
+            .eq('bulletin_id', bData[0].id)
+            .ilike('application_number', `%${appNo}%`); 
 
         if (error) throw error;
 
@@ -1473,25 +1470,24 @@ const queryTpRecordForManualAdd = async () => {
 
         tpSearchResultData = { 
             id: record.id, 
-            markName: record.mark_name, 
-            applicationNo: record.application_no, 
-            niceClasses: record.nice_classes, 
+            markName: record.brand_name, 
+            applicationNo: record.application_number, 
+            niceClasses: Array.isArray(record.nice_classes) ? record.nice_classes.join(', ') : record.nice_classes, 
             holders: record.holders, 
-            imagePath: record.image_path 
+            imagePath: record.image_url 
         };
         
-        document.getElementById('tpPreviewName').textContent = record.mark_name || '-';
-        document.getElementById('tpPreviewAppNo').textContent = record.application_no || '-';
-        document.getElementById('tpPreviewClasses').textContent = record.nice_classes || '-';
+        document.getElementById('tpPreviewName').textContent = record.brand_name || '-';
+        document.getElementById('tpPreviewAppNo').textContent = record.application_number || '-';
+        document.getElementById('tpPreviewClasses').textContent = tpSearchResultData.niceClasses || '-';
         document.getElementById('tpPreviewOwner').textContent = record.holders || '-';
-        document.getElementById('tpPreviewImg').src = record.image_path ? _normalizeImageSrc(record.image_path) : '/img/placeholder.png';
+        document.getElementById('tpPreviewImg').src = record.image_url ? _normalizeImageSrc(record.image_url) : '/img/placeholder.png';
         
         document.getElementById('tpPreviewCard').style.display = 'block'; 
         document.getElementById('btnSaveManualResult').disabled = false;
 
     } catch (error) { 
-        console.error("Manuel sorgu hatası:", error);
-        showNotification('Hata oluştu.', 'error'); 
+        showNotification(error.message || 'Hata oluştu.', 'error'); 
     } finally { 
         SimpleLoading.hide(); 
     }
@@ -1502,62 +1498,30 @@ const saveManualResultEntry = async () => {
     if (!monitoredId) return showNotification('İzlenen marka seçiniz.', 'warning');
     
     const sourceType = document.querySelector('input[name="manualSourceType"]:checked').value;
-    const currentBulletinVal = document.getElementById('bulletinSelect').value || MANUAL_COLLECTION_ID;
-    const bulletinNoVal = currentBulletinVal.split('_')[0] || 'GLOBAL';
     
-    // 🔥 Sütun isimleri Supabase veritabanındakiyle %100 eşleştirildi
     let resultPayload = { 
-        bulletin_id: currentBulletinVal,
-        bulletin_no: bulletinNoVal,
         monitored_trademark_id: monitoredId, 
         is_similar: true, 
         similarity_score: 1.0,
-        positional_exact_match_score: 1.0,
         source: 'manual',
         is_earlier: false
     };
 
     if (sourceType === 'tp') {
         if (!tpSearchResultData) return;
-        
-        let flatHolders = tpSearchResultData.holders;
-        if (Array.isArray(flatHolders)) {
-            flatHolders = flatHolders.map(h => h.name || h.holderName || h).join(', ');
-        } else {
-            flatHolders = String(flatHolders || '');
-        }
-
-        resultPayload = { 
-            ...resultPayload, 
-            similar_mark_name: tpSearchResultData.markName, 
-            similar_application_no: tpSearchResultData.applicationNo, 
-            holders: flatHolders, 
-            nice_classes: tpSearchResultData.niceClasses, 
-            image_path: tpSearchResultData.imagePath 
-        };
+        resultPayload.bulletin_record_id = tpSearchResultData.id; // Gerçek kaydın UUID'sini bağlıyoruz
     } else {
-        let uploadedImageUrl = null;
-        if (manualSelectedFile) {
-            SimpleLoading.updateText('Görsel Yükleniyor...', 'Lütfen bekleyiniz.');
-            const fileName = `manual/${Date.now()}_${manualSelectedFile.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
-            const { data, error } = await supabase.storage.from('brand_images').upload(fileName, manualSelectedFile);
-            if (!error && data) uploadedImageUrl = data.path;
-        }
-
-        resultPayload = { 
-            ...resultPayload, 
-            similar_mark_name: document.getElementById('manMarkName').value, 
-            similar_application_no: document.getElementById('manAppNo').value, 
-            holders: document.getElementById('manOwner').value, 
-            nice_classes: Array.from(document.querySelectorAll('.nice-class-box-item.selected')).map(el => el.dataset.classNo).join(', '), 
-            image_path: uploadedImageUrl 
-        };
+        return showNotification('Mevcut veritabanı şemasında harici (manuel metin) kayıt desteklenmemektedir.', 'warning');
     }
 
     SimpleLoading.show('Kaydediliyor...', 'Sonuç ekleniyor...');
     
-    // 🔥 Eski tablo adı düzeltildi ve eklenen data geri alındı
-    const { data: insertedData, error } = await supabase.from('monitoring_trademark_records').insert([resultPayload]).select();
+    const { data: insertedData, error } = await supabase.from('monitoring_trademark_records').insert([resultPayload]).select(`
+        id, monitored_trademark_id, similarity_score, is_similar, success_chance, note, source,
+        bulletin_record:trademark_bulletin_records!inner (
+            id, application_number, application_date, brand_name, nice_classes, holders, image_url, bulletin_id
+        )
+    `);
     
     SimpleLoading.hide();
     
@@ -1565,20 +1529,21 @@ const saveManualResultEntry = async () => {
         showNotification('Kayıt başarıyla eklendi.', 'success');
         $('#addManualResultModal').modal('hide');
         
-        // 🔥 Manuel eklenen kaydı ANINDA arayüze (tabloya) yansıtıyoruz
         if (insertedData && insertedData.length > 0) {
-            const newItem = insertedData[0];
+            const item = insertedData[0];
+            const bRec = item.bulletin_record || {};
+            
             allSimilarResults.push({
-                id: newItem.id,
-                objectID: newItem.id,
-                monitoredTrademarkId: newItem.monitored_trademark_id,
-                markName: newItem.similar_mark_name,
-                applicationNo: newItem.similar_application_no,
-                niceClasses: newItem.nice_classes,
-                similarityScore: newItem.similarity_score,
-                holders: newItem.holders,
-                imagePath: newItem.image_path,
-                bulletinId: newItem.bulletin_id,
+                id: item.id,
+                objectID: item.id,
+                monitoredTrademarkId: item.monitored_trademark_id,
+                markName: bRec.brand_name,
+                applicationNo: bRec.application_number,
+                niceClasses: Array.isArray(bRec.nice_classes) ? bRec.nice_classes.join(', ') : bRec.nice_classes,
+                similarityScore: item.similarity_score,
+                holders: bRec.holders,
+                imagePath: bRec.image_url,
+                bulletinId: bRec.bulletin_id,
                 isSimilar: true,
                 source: 'manual'
             });
@@ -1588,7 +1553,6 @@ const saveManualResultEntry = async () => {
             renderCurrentPageOfResults();
         }
     } else { 
-        console.error("Manuel kayıt hatası:", error);
         showNotification('Kayıt eklenemedi: ' + error.message, 'error'); 
     }
 };
