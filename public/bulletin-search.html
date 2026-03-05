@@ -100,14 +100,27 @@
         <p class="page-subtitle">Marka, Patent ve Tasarım bültenlerini sorgulayabilirsiniz.</p>
       </section>
 
-      <div class="tasks-container" style="padding: 20px;">
-  <label for="bulletinType">Bülten Türü:</label>
-  <select id="bulletinType" class="custom-select">
-    <option value="marka">Marka</option>
-    <option value="patent">Patent</option>
-    <option value="tasarim">Tasarım</option>
-  </select>
-</div>
+      <div class="tasks-container search-section">
+        <div style="display: flex; gap: 20px; align-items: flex-end; width: 100%;">
+          <div>
+            <label for="bulletinType" style="display: block; font-weight: bold; margin-bottom: 5px;">Bülten Türü:</label>
+            <select id="bulletinType" class="custom-select">
+              <option value="marka">Marka</option>
+              <option value="patent">Patent</option>
+              <option value="tasarim">Tasarım</option>
+            </select>
+          </div>
+          <div>
+            <label for="bulletinNo" style="display: block; font-weight: bold; margin-bottom: 5px;">Bülten No:</label>
+            <input type="text" id="bulletinNo" placeholder="Örn: 484" style="padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; width: 150px; font-size: 14px;">
+          </div>
+          <div>
+            <button id="searchButton" class="action-btn" style="height: 42px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+              <i class="fas fa-search"></i> Sorgula
+            </button>
+          </div>
+        </div>
+      </div>
 
 <div id="tabContainer" class="tabs-container" style="margin: 20px;"></div>
 <div id="recordsContainer" class="tasks-container" style="margin-top: 10px;"></div>
