@@ -45,7 +45,6 @@ function removeTurkishSuffixes(word: string) {
     return word;
 }
 
-// 🔥 ALGORİTMA DÜZELTMESİ 1: toLocaleLowerCase yerine toLowerCase kullanılarak I harfinin i'ye dönüşmesi sağlandı (Firebase ile %100 aynı)
 function cleanMarkName(name: string, removeGenericWords = true) {
     if (!name) return '';
     let cleaned = String(name).toLowerCase().replace(/[^a-z0-9ğüşöçı\s]/g, '').replace(/\s+/g, ' ').trim();
@@ -251,8 +250,12 @@ serve(async (req) => {
 
         if (body.action === 'worker') {
             const { jobId, workerId, monitoredMarks, selectedBulletinId, lastId, processedCount, totalBulletinRecords } = body;
-            const bulletinNo = selectedBulletinId.split('_')[0];
             const BATCH_SIZE = Math.max(25, Math.min(250, Math.floor(50000 / (monitoredMarks.length || 1))));
+
+            // 🔥 ÇÖZÜM: '484_20260112' gibi gelen ID'yi 'bulletin_main_484' yapıyoruz.
+            const realBulletinId = `bulletin_main_${selectedBulletinId.split('_')[0]}`;
+            
+            console.log(`[Worker ${workerId}] İşlem başlatıldı. Hedef bülten: ${realBulletinId}, Başlangıç ID: ${lastId}`);
 
             const preparedMarks = monitoredMarks.map((mark: any) => {
                 const rawName = mark.searchMarkName || mark.markName || mark.title || mark.trademarkName;
@@ -294,20 +297,29 @@ serve(async (req) => {
                 return { ...mark, primaryName, searchTerms, applicationDate: appDate, greenSet, orangeSet, blueSet, bypassClassFilter };
             });
 
+            // 🔥 Yeni bulletin_id kullanarak DB'den çek
             const { data: hits, error } = await supabase
                 .from('trademark_bulletin_records')
-                .select('id, application_no, application_date, mark_name, nice_classes, holders, image_path')
-                .eq('bulletin_no', bulletinNo)
+                .select('id, application_number, application_date, brand_name, nice_classes, holders, image_url')
+                .eq('bulletin_id', realBulletinId)
                 .order('id')
                 .gt('id', lastId)
                 .limit(BATCH_SIZE);
 
-            if (error) throw error;
+            if (error) {
+                console.error(`[Worker ${workerId}] Supabase Çekim Hatası:`, error);
+                throw error;
+            }
+
+            console.log(`[Worker ${workerId}] ${hits?.length || 0} adet marka getirildi.`);
 
             if (!hits || hits.length === 0) {
+                console.log(`[Worker ${workerId}] Getirilecek kayıt kalmadı, worker kapanıyor.`);
                 await supabase.from('search_progress_workers').update({ status: 'completed' }).eq('id', `${jobId}_w${workerId}`);
+                
                 const { data: activeWorkers } = await supabase.from('search_progress_workers').select('id').eq('job_id', jobId).eq('status', 'processing');
                 if (!activeWorkers || activeWorkers.length === 0) {
+                    console.log(`[Worker ${workerId}] Tüm workerlar tamamlandı. Ana job 'completed' yapılıyor.`);
                     await supabase.from('search_progress').update({ status: 'completed' }).eq('id', jobId);
                 }
                 return new Response(JSON.stringify({ success: true, finished: true }), { headers: corsHeaders });
@@ -324,6 +336,7 @@ serve(async (req) => {
             for (let i = 0; i < hits.length; i++) {
                 if (Date.now() - startTime > CPU_TIME_LIMIT) {
                     newLastId = i > 0 ? hits[i - 1].id : hits[0].id; 
+                    console.log(`[Worker ${workerId}] CPU limiti aşıldı, işlem ${newLastId} id'sinde duraklatıldı.`);
                     break;
                 }
 
@@ -342,8 +355,7 @@ serve(async (req) => {
                 
                 const hitClasses = rawHitClasses.map(cleanClass).filter(Boolean);
                 
-                const rawHitName = String(hit.mark_name || '');
-                // 🔥 ALGORİTMA DÜZELTMESİ 2: İstisna kuralı için RAW (Sadece özel karakterlerden arındırılmış) kelime kullan.
+                const rawHitName = String(hit.brand_name || '');
                 const rawCleanedHitName = rawHitName.toLowerCase().replace(/[^a-z0-9ğüşöçı\s]/g, '').replace(/\s+/g, ' ').trim();
                 const isHitMultiWord = rawHitName.trim().split(/\s+/).length > 1;
                 const cleanedHitName = cleanMarkName(rawHitName, isHitMultiWord); 
@@ -361,34 +373,37 @@ serve(async (req) => {
                     });
 
                     for (const searchItem of mark.searchTerms) {
-                        // 🔥 ALGORİTMA DÜZELTMESİ 2 (Devamı): Includes kontrolünde raw kelime kullanarak toleransı artırdık.
                         let isExactPrefixSuffix = searchItem.cleanedSearchName.length >= 3 && rawCleanedHitName.includes(searchItem.cleanedSearchName);
 
                         if (!hasPoolMatch && !isExactPrefixSuffix) continue;
 
                         const { finalScore, positionalExactMatchScore } = calculateSimilarityScoreInternal(
-                            searchItem.term, hit.mark_name, searchItem.cleanedSearchName, cleanedHitName
+                            searchItem.term, rawHitName, searchItem.cleanedSearchName, cleanedHitName
                         );
 
                         if (finalScore < 0.5 && positionalExactMatchScore < 0.5 && !isExactPrefixSuffix) continue;
 
-                        let holdersData = hit.holders;
-                        if (typeof holdersData === 'string') { holdersData = holdersData.split(',').map((h: string) => h.trim()); }
-
                         uiResults.push({
-                            job_id: jobId, monitored_trademark_id: mark.id, mark_name: hit.mark_name,
-                            application_no: hit.application_no, nice_classes: hit.nice_classes, similarity_score: finalScore,
-                            holders: holdersData, image_path: hit.image_path
+                            job_id: jobId, 
+                            monitored_trademark_id: mark.id, 
+                            mark_name: hit.brand_name,
+                            application_no: hit.application_number, 
+                            nice_classes: Array.isArray(hit.nice_classes) ? hit.nice_classes.join(', ') : String(hit.nice_classes || ''), 
+                            similarity_score: finalScore,
+                            holders: typeof hit.holders === 'string' ? hit.holders : JSON.stringify(hit.holders), 
+                            image_path: hit.image_url
                         });
 
-                        let holdersTextStr = Array.isArray(hit.holders) ? hit.holders.join(', ') : String(hit.holders || '');
-
+                        // 🔥 YENİ DB: Kalıcı Kayıt Tablosuna Sadece İlişkisel ID Atılıyor
                         permanentRecords.push({
-                            bulletin_id: selectedBulletinId, bulletin_no: bulletinNo, monitored_trademark_id: mark.id,
-                            similar_mark_name: hit.mark_name, similar_application_no: hit.application_no,
-                            application_date: hit.application_date || null, similarity_score: finalScore, positional_exact_match_score: positionalExactMatchScore,
-                            is_earlier: false, matched_term: searchItem.term, source: 'new',
-                            holders: holdersTextStr, nice_classes: hit.nice_classes || '', image_path: hit.image_path || '',is_similar: false
+                            id: `${mark.id}_${hit.id}`, // 🔥 ÇÖZÜM: Zorunlu ID alanını biz oluşturuyoruz (Benzersiz)
+                            monitored_trademark_id: mark.id,
+                            bulletin_record_id: hit.id,
+                            similarity_score: finalScore,
+                            is_earlier: false, 
+                            matched_term: searchItem.term, 
+                            source: 'auto',
+                            is_similar: false
                         });
                         break;
                     }
@@ -396,8 +411,16 @@ serve(async (req) => {
             }
 
             if (uiResults.length > 0) {
+                console.log(`[Worker ${workerId}] ${uiResults.length} adet benzer sonuç bulundu ve DB'ye yazılıyor...`);
+                
+                // UI Sonuçlarını Yaz
                 await supabase.from('search_progress_results').insert(uiResults);
-                await supabase.from('monitoring_trademark_records').insert(permanentRecords);
+                
+                // 🔥 ÇÖZÜM: Kalıcı sonuçları yaz ve hata varsa logla
+                const { error: permError } = await supabase.from('monitoring_trademark_records').upsert(permanentRecords, { onConflict: 'id' });
+                if (permError) {
+                    console.error(`[Worker ${workerId}] Kalıcı DB Kayıt Hatası:`, permError);
+                }
                 
                 const { data: jobData } = await supabase.from('search_progress').select('current_results').eq('id', jobId).single();
                 await supabase.from('search_progress').update({ current_results: (jobData?.current_results || 0) + uiResults.length }).eq('id', jobId);
@@ -406,6 +429,8 @@ serve(async (req) => {
             const newProcessedCount = processedCount + actualProcessedCount;
             const progressPercent = Math.min(100, Math.floor((newProcessedCount / totalBulletinRecords) * 100));
             await supabase.from('search_progress_workers').upsert({ id: `${jobId}_w${workerId}`, job_id: jobId, status: 'processing', progress: progressPercent });
+
+            console.log(`[Worker ${workerId}] %${progressPercent} tamamlandı. Sonraki adıma geçiliyor.`);
 
             EdgeRuntime.waitUntil(
                 supabase.functions.invoke('perform-trademark-similarity-search', {
@@ -424,10 +449,20 @@ serve(async (req) => {
         if (!monitoredMarks || !selectedBulletinId) throw new Error("Eksik parametre.");
 
         const jobId = `job_${Date.now()}`;
-        const bulletinNo = selectedBulletinId.split('_')[0];
         
-        const { count } = await supabase.from('trademark_bulletin_records').select('*', { count: 'exact', head: true }).eq('bulletin_no', bulletinNo);
+        // 🔥 ÇÖZÜM: İlk sayımda da ID'yi düzeltiyoruz
+        const realBulletinId = `bulletin_main_${selectedBulletinId.split('_')[0]}`;
+        console.log(`[Main Job] Başlatılıyor... Job ID: ${jobId}, Hedef Bülten: ${realBulletinId}`);
+
+        const { count, error: countError } = await supabase.from('trademark_bulletin_records').select('*', { count: 'exact', head: true }).eq('bulletin_id', realBulletinId);
+        
+        if (countError) {
+            console.error(`[Main Job] Kayıt sayısı çekilirken hata:`, countError);
+            throw countError;
+        }
+
         const totalRecords = count || 1;
+        console.log(`[Main Job] Toplam aranacak marka sayısı: ${totalRecords}`);
 
         await supabase.from('search_progress').insert({ id: jobId, status: 'processing', current_results: 0, total_records: totalRecords });
         
@@ -457,6 +492,7 @@ serve(async (req) => {
         });
 
     } catch (error) {
+        console.error("[General Error] İşlem hatası:", error);
         return new Response(JSON.stringify({ success: false, error: error.message }), {
             status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
