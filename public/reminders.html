@@ -325,7 +325,7 @@
 
                 document.getElementById('reminderForm').onsubmit = async (e) => {
                     e.preventDefault();
-                    const data = { title: document.getElementById('reminderTitle').value, description: document.getElementById('reminderDescription').value, dueDate: document.getElementById('reminderDueDate').value, category: document.getElementById('reminderCategory').value, userId: this.currentUser.uid, isRead: false, status: 'active', createdAt: new Date().toISOString() };
+                    const data = { title: document.getElementById('reminderTitle').value, description: document.getElementById('reminderDescription').value, dueDate: document.getElementById('reminderDueDate').value, category: document.getElementById('reminderCategory').value, userId: this.currentUser.id, isRead: false, status: 'active', createdAt: new Date().toISOString() };
                     await reminderService.addReminder(data);
                     showNotification("Yeni hatırlatma başarıyla oluşturuldu.", "success");
                     document.getElementById('reminderModal').classList.remove('show');
