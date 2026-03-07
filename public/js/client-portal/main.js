@@ -6,6 +6,7 @@ import { PortfolioManager } from './PortfolioManager.js';
 import { TaskManager } from './TaskManager.js';
 import { InvoiceManager } from './InvoiceManager.js';
 import { ContractManager } from './ContractManager.js';
+import { RenderHelper } from './RenderHelper.js';
 import Pagination from '../pagination.js';
 
 class ClientPortalController {
@@ -16,6 +17,7 @@ class ClientPortalController {
         this.taskManager = new TaskManager();
         this.invoiceManager = new InvoiceManager();
         this.contractManager = new ContractManager();
+        this.renderHelper = new RenderHelper(this.state);
 
         // Merkezi Veri Havuzu (Global State)
         this.state = {
@@ -201,6 +203,8 @@ class ClientPortalController {
         this.filterTasks();
         this.filterInvoices();
         this.filterContracts();
+        this.filterSuits();
+        this.prepareAndRenderObjections();
     }
 
     updateDashboardCounts() {
@@ -274,6 +278,128 @@ class ClientPortalController {
         
         this.state.paginations.portfolio.update(filtered.length);
         this.renderPortfolioTable(filtered.slice(0, 10), 0);
+    }
+
+    // DAVA FİLTRELEME VE RENDER
+    filterSuits() {
+        // İleride arama kutusu eklenirse buraya eklenebilir
+        this.state.filteredSuits = this.state.suits;
+        
+        if (!this.state.paginations.suit) {
+            this.state.paginations.suit = new Pagination({
+                itemsPerPage: 10,
+                containerId: 'davaPagination',
+                onPageChange: (page, perPage) => {
+                    const start = (page - 1) * perPage;
+                    this.renderHelper.renderDavaTable(this.state.filteredSuits.slice(start, start + perPage), start);
+                }
+            });
+        }
+        
+        this.state.paginations.suit.update(this.state.filteredSuits.length);
+        this.renderHelper.renderDavaTable(this.state.filteredSuits.slice(0, 10), 0);
+    }
+
+    // İTİRAZ (OBJECTION) VERİSİ HAZIRLAMA VE RENDER
+    async prepareAndRenderObjections() {
+        const REQUEST_RESULT_STATUS = {
+            '24': 'Eksiklik Bildirimi', '28': 'Kabul', '29': 'Kısmi Kabul', '30': 'Ret',
+            '31': 'B.S - Kabul', '32': 'B.S - Kısmi Kabul','33': 'B.S - Ret',
+            '34': 'İ.S - Kabul', '35': 'İ.S - Kısmi Kabul','36': 'İ.S - Ret',
+            '50': 'Kabul', '51': 'Kısmi Kabul', '52': 'Ret'
+        };
+
+        const PARENT_TYPES = ['7', '19', '20'];
+        
+        // İtiraz görevlerini ayır
+        const objectionTasks = this.state.tasks.filter(t => PARENT_TYPES.includes(String(t.taskType)));
+        
+        if (objectionTasks.length === 0) {
+            this.renderHelper.renderObjectionTable([]);
+            return;
+        }
+
+        // İlgili markaların ID'lerini topla
+        const ipRecordIds = [...new Set(objectionTasks.map(t => t.relatedIpRecordId).filter(Boolean))];
+        
+        // Supabase'den bu markaların "TÜM İŞLEMLERİNİ" (transactions) tek seferde çek
+        const { data: transactionsData } = await supabase
+            .from('transactions')
+            .select('*, transaction_documents(*)')
+            .in('ip_record_id', ipRecordIds);
+
+        const allTransactions = transactionsData || [];
+        const rows = [];
+
+        objectionTasks.forEach(task => {
+            const ipRecord = this.state.portfolios.find(p => p.id === task.relatedIpRecordId) || {};
+            const taskTxs = allTransactions.filter(tx => tx.ip_record_id === task.relatedIpRecordId);
+            
+            // Parent Transaction Bul
+            let parentTx = task.details?.triggeringTransactionId 
+                ? taskTxs.find(tx => String(tx.id) === String(task.details.triggeringTransactionId))
+                : taskTxs.filter(tx => String(tx.transaction_type_id) === String(task.taskType)).sort((a,b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+            if (!parentTx) {
+                parentTx = { id: 'virt-'+task.id, transaction_type_id: task.taskType, created_at: task.createdAt, isVirtual: true };
+            }
+
+            // Statü Rengi ve Metni
+            let computedStatus = 'Karar Bekleniyor';
+            let badgeColor = 'secondary';
+            const rr = parentTx.request_result;
+            
+            if (rr && REQUEST_RESULT_STATUS[String(rr)]) {
+                computedStatus = REQUEST_RESULT_STATUS[String(rr)];
+                if (computedStatus.includes('Ret')) badgeColor = 'danger';
+                else if (computedStatus.includes('Kabul')) badgeColor = 'success';
+                else badgeColor = 'info';
+            } else if ((task.status || '').includes('awaiting')) {
+                computedStatus = 'Onay Bekliyor';
+                badgeColor = 'warning';
+            }
+
+            // Alt işlemleri bul
+            const children = parentTx.isVirtual ? [] : taskTxs.filter(tx => tx.transaction_hierarchy === 'child' && tx.parent_id === parentTx.id);
+
+            // Dökümanlar
+            const parentDocs = parentTx.transaction_documents || [];
+
+            rows.push({
+                id: task.id,
+                recordId: task.relatedIpRecordId,
+                origin: ipRecord.origin,
+                brandImageUrl: ipRecord.brandImageUrl,
+                title: ipRecord.title || task.recordTitle,
+                transactionTypeName: task.taskTypeDisplay,
+                applicationNumber: ipRecord.applicationNumber,
+                applicantName: task.details?.applicantName || 'Müvekkil',
+                bulletinDate: task.details?.brandInfo?.opposedMarkBulletinDate,
+                bulletinNo: task.details?.brandInfo?.opposedMarkBulletinNo,
+                epatsDate: parentTx.created_at,
+                statusText: computedStatus,
+                statusBadge: badgeColor,
+                allParentDocs: parentDocs,
+                childrenData: children
+            });
+        });
+
+        this.state.filteredObjections = rows;
+
+        // Sayfalama
+        if (!this.state.paginations.objection) {
+            this.state.paginations.objection = new Pagination({
+                itemsPerPage: 10,
+                containerId: 'davaItirazPagination',
+                onPageChange: (page, perPage) => {
+                    const start = (page - 1) * perPage;
+                    this.renderHelper.renderObjectionTable(this.state.filteredObjections.slice(start, start + perPage), start);
+                }
+            });
+        }
+        
+        this.state.paginations.objection.update(rows.length);
+        this.renderHelper.renderObjectionTable(rows.slice(0, 10), 0);
     }
 
     renderPortfolioTable(dataSlice, startIndex) {
