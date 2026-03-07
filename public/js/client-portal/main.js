@@ -171,29 +171,25 @@ class ClientPortalController {
     filterPortfolios() {
         const searchVal = (document.getElementById('portfolioSearchText')?.value || '').toLowerCase().trim();
         const statusVal = document.getElementById('portfolioDurumFilter')?.value || 'TÜMÜ';
-        const menseVal = document.getElementById('menseFilter')?.value || 'HEPSI'; // Arayüzden alınır
+        const menseVal = document.getElementById('menseFilter')?.value || 'HEPSI';
 
-        // 1. Ortak Filtreleme
         let filtered = this.state.portfolios.filter(item => {
             if (item.transactionHierarchy === 'child') return false;
 
             const originRaw = (item.origin || 'TÜRKPATENT').toUpperCase();
-            const isTurk = originRaw.includes('TURK');
+            // 🔥 DÜZELTME: TÜRK ve TURK kelimelerinin ikisi de kontrol ediliyor
+            const isTurk = originRaw.includes('TURK') || originRaw.includes('TÜRK');
             
-            // Menşe Kontrolü
             if (menseVal === 'TÜRKPATENT' && !isTurk) return false;
             if (menseVal === 'YURTDISI' && isTurk) return false;
 
-            // Arama Kutusu Kontrolü
             if (searchVal) {
                 const searchable = `${item.title} ${item.applicationNumber} ${item.registrationNumber}`.toLowerCase();
                 if (!searchable.includes(searchVal)) return false;
             }
 
-            // Durum Kontrolü
             if (statusVal !== 'TÜMÜ' && !(item.status || '').toLowerCase().includes(statusVal.toLowerCase())) return false;
 
-            // Kolon Filtreleri Kontrolü (Marka Listesi İçin)
             for (const [key, selectedValues] of Object.entries(this.state.activeColumnFilters)) {
                 if (!key.startsWith('marka-list-')) continue;
                 const colIdx = key.split('-').pop();
@@ -204,16 +200,13 @@ class ClientPortalController {
 
                 if (!selectedValues.includes(cellValue.trim())) return false;
             }
-
             return true;
         });
 
-        // 2. Tiplere Göre Ayır (Marka, Patent, Tasarım)
         const markaList = filtered.filter(p => !p.type || p.type.toLowerCase().includes('marka') || p.type.toLowerCase().includes('trademark'));
         const patentList = filtered.filter(p => p.type && p.type.toLowerCase().includes('patent'));
         const tasarimList = filtered.filter(p => p.type && (p.type.toLowerCase().includes('design') || p.type.toLowerCase().includes('tasarim')));
 
-        // 3. Marka Listesini Çiz (Pagination ile)
         this.state.filteredPortfolios = markaList;
         if (!this.state.paginations.portfolio) {
             this.state.paginations.portfolio = new Pagination({
@@ -227,11 +220,8 @@ class ClientPortalController {
         this.state.paginations.portfolio.update(markaList.length);
         this.renderPortfolioTable(markaList.slice(0, 10), 0);
 
-        // 4. Patent ve Tasarım Listelerini Çiz
         this.renderPatentTable(patentList);
         this.renderTasarimTable(tasarimList);
-        
-        console.log(`Portföy Dağılımı: ${markaList.length} Marka, ${patentList.length} Patent, ${tasarimList.length} Tasarım çizildi.`);
     }
 
     renderPortfolioTable(dataSlice, startIndex) {
@@ -249,7 +239,9 @@ class ClientPortalController {
             const row = document.createElement('tr');
             
             const originRaw = (item.origin || 'TÜRKPATENT').toUpperCase();
-            const originDisplay = originRaw.includes('TURK') ? 'TÜRKPATENT' : (item.country || 'Yurtdışı');
+            // 🔥 DÜZELTME
+            const isTurk = originRaw.includes('TURK') || originRaw.includes('TÜRK');
+            const originDisplay = isTurk ? 'TÜRKPATENT' : (item.country || 'Yurtdışı');
             
             const childRecords = this.state.portfolios.filter(p => p.parentId === item.id);
             const isInternational = childRecords.length > 0;
@@ -706,9 +698,6 @@ class ClientPortalController {
         });
     }
 
-    // ==========================================
-    // KOLON FİLTRELEME MANTIĞI
-    // ==========================================
     toggleColumnFilter(icon) {
         const tableId = icon.dataset.table;
         const colIdx = icon.dataset.col;
@@ -726,7 +715,12 @@ class ClientPortalController {
             if (item.transactionHierarchy === 'child' || item.isChild) return;
             let val = '';
             if (tableId === 'marka-list') {
-                if (colIdx == 1) { const o = (item.origin||'').toUpperCase(); val = o.includes('TURK') ? 'TÜRKPATENT' : (item.country||'Yurtdışı'); }
+                if (colIdx == 1) { 
+                    const o = (item.origin||'').toUpperCase(); 
+                    // 🔥 DÜZELTME
+                    const isTurk = o.includes('TURK') || o.includes('TÜRK');
+                    val = isTurk ? 'TÜRKPATENT' : (item.country||'Yurtdışı'); 
+                }
                 else if (colIdx == 3) val = item.title || item.brandText || '';
                 else if (colIdx == 7) val = item.status || '';
             } else if (tableId === 'dava-itiraz-list') {
@@ -903,7 +897,9 @@ class ClientPortalController {
                 if (imgUrl) base64Image = await this.imageUrlToBase64(imgUrl);
 
                 const originRaw = (item.origin || 'TÜRKPATENT').toUpperCase();
-                const originDisplay = originRaw.includes('TURK') ? 'TÜRKPATENT' : (item.country || 'Yurtdışı');
+                // 🔥 DÜZELTME
+                const isTurk = originRaw.includes('TURK') || originRaw.includes('TÜRK');
+                const originDisplay = isTurk ? 'TÜRKPATENT' : (item.country || 'Yurtdışı');
                 
                 dataToExport.push({
                     type: 'parent',
@@ -1049,7 +1045,14 @@ class ClientPortalController {
         const now = new Date(); const nextYear = new Date(); nextYear.setFullYear(now.getFullYear() + 1);
 
         portfolios.forEach(item => {
-            let code = item.origin?.toUpperCase().includes('TURK') ? 'TR' : item.country?.toUpperCase().trim();
+            const originRaw = (item.origin || '').toUpperCase();
+            // 🔥 DÜZELTME
+            const isTurk = originRaw.includes('TURK') || originRaw.includes('TÜRK');
+            
+            let code = '';
+            if (isTurk) code = 'TR';
+            else if (item.country) code = item.country.toUpperCase().trim();
+            
             if (code && code.length === 2) { mapData[code] = (mapData[code] || 0) + 1; uniqueCountries.add(code); }
             const t = item.type === 'trademark' ? 'Marka' : (item.type === 'patent' ? 'Patent' : 'Tasarım');
             typeCounts[t] = (typeCounts[t] || 0) + 1;
@@ -1058,7 +1061,7 @@ class ClientPortalController {
                 let rDate = new Date(item.renewalDate);
                 if (rDate > now && rDate < nextYear) {
                     const key = `${rDate.getFullYear()}-${rDate.getMonth()}`; 
-                    budgetForecast[key] = (budgetForecast[key] || 0) + (code === 'TR' ? 4500 : 15000);
+                    budgetForecast[key] = (budgetForecast[key] || 0) + (isTurk ? 4500 : 15000);
                 }
             }
         });
