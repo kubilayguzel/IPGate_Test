@@ -13,29 +13,9 @@ serve(async (req: Request) => {
     const payload = await req.json();
     const { type, record, old_record } = payload;
 
-    // Sadece UPDATE işlemlerini dinle
-    if (type !== 'UPDATE' || !record || !old_record) {
-      return new Response("İşlem UPDATE değil, atlandı.", { status: 200 });
-    }
-
-    // ==========================================
-    // SENARYO TESPİTİ
-    // ==========================================
-    const becameCompleted = old_record.status !== 'completed' && record.status === 'completed';
-    const wasAwaiting = ['awaiting_client_approval', 'awaiting-approval'].includes(old_record.status);
-    const clientApproved = wasAwaiting && record.status === 'open';
-    const clientClosed = wasAwaiting && ['client_approval_closed', 'client_no_response_closed'].includes(record.status);
-
-    // Eğer ilgilendiğimiz 3 durumdan hiçbiri değilse çık
-    if (!becameCompleted && !clientApproved && !clientClosed) {
-        return new Response("Mail atılacak bir statü değişimi yok.", { status: 200 });
-    }
-
-    const taskTypeId = String(record.task_type_id || '');
-    
-    // Tahakkuk (53) ve Değerlendirme (66) işleri tamamlandığında mail ATILMAZ
-    if (becameCompleted && ['53', '66'].includes(taskTypeId)) {
-        return new Response(`TaskType ${taskTypeId} tamamlanma maili gerektirmez.`, { status: 200 });
+    // Sadece INSERT ve UPDATE işlemlerini dinle
+    if (!['INSERT', 'UPDATE'].includes(type) || !record) {
+      return new Response("İlgisiz işlem, atlandı.", { status: 200 });
     }
 
     const supabaseAdmin = createClient(
@@ -50,7 +30,7 @@ serve(async (req: Request) => {
     let applicants: any[] = [];
     if (record.ip_record_id) {
         const { data: ipData } = await supabaseAdmin.from('ip_records')
-            .select(`*, ip_record_trademark_details(brand_name), ip_record_applicants(person_id, persons(name))`)
+            .select(`*, ip_record_trademark_details(brand_name, brand_image_url), ip_record_applicants(person_id, persons(name))`)
             .eq('id', record.ip_record_id)
             .single();
         
@@ -62,8 +42,8 @@ serve(async (req: Request) => {
 
     const brandName = ipRecordData?.ip_record_trademark_details?.[0]?.brand_name || record.details?.iprecordTitle || "-";
     const appNo = ipRecordData?.application_number || record.details?.iprecordApplicationNo || "-";
+    const taskTypeId = String(record.task_type_id || '');
 
-    // Alıcıları (Recipients) Belirleme Fonksiyonu
     async function getRecipients(personIds: string[], processType: string = 'trademark') {
         const to: string[] = [];
         const cc: string[] = [];
@@ -83,211 +63,292 @@ serve(async (req: Request) => {
                 }
             }
         }
-        return { 
-            to: [...new Set(to)].filter(Boolean), 
-            cc: [...new Set(cc)].filter(Boolean) 
-        };
+        return { to: [...new Set(to)].filter(Boolean), cc: [...new Set(cc)].filter(Boolean) };
     }
 
     // =========================================================================
-    // SENARYO 1: İŞ TAMAMLANDI
+    // SENARYO 0: YENİ GÖREV OLUŞTURULDU (INSERT) -> YENİLEME MAİLİ TASLAĞI
     // =========================================================================
-    if (becameCompleted) {
-        console.log(`✅ [Senaryo 1] Görev tamamlandı. Kapanış maili taslağı hazırlanıyor...`);
+    if (type === 'INSERT' && taskTypeId === '22' && record.status === 'awaiting_client_approval') {
+        console.log(`✅ [Senaryo 0] Yenileme görevi açıldı. Taslak mail hazırlanıyor...`);
 
+        let subject = `${appNo} - "${brandName}" - Marka Yenileme İşlemi / Talimat Bekleniyor`;
+        let body = record.description || "Yenileme işlemi için onayınızı rica ederiz.";
         let templateId = null;
-        const { data: ruleData } = await supabaseAdmin.from('template_rules')
-            .select('template_id')
-            .eq('source_type', 'task_completion_epats')
-            .eq('task_type', taskTypeId)
-            .maybeSingle();
-        
-        if (ruleData) templateId = ruleData.template_id;
 
-        let subject = "İşleminiz Tamamlandı";
-        let body = "İlgili görev tamamlanmıştır.";
-        let hasTemplate = false;
+        const { data: ruleData } = await supabaseAdmin.from('template_rules').select('template_id').eq('source_type', 'task').eq('task_type', '22').maybeSingle();
 
-        if (templateId) {
+        if (ruleData && ruleData.template_id) {
+            templateId = ruleData.template_id;
             const { data: tmplData } = await supabaseAdmin.from('mail_templates').select('*').eq('id', templateId).maybeSingle();
             if (tmplData) {
-                hasTemplate = true;
-                subject = tmplData.mail_subject || tmplData.subject || subject;
-                
-                const recordOwnerType = ipRecordData?.record_owner_type || 'self';
-                
-                if (templateId === 'tmpl_50_document') {
-                    if (recordOwnerType === 'third_party' && tmplData.body2) body = tmplData.body2;
-                    else if (recordOwnerType === 'self' && tmplData.body1) body = tmplData.body1;
-                    else body = tmplData.body || body;
-                } else {
-                    body = tmplData.body || body;
-                }
+                subject = tmplData.subject || subject;
+                let rawBody = tmplData.body || body;
+
+                let renewalDateText = "-";
+                const renDate = ipRecordData?.protection_end_date || ipRecordData?.renewal_date;
+                if (renDate) renewalDateText = new Date(renDate).toLocaleDateString('tr-TR');
 
                 const params: any = {
                     "{{applicationNo}}": appNo,
                     "{{markName}}": brandName,
-                    "{{is_basligi}}": record.title || "",
-                    "{{relatedIpRecordTitle}}": brandName
+                    "{{relatedIpRecordTitle}}": brandName,
+                    "{{applicantNames}}": applicants.map(a => a.persons?.name).join(', ') || "-",
+                    "{{renewalDate}}": renewalDateText
                 };
                 
                 for (const [k, v] of Object.entries(params)) {
                     subject = subject.replace(new RegExp(k, 'g'), String(v));
-                    body = body.replace(new RegExp(k, 'g'), String(v));
+                    rawBody = rawBody.replace(new RegExp(k, 'g'), String(v));
                 }
+                body = rawBody;
             }
         }
 
         const targetIds = record.task_owner_id ? [record.task_owner_id] : applicants.map(a => a.person_id);
         let { to, cc } = await getRecipients(targetIds);
-
         const missingFields = [];
         if (to.length === 0 && cc.length === 0) missingFields.push("recipients");
-        if (!hasTemplate) missingFields.push("template");
 
-        const status = missingFields.length > 0 ? "missing_info" : "awaiting_client_approval";
-
-        const { data: insertedDoc, error: insertError } = await supabaseAdmin.from('mail_notifications').insert({
+        await supabaseAdmin.from('mail_notifications').insert({
             id: crypto.randomUUID(),
             associated_task_id: record.id,
             related_ip_record_id: record.ip_record_id,
+            client_id: record.task_owner_id || (applicants[0]?.person_id || null),
             to_list: to,
             cc_list: cc,
             subject: subject,
             body: body,
-            status: status,
+            status: missingFields.length > 0 ? "missing_info" : "awaiting_client_approval",
             missing_fields: missingFields,
             is_draft: true,
             mode: "draft",
             notification_type: "marka",
             template_id: templateId,
-            source: "task_completion"
-        }).select();
-
-        if (insertError) console.error("❌ [Senaryo 1] Kayıt Hatası:", insertError.message);
-        else console.log("🚀 [Senaryo 1] Kayıt Başarılı! ID:", insertedDoc?.[0]?.id);
+            source: "task_renewal_auto"
+        });
     }
 
     // =========================================================================
-    // SENARYO 2: MÜŞTERİ ONAYLADI (clientApproved)
+    // UPDATE İŞLEMLERİ (Sadece Statü veya Veri Değiştiğinde)
     // =========================================================================
-    if (clientApproved) {
-        console.log(`📧 [Senaryo 2] Müvekkil onayladı. 'Talimatınız Alındı' maili hazırlanıyor...`);
-
-        const { data: tmplData } = await supabaseAdmin.from('mail_templates')
-            .select('*').eq('id', 'tmpl_clientInstruction_1').maybeSingle();
+    if (type === 'UPDATE' && old_record) {
         
-        let subject = tmplData?.subject || "{{relatedIpRecordTitle}} - Talimatınız Alındı";
-        let body = tmplData?.body || "<p>Talimatınız alınmıştır, işlem başlatılıyor.</p>";
-
-        subject = subject.replace(/{{relatedIpRecordTitle}}/g, brandName);
-        body = body.replace(/{{relatedIpRecordTitle}}/g, brandName);
-
-        const threadKey = `${record.ip_record_id}_${taskTypeId}`;
-        const { data: threadData } = await supabaseAdmin.from('mail_threads').select('root_subject').eq('id', threadKey).maybeSingle();
+        // ---------------------------------------------------------------------
+        // EKSİK 3: EPATS BELGESİ SİLİNDİ (CLEANUP)
+        // ---------------------------------------------------------------------
+        const hadMainEpats = !!(old_record.details?.epatsDocument);
+        const hasMainEpats = !!(record.details?.epatsDocument);
         
-        if (threadData && threadData.root_subject) {
-            const innerSubjectHtml = `<div style="background-color: #f8f9fa; border-left: 4px solid #1a73e8; padding: 15px; margin: 0 0 20px 0; font-family: Arial, sans-serif; color: #333; font-size: 14px;"><strong style="color: #1a73e8;">KONU:</strong> ${subject}</div>`;
-            subject = threadData.root_subject;
-            if (body.toLowerCase().includes("<body")) {
-                body = body.replace(/<body[^>]*>/i, (match) => match + innerSubjectHtml);
-            } else {
-                body = innerSubjectHtml + body;
+        if (hadMainEpats && !hasMainEpats) {
+            console.log(`🗑️ [Cleanup] EPATS belgesi silindi. Gönderilmemiş mailler temizleniyor...`);
+            await supabaseAdmin.from('mail_notifications')
+                .delete()
+                .eq('associated_task_id', record.id)
+                .in('status', ['draft', 'awaiting_client_approval', 'missing_info', 'pending', 'evaluation_pending']);
+        }
+
+        // STATÜ TESPİTLERİ
+        const becameCompleted = old_record.status !== 'completed' && record.status === 'completed';
+        const wasAwaiting = ['awaiting_client_approval', 'awaiting-approval'].includes(old_record.status);
+        const clientApproved = wasAwaiting && record.status === 'open';
+        const clientClosed = wasAwaiting && ['client_approval_closed', 'client_no_response_closed'].includes(record.status);
+
+        // ---------------------------------------------------------------------
+        // SENARYO 1: İŞ TAMAMLANDI
+        // ---------------------------------------------------------------------
+        if (becameCompleted && !['53', '66'].includes(taskTypeId)) {
+            console.log(`✅ [Senaryo 1] Görev tamamlandı. Kapanış maili taslağı hazırlanıyor...`);
+
+            let templateId = null;
+            const { data: ruleData } = await supabaseAdmin.from('template_rules').select('template_id').eq('source_type', 'task_completion_epats').eq('task_type', taskTypeId).maybeSingle();
+            if (ruleData) templateId = ruleData.template_id;
+
+            let subject = "İşleminiz Tamamlandı";
+            let body = "İlgili görev tamamlanmıştır.";
+            let hasTemplate = false;
+
+            if (templateId) {
+                const { data: tmplData } = await supabaseAdmin.from('mail_templates').select('*').eq('id', templateId).maybeSingle();
+                if (tmplData) {
+                    hasTemplate = true;
+                    subject = tmplData.mail_subject || tmplData.subject || subject;
+                    const recordOwnerType = ipRecordData?.record_owner_type || 'self';
+                    
+                    if (templateId === 'tmpl_50_document') {
+                        if (recordOwnerType === 'third_party' && tmplData.body2) body = tmplData.body2;
+                        else if (recordOwnerType === 'self' && tmplData.body1) body = tmplData.body1;
+                        else body = tmplData.body || body;
+                    } else {
+                        body = tmplData.body || body;
+                    }
+
+                    const params: any = {
+                        "{{applicationNo}}": appNo,
+                        "{{markName}}": brandName,
+                        "{{is_basligi}}": record.title || "",
+                        "{{relatedIpRecordTitle}}": brandName
+                    };
+                    for (const [k, v] of Object.entries(params)) {
+                        subject = subject.replace(new RegExp(k, 'g'), String(v));
+                        body = body.replace(new RegExp(k, 'g'), String(v));
+                    }
+                }
             }
+
+            const targetIds = record.task_owner_id ? [record.task_owner_id] : applicants.map(a => a.person_id);
+            let { to, cc } = await getRecipients(targetIds);
+            const missingFields = [];
+            if (to.length === 0 && cc.length === 0) missingFields.push("recipients");
+            if (!hasTemplate) missingFields.push("template");
+
+            await supabaseAdmin.from('mail_notifications').insert({
+                id: crypto.randomUUID(),
+                associated_task_id: record.id,
+                related_ip_record_id: record.ip_record_id,
+                to_list: to,
+                cc_list: cc,
+                subject: subject,
+                body: body,
+                status: missingFields.length > 0 ? "missing_info" : "awaiting_client_approval",
+                missing_fields: missingFields,
+                is_draft: true,
+                mode: "draft",
+                notification_type: "marka",
+                template_id: templateId,
+                source: "task_completion"
+            });
         }
 
-        let targetIds = [];
-        if (ipRecordData?.record_owner_type === 'third_party') {
-            targetIds = [record.task_owner_id].filter(Boolean);
-        } else {
-            targetIds = applicants.map(a => a.person_id);
-        }
-        
-        let { to, cc } = await getRecipients(targetIds);
+        // ---------------------------------------------------------------------
+        // SENARYO 2: MÜŞTERİ ONAYLADI -> MAİL + TAHAKKUK
+        // ---------------------------------------------------------------------
+        if (clientApproved) {
+            console.log(`📧 [Senaryo 2] Müvekkil onayladı. Tahakkuk Görevi ve Mail işlemleri başlatılıyor...`);
 
-        const missingFields = [];
-        if (to.length === 0 && cc.length === 0) missingFields.push("recipients");
+            // --- EKSİK 1: TAHAKKUK GÖREVİ (ID 53) OLUŞTURMA ---
+            try {
+                // Sayacı bul ve artır
+                const { data: counterData } = await supabaseAdmin.from('counters').select('last_id').eq('id', 'tasks_accruals').single();
+                let currentCount = counterData ? Number(counterData.last_id) : 0;
+                currentCount++;
+                const newAccrualId = `T-${currentCount}`;
+                
+                // Atama kuralını çek (Muhasebe personeli)
+                const { data: assignData } = await supabaseAdmin.from('task_assignments').select('assignee_ids').eq('id', '53').single();
+                const assignedUid = assignData?.assignee_ids?.[0] || null;
 
-        const status = missingFields.length > 0 ? "missing_info" : "pending";
+                // Görevi INSERT et
+                await supabaseAdmin.from('tasks').insert({
+                    id: newAccrualId,
+                    task_type_id: "53",
+                    title: `Tahakkuk Oluşturma: ${record.title || ''}`,
+                    description: `"${record.title || ''}" işi onaylandı. Lütfen finansal kaydı oluşturun.`,
+                    priority: 'high',
+                    status: 'pending',
+                    assigned_to: assignedUid,
+                    task_owner_id: record.task_owner_id,
+                    ip_record_id: record.ip_record_id,
+                    details: { 
+                        parent_task_id: record.id, 
+                        originalTaskType: taskTypeId,
+                        iprecordApplicationNo: appNo,
+                        iprecordTitle: brandName,
+                        iprecordApplicantName: applicants.map(a => a.persons?.name).join(', ') || "-"
+                    }
+                });
 
-        const { data: insertedDoc, error: insertError } = await supabaseAdmin.from('mail_notifications').insert({
-            id: crypto.randomUUID(),
-            associated_task_id: record.id,
-            related_ip_record_id: record.ip_record_id,
-            to_list: to,
-            cc_list: cc,
-            subject: subject,
-            body: body,
-            status: status,
-            missing_fields: missingFields,
-            notification_type: "general_notification",
-            source: "auto_instruction_response",
-            is_draft: false 
-        }).select();
-
-        if (insertError) console.error("❌ [Senaryo 2] Kayıt Hatası:", insertError.message);
-        else console.log("🚀 [Senaryo 2] Kayıt Başarılı! ID:", insertedDoc?.[0]?.id);
-    }
-
-    // =========================================================================
-    // SENARYO 3: MÜŞTERİ REDDETTİ / DOSYA KAPANDI (clientClosed)
-    // =========================================================================
-    if (clientClosed) {
-        console.log(`📧 [Senaryo 3] Dosya kapatıldı. 'Dosya Kapatıldı' maili hazırlanıyor...`);
-
-        const { data: tmplData } = await supabaseAdmin.from('mail_templates')
-            .select('*').eq('id', 'tmpl_clientInstruction_2').maybeSingle();
-        
-        let subject = tmplData?.subject || "{{relatedIpRecordTitle}} - Dosya Kapatıldı";
-        let body = tmplData?.body || "<p>Talimatınız üzerine dosya kapatılmıştır.</p>";
-
-        subject = subject.replace(/{{relatedIpRecordTitle}}/g, brandName);
-        body = body.replace(/{{relatedIpRecordTitle}}/g, brandName);
-
-        const threadKey = `${record.ip_record_id}_${taskTypeId}`;
-        const { data: threadData } = await supabaseAdmin.from('mail_threads').select('root_subject').eq('id', threadKey).maybeSingle();
-        
-        if (threadData && threadData.root_subject) {
-            const innerSubjectHtml = `<div style="background-color: #f8f9fa; border-left: 4px solid #1a73e8; padding: 15px; margin: 0 0 20px 0; font-family: Arial, sans-serif; color: #333; font-size: 14px;"><strong style="color: #1a73e8;">KONU:</strong> ${subject}</div>`;
-            subject = threadData.root_subject;
-            if (body.toLowerCase().includes("<body")) {
-                body = body.replace(/<body[^>]*>/i, (match) => match + innerSubjectHtml);
-            } else {
-                body = innerSubjectHtml + body;
+                // Sayacı güncelle
+                await supabaseAdmin.from('counters').upsert({ id: 'tasks_accruals', last_id: currentCount });
+                console.log(`✅ Tahakkuk görevi başarıyla oluşturuldu: ${newAccrualId}`);
+            } catch (accErr) {
+                console.error("❌ Tahakkuk görev hatası:", accErr);
             }
+
+            // --- TALİMATINIZ ALINDI MAİLİ OLUŞTURMA ---
+            const { data: tmplData } = await supabaseAdmin.from('mail_templates').select('*').eq('id', 'tmpl_clientInstruction_1').maybeSingle();
+            let subject = tmplData?.subject || "{{relatedIpRecordTitle}} - Talimatınız Alındı";
+            let body = tmplData?.body || "<p>Talimatınız alınmıştır, işlem başlatılıyor.</p>";
+
+            subject = subject.replace(/{{relatedIpRecordTitle}}/g, brandName);
+            body = body.replace(/{{relatedIpRecordTitle}}/g, brandName);
+
+            const threadKey = `${record.ip_record_id}_${taskTypeId}`;
+            const { data: threadData } = await supabaseAdmin.from('mail_threads').select('root_subject').eq('id', threadKey).maybeSingle();
+            
+            if (threadData && threadData.root_subject) {
+                const innerSubjectHtml = `<div style="background-color: #f8f9fa; border-left: 4px solid #1a73e8; padding: 15px; margin: 0 0 20px 0; font-family: Arial, sans-serif; color: #333; font-size: 14px;"><strong style="color: #1a73e8;">KONU:</strong> ${subject}</div>`;
+                subject = threadData.root_subject;
+                if (body.toLowerCase().includes("<body")) body = body.replace(/<body[^>]*>/i, (match) => match + innerSubjectHtml);
+                else body = innerSubjectHtml + body;
+            }
+
+            let targetIds = ipRecordData?.record_owner_type === 'third_party' ? [record.task_owner_id].filter(Boolean) : applicants.map(a => a.person_id);
+            let { to, cc } = await getRecipients(targetIds);
+
+            const missingFields = [];
+            if (to.length === 0 && cc.length === 0) missingFields.push("recipients");
+
+            await supabaseAdmin.from('mail_notifications').insert({
+                id: crypto.randomUUID(),
+                associated_task_id: record.id,
+                related_ip_record_id: record.ip_record_id,
+                to_list: to,
+                cc_list: cc,
+                subject: subject,
+                body: body,
+                status: missingFields.length > 0 ? "missing_info" : "pending",
+                missing_fields: missingFields,
+                notification_type: "general_notification",
+                source: "auto_instruction_response",
+                is_draft: false 
+            });
         }
 
-        let targetIds = [];
-        if (ipRecordData?.record_owner_type === 'third_party') {
-            targetIds = [record.task_owner_id].filter(Boolean);
-        } else {
-            targetIds = applicants.map(a => a.person_id);
+        // ---------------------------------------------------------------------
+        // SENARYO 3: MÜŞTERİ REDDETTİ / DOSYA KAPANDI
+        // ---------------------------------------------------------------------
+        if (clientClosed) {
+            console.log(`📧 [Senaryo 3] Dosya kapatıldı. 'Dosya Kapatıldı' maili hazırlanıyor...`);
+
+            const { data: tmplData } = await supabaseAdmin.from('mail_templates').select('*').eq('id', 'tmpl_clientInstruction_2').maybeSingle();
+            let subject = tmplData?.subject || "{{relatedIpRecordTitle}} - Dosya Kapatıldı";
+            let body = tmplData?.body || "<p>Talimatınız üzerine dosya kapatılmıştır.</p>";
+
+            subject = subject.replace(/{{relatedIpRecordTitle}}/g, brandName);
+            body = body.replace(/{{relatedIpRecordTitle}}/g, brandName);
+
+            const threadKey = `${record.ip_record_id}_${taskTypeId}`;
+            const { data: threadData } = await supabaseAdmin.from('mail_threads').select('root_subject').eq('id', threadKey).maybeSingle();
+            
+            if (threadData && threadData.root_subject) {
+                const innerSubjectHtml = `<div style="background-color: #f8f9fa; border-left: 4px solid #1a73e8; padding: 15px; margin: 0 0 20px 0; font-family: Arial, sans-serif; color: #333; font-size: 14px;"><strong style="color: #1a73e8;">KONU:</strong> ${subject}</div>`;
+                subject = threadData.root_subject;
+                if (body.toLowerCase().includes("<body")) body = body.replace(/<body[^>]*>/i, (match) => match + innerSubjectHtml);
+                else body = innerSubjectHtml + body;
+            }
+
+            let targetIds = ipRecordData?.record_owner_type === 'third_party' ? [record.task_owner_id].filter(Boolean) : applicants.map(a => a.person_id);
+            let { to, cc } = await getRecipients(targetIds);
+
+            const missingFields = [];
+            if (to.length === 0 && cc.length === 0) missingFields.push("recipients");
+
+            await supabaseAdmin.from('mail_notifications').insert({
+                id: crypto.randomUUID(),
+                associated_task_id: record.id,
+                related_ip_record_id: record.ip_record_id,
+                to_list: to,
+                cc_list: cc,
+                subject: subject,
+                body: body,
+                status: missingFields.length > 0 ? "missing_info" : "pending",
+                missing_fields: missingFields,
+                notification_type: "general_notification",
+                source: "auto_instruction_response",
+                is_draft: false 
+            });
         }
-        
-        let { to, cc } = await getRecipients(targetIds);
-
-        const missingFields = [];
-        if (to.length === 0 && cc.length === 0) missingFields.push("recipients");
-
-        const status = missingFields.length > 0 ? "missing_info" : "pending";
-
-        const { data: insertedDoc, error: insertError } = await supabaseAdmin.from('mail_notifications').insert({
-            id: crypto.randomUUID(),
-            associated_task_id: record.id,
-            related_ip_record_id: record.ip_record_id,
-            to_list: to,
-            cc_list: cc,
-            subject: subject,
-            body: body,
-            status: status,
-            missing_fields: missingFields,
-            notification_type: "general_notification",
-            source: "auto_instruction_response",
-            is_draft: false 
-        }).select();
-
-        if (insertError) console.error("❌ [Senaryo 3] Kayıt Hatası:", insertError.message);
-        else console.log("🚀 [Senaryo 3] Kayıt Başarılı! ID:", insertedDoc?.[0]?.id);
     }
 
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
