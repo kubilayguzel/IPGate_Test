@@ -9,6 +9,7 @@ firebase-key.json
 export-supabase.js
 supabase_schema_and_sample.json
 supabase_sample.json
-*.js
-*.json
-*.cache
+
+# Sadece ana dizindeki js ve json dosyalarını yoksay (Klasör içindekileri engelleme!)
+/*.js
+/*.json
