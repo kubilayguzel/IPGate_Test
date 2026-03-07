@@ -104,14 +104,42 @@ export const authService = {
 // ==========================================
 
 export async function waitForAuthUser({ requireAuth = true, redirectTo = 'index.html', graceMs = 0 } = {}) {
-    // Eski sistemin getCurrentUser'ı yerine Supabase'in Session kontrolünü yapıyoruz
+    // Aktif oturumu al
     const session = await authService.getCurrentSession();
     
+    // Oturum yoksa ve sayfa yetki gerektiriyorsa logine at
     if (requireAuth && !session) {
         console.warn("Kullanıcı oturumu bulunamadı, logine dönülüyor...");
         window.location.replace(redirectTo);
         return null;
     }
+
+    // Oturum VARSA Rol Kontrolü Yap
+    if (session) {
+        // Kullanıcının rolünü users tablosundan çek
+        const { data: userProfile } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', session.user.id)
+            .single();
+
+        const userRole = userProfile ? userProfile.role : 'belirsiz';
+        const currentPath = window.location.pathname;
+
+        // DURUM 1: Rolü "belirsiz" ise ve zaten pending sayfasında DEĞİLSE oraya yönlendir
+        if (userRole === 'belirsiz' && !currentPath.includes('client-pending.html')) {
+            console.warn("Kullanıcı yetkisi belirsiz, onay sayfasına yönlendiriliyor...");
+            window.location.replace('client-pending.html');
+            return null;
+        }
+
+        // DURUM 2: Rolü "belirsiz" DEĞİLSE (onaylanmışsa) ama yanlışlıkla pending sayfasındaysa içeri al
+        if (userRole !== 'belirsiz' && currentPath.includes('client-pending.html')) {
+            window.location.replace('dashboard.html'); // Veya ana sayfanız neresiyse
+            return null;
+        }
+    }
+
     return session ? session.user : null;
 }
 
@@ -1683,5 +1711,108 @@ export const storageService = {
             console.error(`[STORAGE] Dosya yükleme hatası (${path}):`, error);
             return { success: false, error: error.message };
         }
+    }
+};
+
+// ==========================================
+// 13: ADMİN & KULLANICI YÖNETİMİ SERVİSİ
+// ==========================================
+export const adminService = {
+    // Sadece rolü 'belirsiz' olanları getir
+    async getPendingUsers() {
+        const { data, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('role', 'belirsiz')
+            .order('created_at', { ascending: false });
+            
+        if (error) {
+            console.error("Bekleyen kullanıcılar çekilemedi:", error);
+            return { success: false, data: [] };
+        }
+        return { success: true, data };
+    },
+
+    // Kullanıcıyı onayla (Varsayılan olarak 'user' yetkisi verir)
+    async approveUser(userId, newRole = 'user') {
+        const { error } = await supabase
+            .from('users')
+            .update({ role: newRole })
+            .eq('id', userId);
+            
+        if (error) return { success: false, error: error.message };
+        return { success: true };
+    }
+};
+
+// ==========================================
+// 14: HATIRLATMALAR (REMINDERS) SERVİSİ
+// ==========================================
+export const reminderService = {
+    async getReminders(userId) {
+        const { data, error } = await supabase
+            .from('reminders')
+            .select('*')
+            .eq('user_id', userId)
+            .order('due_date', { ascending: true });
+            
+        if (error) {
+            console.error("Hatırlatmalar çekilemedi:", error);
+            return { success: false, data: [] };
+        }
+        
+        const mappedData = data.map(r => {
+            // DB'de category sütunu olmadığı için description'ın başına ekliyoruz [KATEGORİ] Açıklama
+            let category = 'KİŞİSEL NOT';
+            let desc = r.description || '';
+            if (desc.startsWith('[')) {
+                const endIdx = desc.indexOf(']');
+                if (endIdx > -1) {
+                    category = desc.substring(1, endIdx);
+                    desc = desc.substring(endIdx + 1).trim();
+                }
+            }
+            
+            return {
+                id: r.id,
+                title: r.title,
+                description: desc,
+                category: category,
+                dueDate: r.due_date,
+                status: r.status === 'completed' ? 'completed' : 'active',
+                isRead: r.status === 'read' || r.status === 'completed'
+            };
+        });
+        return { success: true, data: mappedData };
+    },
+
+    async addReminder(data) {
+        const payload = {
+            id: crypto.randomUUID(),
+            title: data.title,
+            // Kategoriyi açıklamanın içine yediriyoruz
+            description: `[${data.category || 'KİŞİSEL NOT'}] ${data.description || ''}`,
+            due_date: data.dueDate,
+            status: 'active',
+            user_id: data.userId
+        };
+        
+        const { error } = await supabase.from('reminders').insert(payload);
+        if (error) return { success: false, error: error.message };
+        return { success: true };
+    },
+
+    async updateReminder(id, updates) {
+        const payload = { updated_at: new Date().toISOString() };
+        
+        if (updates.status) payload.status = updates.status;
+        if (updates.isRead !== undefined) {
+            payload.status = updates.isRead ? 'read' : 'active';
+        }
+        // İşlem tamamlandıysa üstüne yazmasın
+        if (updates.status === 'completed') payload.status = 'completed';
+
+        const { error } = await supabase.from('reminders').update(payload).eq('id', id);
+        return { success: !error };
     }
 };
