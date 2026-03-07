@@ -126,17 +126,26 @@ export async function waitForAuthUser({ requireAuth = true, redirectTo = 'index.
         const userRole = userProfile ? userProfile.role : 'belirsiz';
         const currentPath = window.location.pathname;
 
-        // DURUM 1: Rolü "belirsiz" ise ve zaten pending sayfasında DEĞİLSE oraya yönlendir
+        // DURUM 1: Rol "belirsiz" ise (Onay Bekliyor)
         if (userRole === 'belirsiz' && !currentPath.includes('client-pending.html')) {
             console.warn("Kullanıcı yetkisi belirsiz, onay sayfasına yönlendiriliyor...");
             window.location.replace('client-pending.html');
             return null;
         }
 
-        // DURUM 2: Rolü "belirsiz" DEĞİLSE (onaylanmışsa) ama yanlışlıkla pending sayfasındaysa içeri al
-        if (userRole !== 'belirsiz' && currentPath.includes('client-pending.html')) {
-            window.location.replace('dashboard.html'); // Veya ana sayfanız neresiyse
+        // 🔥 YENİ - DURUM 2: Rol "client" ise (Müvekkil Portalı)
+        if (userRole === 'client' && !currentPath.includes('client-portal.html')) {
+            console.warn("Müvekkil girişi yapıldı, portala yönlendiriliyor...");
+            window.location.replace('client-portal.html');
             return null;
+        }
+
+        // DURUM 3: Rol "user/admin/superadmin" ise (Yanlışlıkla pending veya portal sayfasına girdiyse)
+        if (userRole !== 'belirsiz' && userRole !== 'client') {
+            if (currentPath.includes('client-pending.html') || currentPath.includes('client-portal.html')) {
+                window.location.replace('dashboard.html'); // Ofis çalışanını ana sayfaya at
+                return null;
+            }
         }
     }
 
