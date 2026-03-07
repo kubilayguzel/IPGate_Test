@@ -453,6 +453,118 @@ export const commonService = {
 // 4. PORTFÖY (IP RECORDS) SERVİSİ
 // ==========================================
 export const ipRecordsService = {
+
+    // ==========================================
+    // AKILLI DUPLİKASYON KONTROLLÜ ANA KAYIT OLUŞTURUCU
+    // ==========================================
+    async createRecord(recordData) {
+        try {
+            // YENİ GÜVENLİK AĞI: Veritabanına gitmeden önce applicantIds dizisini otomatik oluştur
+            if (recordData.applicants && Array.isArray(recordData.applicants)) {
+                recordData.applicantIds = recordData.applicants.map(app => app.id).filter(Boolean);
+            }
+
+            let isDuplicateFound = false;
+            let existingId = null;
+            let existingOwnerType = null;
+            
+            // Verileri Güvenli Hale Getir
+            const origin = (recordData.origin || 'TÜRKPATENT').trim().toUpperCase();
+            const hierarchy = recordData.transactionHierarchy || 'parent';
+            const appNo = (recordData.applicationNumber || '').trim();
+            const wipoIr = (recordData.wipoIR || '').trim();
+            const aripoIr = (recordData.aripoIR || '').trim();
+            const countryCode = (recordData.countryCode || recordData.country || '').trim();
+
+            // Supabase Sorgu Hazırlığı
+            let query = supabase.from('ip_records').select('id, record_owner_type').limit(1);
+            let shouldCheck = false;
+
+            // --- KURAL 1: WIPO veya ARIPO ise ---
+            if (origin.includes('WIPO') || origin.includes('ARIPO')) {
+                
+                // Parent Kayıt Kontrolü
+                if (hierarchy === 'parent') {
+                    if (origin.includes('WIPO') && wipoIr) {
+                        query = query.eq('transaction_hierarchy', 'parent').eq('wipo_ir', wipoIr);
+                        shouldCheck = true;
+                    } else if (origin.includes('ARIPO') && aripoIr) {
+                        query = query.eq('transaction_hierarchy', 'parent').eq('aripo_ir', aripoIr);
+                        shouldCheck = true;
+                    }
+                } 
+                // Child (Alt) Kayıt Kontrolü
+                else if (hierarchy === 'child' && countryCode) {
+                    query = query.eq('transaction_hierarchy', 'child').eq('country_code', countryCode);
+                    
+                    let orParts = [];
+                    // Tırnak içine alıyoruz ki TR2023/123, veya 1,234 gibi numaralar SQL'i bozmasın
+                    if (appNo) orParts.push(`application_number.eq."${appNo}"`);
+                    if (wipoIr) orParts.push(`wipo_ir.eq."${wipoIr}"`);
+                    if (aripoIr) orParts.push(`aripo_ir.eq."${aripoIr}"`);
+                    
+                    if (orParts.length > 0) {
+                        query = query.or(orParts.join(','));
+                        shouldCheck = true;
+                    }
+                }
+            } 
+            // --- KURAL 2: TÜRKPATENT, Yurtdışı Ulusal, EUIPO vb. ---
+            else {
+                if (appNo) {
+                    query = query.eq('application_number', appNo);
+                    shouldCheck = true;
+                }
+            }
+
+            // Eğer sorgu kriterleri karşılandıysa veritabanına sor
+            if (shouldCheck) {
+                const { data: duplicateData, error: dupError } = await query;
+
+                if (!dupError && duplicateData && duplicateData.length > 0) {
+                    isDuplicateFound = true;
+                    existingId = duplicateData[0].id;
+                    existingOwnerType = duplicateData[0].record_owner_type;
+                }
+            }
+
+            // Sonuç Değerlendirmesi
+            if (isDuplicateFound) {
+                console.log("🔍 Duplikasyon kontrolü eşleşti:", { existingId, origin, hierarchy });
+                
+                const isFromDataEntry = recordData.createdFrom === 'data_entry' || !recordData.createdFrom;
+                if (isFromDataEntry) {
+                    return { 
+                        success: false, 
+                        error: `Girdiğiniz kriterlere (${appNo || wipoIr || aripoIr}) sahip bir kayıt sistemde zaten mevcut. Duplikasyon önlemek için yeni kayıt oluşturulamadı.`,
+                        isDuplicate: true,
+                        existingRecordId: existingId,
+                        existingRecordType: existingOwnerType
+                    };
+                }
+                
+                const isFromOpposition = recordData.createdFrom === 'opposition_automation' || recordData.createdFrom === 'bulletin_record';
+                if (isFromOpposition) {
+                    console.log("✅ İtiraz sonucu - mevcut kayıt kullanılacak, yeni kayıt oluşturulmayacak");
+                    return {
+                        success: true,
+                        id: existingId,               
+                        isExistingRecord: true,
+                        message: `Kayıt zaten mevcut; işlem var olan kayıt üzerinden devam edecek.`
+                    };
+                }
+                
+                return { success: false, error: `Girdiğiniz bilgilere sahip bir kayıt zaten mevcut.`, isDuplicate: true };
+            }
+            
+            // 3. Duplikasyon yoksa, veriyi mevcut createRecordFromDataEntry metoduna yolla
+            return await this.createRecordFromDataEntry(recordData);
+            
+        } catch (error) {
+            console.error("❌ IP kaydı oluşturulurken hata:", error);
+            return { success: false, error: error.message };
+        }
+    },
     
 // A) Tüm Portföyü Getir (Listeleme İçin) — 🚀 VIEW OPTİMİZASYONU
     async getRecords(forceRefresh = false) {
@@ -892,7 +1004,10 @@ export const ipRecordsService = {
         if (error) throw error;
         return { success: true };
     }
+
 };
+
+
 
 // 5. İZLEME (MONITORING) SERVİSİ
 export const monitoringService = {
