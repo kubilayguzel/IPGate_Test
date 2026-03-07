@@ -28,7 +28,7 @@ class ClientPortalController {
 
             paginations: { portfolio: null, suit: null, task: null, invoice: null, contract: null, objection: null },
             activeColumnFilters: {},
-            sortStates: {} // Tablo sıralama durumları için
+            sortStates: {} 
         };
 
         this.renderHelper = new RenderHelper(this.state);
@@ -166,29 +166,34 @@ class ClientPortalController {
     }
 
     // ==========================================
-    // FİLTRELEME VE RENDER FONKSİYONLARI
+    // PORTFÖY FİLTRELEME VE RENDER (Marka, Patent, Tasarım Ayrımı)
     // ==========================================
     filterPortfolios() {
         const searchVal = (document.getElementById('portfolioSearchText')?.value || '').toLowerCase().trim();
         const statusVal = document.getElementById('portfolioDurumFilter')?.value || 'TÜMÜ';
-        const menseVal = document.getElementById('menseFilter')?.value || 'TÜRKPATENT';
+        const menseVal = document.getElementById('menseFilter')?.value || 'HEPSI'; // Arayüzden alınır
 
+        // 1. Ortak Filtreleme
         let filtered = this.state.portfolios.filter(item => {
             if (item.transactionHierarchy === 'child') return false;
 
             const originRaw = (item.origin || 'TÜRKPATENT').toUpperCase();
             const isTurk = originRaw.includes('TURK');
+            
+            // Menşe Kontrolü
             if (menseVal === 'TÜRKPATENT' && !isTurk) return false;
             if (menseVal === 'YURTDISI' && isTurk) return false;
 
+            // Arama Kutusu Kontrolü
             if (searchVal) {
                 const searchable = `${item.title} ${item.applicationNumber} ${item.registrationNumber}`.toLowerCase();
                 if (!searchable.includes(searchVal)) return false;
             }
 
+            // Durum Kontrolü
             if (statusVal !== 'TÜMÜ' && !(item.status || '').toLowerCase().includes(statusVal.toLowerCase())) return false;
 
-            // Kolon Filtreleri Kontrolü
+            // Kolon Filtreleri Kontrolü (Marka Listesi İçin)
             for (const [key, selectedValues] of Object.entries(this.state.activeColumnFilters)) {
                 if (!key.startsWith('marka-list-')) continue;
                 const colIdx = key.split('-').pop();
@@ -203,7 +208,13 @@ class ClientPortalController {
             return true;
         });
 
-        this.state.filteredPortfolios = filtered;
+        // 2. Tiplere Göre Ayır (Marka, Patent, Tasarım)
+        const markaList = filtered.filter(p => !p.type || p.type.toLowerCase().includes('marka') || p.type.toLowerCase().includes('trademark'));
+        const patentList = filtered.filter(p => p.type && p.type.toLowerCase().includes('patent'));
+        const tasarimList = filtered.filter(p => p.type && (p.type.toLowerCase().includes('design') || p.type.toLowerCase().includes('tasarim')));
+
+        // 3. Marka Listesini Çiz (Pagination ile)
+        this.state.filteredPortfolios = markaList;
         if (!this.state.paginations.portfolio) {
             this.state.paginations.portfolio = new Pagination({
                 itemsPerPage: 10, containerId: 'markaPagination',
@@ -213,8 +224,14 @@ class ClientPortalController {
                 }
             });
         }
-        this.state.paginations.portfolio.update(filtered.length);
-        this.renderPortfolioTable(filtered.slice(0, 10), 0);
+        this.state.paginations.portfolio.update(markaList.length);
+        this.renderPortfolioTable(markaList.slice(0, 10), 0);
+
+        // 4. Patent ve Tasarım Listelerini Çiz
+        this.renderPatentTable(patentList);
+        this.renderTasarimTable(tasarimList);
+        
+        console.log(`Portföy Dağılımı: ${markaList.length} Marka, ${patentList.length} Patent, ${tasarimList.length} Tasarım çizildi.`);
     }
 
     renderPortfolioTable(dataSlice, startIndex) {
@@ -222,7 +239,10 @@ class ClientPortalController {
         if (!tbody) return;
         tbody.innerHTML = '';
 
-        if (dataSlice.length === 0) { tbody.innerHTML = `<tr><td colspan="10" class="text-center text-muted">Kayıt bulunamadı.</td></tr>`; return; }
+        if (dataSlice.length === 0) { 
+            tbody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-4">Kayıt bulunamadı.</td></tr>`; 
+            return; 
+        }
 
         dataSlice.forEach((item, index) => {
             const actualIndex = startIndex + index;
@@ -277,6 +297,48 @@ class ClientPortalController {
         const currentFilter = $("#menseFilter").val();
         if (currentFilter === 'TÜRKPATENT') $('#marka-list th.col-origin, #marka-list td.col-origin').hide();
         else $('#marka-list th.col-origin, #marka-list td.col-origin').show();
+    }
+
+    renderPatentTable(dataList) {
+        const tbody = document.querySelector('#patent-list tbody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        if (dataList.length === 0) { 
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-4">Patent kaydı bulunamadı.</td></tr>`; 
+            return; 
+        }
+        
+        dataList.forEach((item, index) => {
+            tbody.innerHTML += `<tr>
+                <td>${index + 1}</td>
+                <td><a href="#" class="portfolio-detail-link" data-item-id="${item.id}">${item.title}</a></td>
+                <td>${item.applicationNumber}</td>
+                <td><span class="badge badge-secondary">${item.status || '-'}</span></td>
+                <td>${this.renderHelper.formatDate(item.applicationDate)}</td>
+            </tr>`;
+        });
+    }
+
+    renderTasarimTable(dataList) {
+        const tbody = document.querySelector('#tasarim-list tbody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        if (dataList.length === 0) { 
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-4">Tasarım kaydı bulunamadı.</td></tr>`; 
+            return; 
+        }
+        
+        dataList.forEach((item, index) => {
+            const imgHtml = item.brandImageUrl ? `<img src="${item.brandImageUrl}" class="brand-thumb" style="max-height:60px; object-fit:contain;">` : '-';
+            tbody.innerHTML += `<tr>
+                <td>${index + 1}</td>
+                <td class="text-center">${imgHtml}</td>
+                <td><a href="#" class="portfolio-detail-link" data-item-id="${item.id}">${item.title}</a></td>
+                <td>${item.applicationNumber}</td>
+                <td><span class="badge badge-secondary">${item.status || '-'}</span></td>
+                <td>${item.classes}</td>
+            </tr>`;
+        });
     }
 
     filterSuits() {
@@ -496,7 +558,25 @@ class ClientPortalController {
     setupEventListeners() {
         document.getElementById('logoutBtn').addEventListener('click', () => { supabase.auth.signOut().then(() => window.location.href = 'index.html'); });
 
-        $('a[data-toggle="tab"]').on('shown.bs.tab', (e) => { if ($(e.target).attr("href") === '#reports') this.renderReports(); });
+        // TAB DEĞİŞİMİ DİNLEYİCİSİ (Arayüz Yenilemeleri İçin)
+        $('a[data-toggle="tab"]').on('shown.bs.tab', (e) => { 
+            const target = $(e.target).attr("href");
+            if (target === '#reports') this.renderReports(); 
+            // Sekme değiştiğinde filtreleri tetikleyerek arayüzü tazeleyelim
+            if (['#marka-list', '#patent-list', '#tasarim-list', '#dava-list', '#dava-itiraz-list'].includes(target)) {
+                this.applyAllFilters();
+            }
+        });
+
+        // DASHBOARD LİNKLERİ (Tıklanan Karta Göre İlgili Sekmeyi Açma)
+        $('[data-target-tab]').on('click', (e) => {
+            const target = $(e.currentTarget).data('target-tab');
+            $(`#sidebar a[href="#${target}"]`).tab('show');
+            if (target === 'portfolio-content') {
+                setTimeout(() => $('#portfolioTopTabs a[href="#marka-list"]').tab('show'), 100);
+            }
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
 
         $('#menseFilter, #portfolioDurumFilter').on('change', () => this.filterPortfolios());
         $('#portfolioSearchText').on('keyup', () => this.filterPortfolios());
@@ -1018,7 +1098,7 @@ class ClientPortalController {
             document.body.classList.remove('light-mode', 'dark-mode');
             document.body.classList.add(isDark ? 'dark-mode' : 'light-mode');
             localStorage.setItem('theme', isDark ? 'dark' : 'light');
-            if ($('#portfolioTopTabs a.nav-link.active').attr('href') === '#reports') this.renderReports(); // Tema değişince grafikleri yenile
+            if ($('#portfolioTopTabs a.nav-link.active').attr('href') === '#reports') this.renderReports(); 
         });
     }
 
