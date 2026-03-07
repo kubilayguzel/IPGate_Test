@@ -396,6 +396,107 @@ export const personService = {
             console.error("🔴 RELATED PERSONS KAYIT HATASI:", e);
             return { success: false, error: e.message };
         }
+    },
+    
+    // ==========================================
+    // MÜVEKKİL PORTALI: KULLANICI-FİRMA EŞLEŞTİRME SERVİSLERİ
+    // ==========================================
+    
+    async linkUserToPersons(userId, personsWithPermissions) {
+        try {
+            // 1. Önce kullanıcının eski bağlantılarını temizle (Temiz sayfa)
+            await supabase.from('user_person_links').delete().eq('user_id', userId);
+
+            // 2. Yeni bağlantılar varsa tabloya ekle
+            if (personsWithPermissions && personsWithPermissions.length > 0) {
+                const inserts = personsWithPermissions.map(p => ({
+                    user_id: userId,
+                    person_id: p.personId || p.id,
+                    perm_view: p.permissions?.view !== false, // Varsayılan true
+                    perm_approval: p.permissions?.approval || false,
+                    is_primary: p.isPrimary || false
+                }));
+                const { error } = await supabase.from('user_person_links').insert(inserts);
+                if (error) throw error;
+            }
+            return { success: true };
+        } catch (error) {
+            console.error("Kullanıcı eşleştirme hatası:", error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    async getLinkedPersons(userId) {
+        try {
+            // JOIN sorgusu ile hem link bilgilerini hem de kişi (person) detaylarını tek seferde alıyoruz
+            const { data, error } = await supabase
+                .from('user_person_links')
+                .select(`
+                    perm_approval,
+                    perm_view,
+                    is_primary,
+                    person_id,
+                    persons (*)
+                `)
+                .eq('user_id', userId);
+
+            if (error) throw error;
+            if (!data || data.length === 0) return { success: true, data: [] };
+
+            // Arayüzün (UI) beklediği formata haritalıyoruz
+            const mappedData = data.filter(link => link.persons).map(link => ({
+                id: link.persons.id,
+                name: link.persons.name,
+                type: link.persons.type,
+                email: link.persons.email,
+                permissions: {
+                    view: link.perm_view,
+                    approval: link.perm_approval
+                },
+                isPrimary: link.is_primary
+            }));
+
+            return { success: true, data: mappedData };
+        } catch (error) {
+            console.error("Bağlı kişiler çekilirken hata:", error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    async unlinkUserFromAllPersons(userId) {
+        try {
+            const { error } = await supabase.from('user_person_links').delete().eq('user_id', userId);
+            if (error) throw error;
+            return { success: true };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    },
+
+    async getPersonsByIds(personIds = []) {
+        if (!personIds || personIds.length === 0) return { success: true, data: [] };
+        try {
+            const { data, error } = await supabase.from('persons').select('*').in('id', personIds);
+            if (error) throw error;
+            
+            // UI formatına (camelCase) çevir
+            const mappedData = data.map(p => ({
+                id: p.id, 
+                name: p.name, 
+                type: p.type, 
+                tckn: p.tckn,
+                taxOffice: p.tax_office, 
+                taxNo: p.tax_no, 
+                email: p.email,
+                phone: p.phone, 
+                address: p.address, 
+                countryCode: p.country_code
+            }));
+            
+            return { success: true, data: mappedData };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
     }
 };
 
