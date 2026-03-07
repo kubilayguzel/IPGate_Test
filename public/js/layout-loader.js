@@ -241,6 +241,29 @@ async function setupMenuBadges(supabase, userId) {
   if (!supabase) return;
 
   try {
+    // --- YENİ EKLENEN: Hatırlatmalar (Belirsiz Kullanıcı) Rozeti ---
+    if (userId) {
+      // 1. Önce giriş yapan kullanıcının rolünü kontrol et
+      const { data: userProfile } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', userId)
+        .single();
+
+      // 2. Sadece yetkili kişiler (admin/superadmin) bu rozeti görebilsin
+      if (userProfile && (userProfile.role === 'superadmin' || userProfile.role === 'admin')) {
+        const { count: pendingCount } = await supabase
+          .from('users')
+          .select('*', { count: 'exact', head: true })
+          .eq('role', 'belirsiz');
+
+        // 'reminders' id'li menü öğesine rozeti ekle (uygulamanın yerleşik UI fonksiyonu ile)
+        updateBadgeUI('reminders', pendingCount || 0);
+      }
+    }
+    // ----------------------------------------------------------------
+
+    // Mevcut Tetiklenen Görevler Rozeti
     const { count: triggeredCount } = await supabase
       .from('tasks')
       .select('*', { count: 'exact', head: true })
@@ -248,6 +271,7 @@ async function setupMenuBadges(supabase, userId) {
 
     updateBadgeUI('triggered-tasks', triggeredCount || 0);
 
+    // Mevcut Müvekkil Bildirimleri Rozeti
     const { count: mailCount } = await supabase
       .from('mail_notifications')
       .select('*', { count: 'exact', head: true })
@@ -255,6 +279,7 @@ async function setupMenuBadges(supabase, userId) {
 
     updateBadgeUI('client-notifications', mailCount || 0);
 
+    // Mevcut Benim İşlerim Rozeti
     if (userId) {
       const { count: myTasksCount } = await supabase
         .from('tasks')
@@ -266,6 +291,7 @@ async function setupMenuBadges(supabase, userId) {
     }
   } catch (e) {
     // badge sorguları RLS yüzünden patlarsa sessiz geç
+    console.warn("Badge güncellenirken bir sorun oluştu:", e);
   }
 }
 
